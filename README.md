@@ -12,13 +12,35 @@ risposte che ti sei lasciato indietro.
 I dati però ci sono tutti: i transcript sono **append-only**, il ramo abbandonato resta
 fisicamente nel file. Manca solo chi lo mostra e chi ti ci fa ripartire.
 
+## Prima di usarlo
+
+Progetto non ufficiale, senza alcun rapporto con Anthropic. Si appoggia a dettagli interni
+di Claude Code che possono cambiare a ogni aggiornamento:
+
+- **legge e scrive** i transcript in `~/.claude/projects/` (solo in append, mai cancellando,
+  più i file delle nuove sessioni che crea);
+- usa flag **non documentati** del CLI (`--resume-session-at`, `--rewind-files`);
+- il ripristino dei file **sovrascrive** il lavoro non salvato successivo al punto scelto.
+
+Verificato su Claude Code **v2.1.220**, Windows 11, PowerShell 7. Su Linux e macOS il
+parsing dei transcript funziona, l'intercettazione dei tasti non è stata provata.
+Un backup di `~/.claude/projects/` prima di provarlo è tempo bene speso.
+
+## Installazione
+
+Serve Node.js. Windows: `node-pty` usa il prebuilt, nessuna toolchain.
+
+```
+git clone https://github.com/sasha-bolea/claude-code-branching.git
+cd claude-code-branching
+npm install
+npm link          # rende `cb` disponibile da qualsiasi cartella
+```
+
 ## Uso
 
-Su questa macchina è già agganciato al comando `claude` (vedi *Integrazione* sotto): scrivi
-`claude`, scegli la cartella col selettore, e premi **Ctrl+G** quando vuoi l'albero dei rami.
-
-Standalone, `cb` si lancia al posto di `claude`. Lavori normalmente; quando premi la
-scorciatoia compare l'albero. Scegli un numero e **conversazione e file** tornano a quel
+`cb` si lancia al posto di `claude`. Lavori normalmente; quando premi la scorciatoia
+compare l'albero dei rami. Scegli un numero e **conversazione e file** tornano a quel
 punto, in un ramo nuovo, senza uscire dalla sessione.
 
 ⚠️ Il ripristino dei file sovrascrive il lavoro non salvato successivo a quel messaggio.
@@ -117,15 +139,22 @@ Quattro meccanismi. I tre che toccano i dati sono tutti additivi: niente viene c
    catena e il CLI risponde `No message found`. Appendendo un `last-prompt` che punta
    alla foglia del ramo voluto, quel ramo torna percorribile. Vedi `src/attiva.js`.
 
-## Integrazione col comando `claude`
+## Agganciarlo al comando `claude`
 
-La funzione `claude` nel profilo PowerShell (`$PROFILE`) faceva già due cose: selettore
-della cartella di lavoro e blocco della sospensione. Ora lancia Claude **dentro cb**,
-lasciando il resto invariato:
+Per non dover ricordarsi di scrivere `cb`, si può far passare `claude` attraverso di esso.
+In PowerShell, dentro `$PROFILE`:
 
 ```powershell
-& node "…\cb\bin\cb.js" --tasto ctrl+g -- --dangerously-skip-permissions @args
-if ($LASTEXITCODE -eq 78) { & $claudeShim --dangerously-skip-permissions @args }
+function claude {
+    $cbEntry = "C:/percorso/di/cb/bin/cb.js"
+    $claudeShim = "$env:APPDATA/npm/claude.ps1"
+
+    if ((Test-Path $cbEntry) -and (Get-Command node -ErrorAction SilentlyContinue)) {
+        & node $cbEntry --tasto ctrl+g -- @args
+        if ($LASTEXITCODE -ne 78) { return }   # 78 = cb non è partito
+    }
+    & $claudeShim @args                        # ripiego: Claude diretto
+}
 ```
 
 Tre accorgimenti perché non possa peggiorare le cose:
@@ -143,6 +172,9 @@ scopre la sessione dal transcript più recente della cartella.
 
 Per cambiare scorciatoia basta modificare `--tasto ctrl+g` nel profilo.
 
+Nota: il titolo della tab viene mantenuto (ConPTY lo sovrascriverebbe col percorso di
+`claude.exe` a ogni avvio di processo, quindi a ogni cambio ramo).
+
 ## Commit automatici (opzionale)
 
 `hooks/cb-commit.ps1` è un hook `Stop`: a ogni fine turno che ha modificato file, salva
@@ -156,7 +188,7 @@ Installazione: aggiungi in `~/.claude/settings.json` sotto `hooks.Stop` (in coda
 hook esistenti, senza sostituirli):
 
 ```json
-{ "type": "command", "command": "pwsh -NoProfile -File C:/Users/sasha/Documents/REPOSITORY/personale/cb/hooks/cb-commit.ps1" }
+{ "type": "command", "command": "pwsh -NoProfile -File C:/percorso/di/cb/hooks/cb-commit.ps1" }
 ```
 
 ## Test

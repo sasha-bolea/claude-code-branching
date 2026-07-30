@@ -36,10 +36,10 @@ Sasha, singolo sviluppatore.
 
 ## 5. Integrazione
 
-`cb` è agganciato alla funzione `claude` in `$PROFILE`
-(`C:\Users\sasha\Documents\PowerShell\Microsoft.PowerShell_profile.ps1`), che conserva il
-selettore di cartella e il blocco sospensione già presenti. Backup del profilo prima della
-modifica: `Microsoft.PowerShell_profile.ps1.backup-2026-07-30`.
+`cb` può essere agganciato alla funzione `claude` del profilo PowerShell (`$PROFILE`), che
+resta responsabile di quello che già faceva (selettore di cartella, titolo della tab, ecc.):
+vedi README, sezione «Agganciarlo al comando `claude`». Fare un backup del profilo prima di
+modificarlo.
 
 Regole del contratto con il chiamante:
 

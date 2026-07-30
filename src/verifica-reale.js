@@ -1,10 +1,14 @@
 import { leggiTranscript, biforcazioni, ripristini, foglie, catenaFinoA } from './transcript.js';
 
-// Verifica del parser su una sessione reale con biforcazioni note.
-// Uso: node src/verifica-reale.js [percorso.jsonl]
-const percorso =
-  process.argv[2] ??
-  'C:/Users/sasha/.claude/projects/C--Users-sasha-Documents-REPOSITORY-stage-capability-city/d19054ba-58d6-4208-b52e-36e4fd7d963f.jsonl';
+// Ispeziona una sessione reale: biforcazioni, ripristini, rami percorribili.
+// Utile per capire com'e' fatta una conversazione senza aprirla.
+// Uso: node src/verifica-reale.js <percorso.jsonl>
+const percorso = process.argv[2];
+if (!percorso) {
+  console.error('uso: node src/verifica-reale.js <percorso.jsonl>');
+  console.error('i transcript stanno in ~/.claude/projects/<progetto>/');
+  process.exit(1);
+}
 
 const breve = (t) => (t || '').replace(/\s+/g, ' ').slice(0, 60);
 
@@ -29,14 +33,6 @@ for (const { nodo, rami } of veri) {
   console.log(`  ${nodo.uuid.slice(0, 8)} [${nodo.tipo}] -> ${rami.length} rami`);
   for (const { prompt } of rami) {
     console.log(`      ${prompt.timestamp} :: ${breve(prompt.testo)}`);
-  }
-}
-
-const atteso = albero.nodi.get('2ef53446-93a5-40c6-8e6e-f494cdb22405');
-console.log(`\nNODO ATTESO 2ef53446: ${atteso ? `figli=${atteso.figli.length}` : 'NON TROVATO'}`);
-if (atteso) {
-  for (const figlio of atteso.figli) {
-    console.log(`   -> ${figlio.uuid.slice(0, 8)} ${figlio.timestamp} :: ${breve(figlio.testo)}`);
   }
 }
 

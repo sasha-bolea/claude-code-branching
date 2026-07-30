@@ -7,7 +7,7 @@ export const CARTELLA_PROGETTI = path.join(os.homedir(), '.claude', 'projects');
 
 // Converte una cartella di lavoro nello slug usato da Claude per i suoi
 // transcript: ogni carattere non alfanumerico diventa un trattino.
-// Es. C:\Users\sasha\Documents\REPOSITORY  ->  C--Users-sasha-Documents-REPOSITORY
+// Es. C:\Users\tizio\progetti\web  ->  C--Users-tizio-progetti-web
 // cartella: percorso assoluto
 // ritorna: nome della cartella dei transcript
 export function slugProgetto(cartella) {
