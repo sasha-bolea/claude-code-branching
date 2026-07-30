@@ -57,7 +57,8 @@ node bin/cb.js ls                 catalogo globale
 node bin/cb.js tree <sessione>    albero dei rami
 ```
 
-Installazione dell'hook dei commit: vedi README, sezione "Commit automatici".
+Procedure multi-passo (installazione, aggancio a `claude`, hook dei commit, spostamento della
+cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
 
 ## 7. Convenzioni
 
@@ -160,5 +161,10 @@ Installazione dell'hook dei commit: vedi README, sezione "Commit automatici".
 
 ## 8. Riferimenti docs
 
+- `docs/STATO.md` — stato corrente, problemi aperti, decisioni, backlog
 - `docs/brief.md` — spec, vincoli scoperti e loro riscontro
+- `docs/architettura.md` — stack, componenti, flussi, modello dei dati
+- `docs/bug-risolti.md` — registro dei bug con causa e fix (grep-abile)
+- `docs/procedure.md` — runbook delle procedure multi-passo
+- `docs/storico-sessioni.md` — archivio delle sessioni
 - `README.md` — uso e installazione
