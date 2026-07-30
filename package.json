@@ -7,7 +7,7 @@
     "cb": "./bin/cb.js"
   },
   "scripts": {
-    "test": "node src/transcript.test.js && node src/tasti.test.js && node src/titolo.test.js && node src/wrapper.test.js && node src/overlay.test.js"
+    "test": "node src/transcript.test.js && node src/tasti.test.js && node src/titolo.test.js && node src/vista.test.js && node src/wrapper.test.js && node src/overlay.test.js"
   },
   "license": "MIT",
   "dependencies": {

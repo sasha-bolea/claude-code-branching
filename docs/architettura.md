@@ -24,7 +24,9 @@ ed è il motivo per cui i rami sopravvivono.
         ├── src/wrapper.js      il cuore: pty, tasti, overlay, cambio ramo
         │       ├── tasti.js       byte → tasti (3 codifiche) → azioni
         │       ├── titolo.js      filtra gli OSC di titolo dei figli
-        │       ├── albero.js      albero collassato dei soli prompt + rendering
+        │       ├── vista.js       albero orizzontale: griglia, colore, navigazione, pagina
+        │       │     └── stile.js   tavolozza, in un posto solo
+        │       ├── albero.js      collasso ai soli prompt + elenco verticale numerato
         │       ├── attiva.js      rende raggiungibile/troncato un turno
         │       └── ramo.js        crea la sessione del nuovo ramo
         │
@@ -32,8 +34,41 @@ ed è il motivo per cui i rami sopravvivono.
         ├── src/percorsi.js     slug delle cartelle, famiglia di sessioni
         ├── src/indice.js       catalogo globale con cache (mtime+size)
         ├── src/eseguibile.js   trova claude.exe (node-pty non lancia gli shim)
-        └── src/lancia.js       ripresa da fuori, senza pty
+        ├── src/lancia.js       ripresa da fuori, senza pty
+        └── src/anteprima.js    strumento: l'overlay su una sessione vera, senza Claude
 ```
+
+Due rendering coesistono, e non è un doppione: l'**albero orizzontale** (`vista.js`) è
+interattivo, si naviga a frecce e non ha numeri; l'**elenco verticale numerato** (`albero.js`)
+serve ai comandi da fuori, dove `cb open <sessione> 3` ha bisogno di un numero a cui riferirsi.
+
+## La vista dell'albero
+
+Layout e disegno sono separati, ed è ciò che rende la navigazione istantanea:
+
+```
+componiVista(albero)              griglia di celle, UNA VOLTA SOLA
+   │                              larghezza naturale, indipendente dal terminale
+   ├── disegnaRighe(v, sel, fin)  colora in base al cursore, ritaglia in orizzontale
+   └── schermata(v, sel, dim)     pagina intera: albero + prompt scelto + storia
+```
+
+Tre vincoli imparati costruendola:
+
+- **Il ritaglio orizzontale si fa sulle celle, mai sul testo prodotto.** Le righe finite
+  contengono sequenze ANSI: tagliarle per numero di caratteri ne spezzerebbe una a metà,
+  lasciando il terminale colorato per sempre.
+- **Le celle di raccordo portano `rami`**, gli uuid dei nodi a valle. Senza, una linea non
+  saprebbe di che percorso fa parte e non si potrebbe colorare: hanno `uuid` nullo.
+- **La griglia non dipende dalle dimensioni del terminale.** È ciò che permette di ridisegnare
+  a ogni ridimensionamento e a ogni movimento del cursore senza ricalcolare niente.
+
+Navigazione: `←→` seguono la conversazione (e in fondo a un ramo la destra prosegue su uno
+affiancato); `↑↓` passano al ramo disegnato sopra o sotto, non ai *fratelli* — ogni riga del
+disegno è un ramo, quindi cambiare riga è cambiare ramo, ed è quello che l'occhio si aspetta.
+
+Geometria e glifi vengono da `esempio-albero.txt`, il disegno di riferimento: passo di 4
+colonne fra i nodi, `⬤━┳━⬤`, ramo che parte con `┗` sulla colonna della forca.
 
 ## Flusso: dalla scorciatoia al nuovo ramo
 
@@ -42,8 +77,8 @@ ed è il motivo per cui i rami sopravvivono.
 2. trovaTranscript()          quale file leggere (con ripiego su percorsoOrigine)
 3. sessioniDellaFamiglia()    tutti i transcript con la stessa radice
 4. unisciAlberi()             un albero solo, ogni nodo con le sue `origini`
-5. alberoPrompt()             collasso ai soli prompt utente + rendering
-6. azioniTastiera()           l'utente digita un numero
+5. componiVista()             griglia orizzontale, una volta sola
+6. ciclo: schermata() → azioniTastiera() → muovi()   finché invio o esc
 7. scegliOrigine()            da quale sessione ripartire per quel nodo
 8. chiudiProcesso()           attende l'uscita reale di Claude
 9. fineDelTurno()             dove tagliare: prompt + sua risposta

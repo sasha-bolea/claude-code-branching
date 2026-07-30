@@ -74,15 +74,32 @@ function wrapperFinto(sessionId, cartella, opzioni = {}) {
 const esc = String.fromCharCode(27);
 const premi = (testo) => process.stdin.emit('data', Buffer.from(testo, 'latin1'));
 
+// Tasti di navigazione, nella codifica ANSI.
+const SU = `${esc}[A`;
+const GIU = `${esc}[B`;
+const SINISTRA = `${esc}[D`;
+const INVIO = '\r';
+const ANNULLA = esc;
+
+// Preme una sequenza di tasti, cedendo il controllo fra uno e l'altro: dopo ogni
+// tasto l'overlay ridisegna e riattacca l'ascoltatore, e senza la pausa il tasto
+// successivo arriverebbe quando non c'e' nessuno in ascolto.
+async function premiTasti(...tasti) {
+  for (const tasto of tasti) {
+    premi(tasto);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 // Attende che l'overlay abbia finito di disegnare e sia in ascolto dei tasti.
-// L'attesa e' sul prompt "> " a schermo, non su un numero fisso di tick: il
-// disegno passa da una lettura di file asincrona.
+// L'attesa e' sulla barra dei tasti a schermo (che nomina sempre l'invio), non
+// su un numero fisso di tick: il disegno passa da una lettura di file asincrona.
 async function attendiPrompt(schermo) {
   for (let tentativo = 0; tentativo < 200; tentativo += 1) {
-    if (schermo().includes('> ')) return;
+    if (schermo().includes('invio')) return;
     await new Promise((r) => setTimeout(r, 5));
   }
-  throw new Error('overlay non pronto: il prompt non e mai comparso');
+  throw new Error('overlay non pronto: la barra dei tasti non e mai comparsa');
 }
 
 const CARTELLA = path.join(os.tmpdir(), 'cb-prova-overlay');
@@ -127,15 +144,29 @@ async function testOverlayDisegnaAlberoEScegliRamo() {
 
   const attesa = wrapper.mostraOverlay();
   await attendiPrompt(schermo);
-  // Voci: 1 = "primo prompt", 2 = "strada uno" (in disparte), 3 = "strada due" (attivo)
-  premi('2\r');
+
+  // Il cursore parte dalla punta del ramo attivo, cioe' "strada due".
+  assert.match(schermo(), /rami di questa conversazione/, 'intestazione presente');
+  assert.match(schermo(), /strada due/, 'il ramo attivo e quello selezionato all apertura');
+  assert.match(schermo(), /primo prompt/, 'e sotto c e la storia che lo precede');
+
+  // Su = ramo fratello: "strada uno", quello in disparte.
+  await premiTasti(SU);
+  assert.match(schermo(), /strada uno/, 'la freccia porta sul ramo in disparte');
+
+  // Le lettere muovono come le frecce: guardo solo quello che viene ridisegnato
+  // dopo il tasto, perche' lo schermo finto accumula tutto.
+  let da = schermo().length;
+  await premiTasti('s');
+  assert.match(schermo().slice(da), /strada due/, 's muove come la freccia giu');
+  da = schermo().length;
+  await premiTasti('w');
+  assert.match(schermo().slice(da), /strada uno/, 'w muove come la freccia su');
+
+  await premiTasti(INVIO);
   await attesa;
 
   const testo = schermo();
-  assert.match(testo, /rami di questa conversazione/, 'intestazione presente');
-  assert.match(testo, /primo prompt/, 'i prompt compaiono nell albero');
-  assert.match(testo, /strada uno/, 'compare il ramo in disparte');
-  assert.match(testo, /strada due/, 'compare il ramo attivo');
   assert.match(testo, /riparto da/, 'conferma la ripartenza');
   assert.equal(wrapper.ramoAvviato, true, 'viene lanciato un nuovo processo Claude');
 
@@ -160,7 +191,7 @@ async function testOverlayAnnullatoNonTocca() {
 
   const attesa = wrapper.mostraOverlay();
   await attendiPrompt(schermo);
-  premi('\r'); // invio a vuoto = torna a Claude
+  premi(ANNULLA); // esc = torna a Claude senza scegliere
   await attesa;
 
   assert.equal(wrapper.inOverlay, false, 'l overlay si richiude');
@@ -196,18 +227,19 @@ async function testOverlaySopravviveAiRilasci() {
   await new Promise((r) => setTimeout(r, 30));
   assert.equal(wrapper.inOverlay, true, 'l overlay resta aperto dopo i rilasci');
 
-  premi('\r'); // ora lo chiudo davvero
+  premi(ANNULLA); // ora lo chiudo davvero
   await attesa;
-  assert.equal(wrapper.inOverlay, false, 'l invio chiude l overlay');
+  assert.equal(wrapper.inOverlay, false, 'l esc chiude l overlay');
 
   fs.unlinkSync(percorso);
 }
 
-// Crea un transcript con due rami e lascia scegliere una voce.
+// Crea un transcript con due rami e sceglie il ramo in disparte.
+// Il cursore parte da "strada due" (punta del ramo attivo): un colpo di freccia
+// su lo porta sul fratello "strada uno".
 // opzioni: passate a wrapperFinto
-// scelta: numero digitato nell'overlay
 // ritorna: { wrapper, schermo, ripristini, percorso }
-async function scegliRamo(sessionId, scelta, opzioni = {}) {
+async function scegliRamo(sessionId, opzioni = {}) {
   const percorso = creaTranscript(sessionId, CARTELLA, [
     msg('a', null, 'user', 'primo prompt', 1),
     msg('b', 'a', 'assistant', 'prima risposta', 2),
@@ -219,17 +251,96 @@ async function scegliRamo(sessionId, scelta, opzioni = {}) {
   const contesto = wrapperFinto(sessionId, CARTELLA, opzioni);
   const attesa = contesto.wrapper.mostraOverlay();
   await attendiPrompt(contesto.schermo);
-  premi(`${scelta}\r`);
+  await premiTasti(SU, INVIO);
   await attesa;
 
   return { ...contesto, percorso };
+}
+
+async function testOverlaySiRidisegnaAlRidimensionamento() {
+  // Il problema: l'overlay ridisegnava solo dopo un tasto, quindi allargando o
+  // stringendo la finestra restava a schermo con le dimensioni vecchie — tagliato,
+  // o con lo scorrimento calcolato su una larghezza che non esisteva piu'.
+  const sessionId = '00000000-0000-4000-8000-0000000000f5';
+  const percorso = creaTranscript(sessionId, CARTELLA, [
+    msg('a', null, 'user', 'primo prompt', 1),
+    msg('b', 'a', 'assistant', 'prima risposta', 2),
+    msg('c', 'b', 'user', 'secondo prompt', 3),
+    { type: 'last-prompt', leafUuid: 'c', lastPrompt: 'secondo prompt', sessionId },
+  ]);
+
+  const colonneVere = process.stdout.columns;
+  const righeVere = process.stdout.rows;
+  const ridimensionamentiAlPty = [];
+
+  try {
+    process.stdout.columns = 100;
+    process.stdout.rows = 30;
+
+    const contesto = wrapperFinto(sessionId, CARTELLA);
+    const { wrapper } = contesto;
+    wrapper.processo.resize = (c, r) => ridimensionamentiAlPty.push([c, r]);
+
+    const attesa = wrapper.mostraOverlay();
+    await attendiPrompt(contesto.schermo);
+
+    // Il disegno iniziale sta nelle 100 colonne dichiarate.
+    const nudo = (t) => t.replace(/\x1b\[[0-9;]*m/g, '');
+    const righeDi = (testo) => nudo(testo).split('\r\n').filter((r) => r.length > 0);
+    for (const riga of righeDi(contesto.schermo())) {
+      assert.ok(riga.length <= 100, `riga di ${riga.length} colonne prima del ridimensionamento`);
+    }
+
+    // Stringo la finestra e annuncio il ridimensionamento, senza premere tasti.
+    // Chiamo il metodo invece di emettere l'evento: l'ascoltatore lo registra
+    // avvia(), che i test non invocano perche' metterebbe lo stdin in raw mode.
+    const primaDelRidimensionamento = contesto.schermo().length;
+    process.stdout.columns = 48;
+    process.stdout.rows = 20;
+    wrapper.ridimensiona();
+
+    // Il pty va avvisato subito: al ritorno Claude deve gia' sapere le misure.
+    assert.deepEqual(
+      ridimensionamentiAlPty.at(-1),
+      [48, 20],
+      'il processo Claude viene avvisato del ridimensionamento',
+    );
+
+    // Il ridisegno e' ritardato per non sfarfallare mentre si trascina il bordo.
+    await new Promise((r) => setTimeout(r, 200));
+    const dopo = contesto.schermo().slice(primaDelRidimensionamento);
+    assert.ok(dopo.length > 0, 'l overlay si ridisegna senza bisogno di premere tasti');
+    for (const riga of righeDi(dopo)) {
+      assert.ok(riga.length <= 48, `riga di ${riga.length} colonne dopo il ridimensionamento`);
+    }
+    assert.match(nudo(dopo), /rami di questa conversazione/, 'ed e di nuovo l albero');
+
+    // Chiuso l'overlay, un ridimensionamento non deve piu' disegnarci sopra:
+    // lo schermo torna di Claude.
+    premi(ANNULLA);
+    await attesa;
+
+    const dopoLaChiusura = contesto.schermo().length;
+    process.stdout.columns = 70;
+    wrapper.ridimensiona();
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(
+      contesto.schermo().length,
+      dopoLaChiusura,
+      'a overlay chiuso il ridimensionamento non scrive nulla',
+    );
+  } finally {
+    process.stdout.columns = colonneVere;
+    process.stdout.rows = righeVere;
+    fs.unlinkSync(percorso);
+  }
 }
 
 async function testRipristinaAncheIFile() {
   // Senza questo la conversazione torna indietro ma il codice resta quello di
   // adesso, e Claude si limita a suggerire il comando da lanciare a mano.
   const sessionId = '00000000-0000-4000-8000-0000000000b1';
-  const { wrapper, schermo, ripristini, percorso } = await scegliRamo(sessionId, 2);
+  const { wrapper, schermo, ripristini, percorso } = await scegliRamo(sessionId);
 
   assert.equal(ripristini.length, 1, 'il ripristino dei file viene eseguito');
   assert.equal(ripristini[0].sessione, sessionId, 'sulla sessione di partenza');
@@ -243,7 +354,7 @@ async function testRipristinaAncheIFile() {
 
 async function testSenzaFileNonRipristina() {
   const sessionId = '00000000-0000-4000-8000-0000000000b2';
-  const { wrapper, schermo, ripristini, percorso } = await scegliRamo(sessionId, 2, {
+  const { wrapper, schermo, ripristini, percorso } = await scegliRamo(sessionId, {
     wrapper: { ripristinaCodice: false },
   });
 
@@ -258,7 +369,7 @@ async function testNessunoSnapshotNonEUnErrore() {
   // Se da quel messaggio i file non sono stati toccati non c'e' niente da
   // ripristinare: va detto con calma, non come un guasto.
   const sessionId = '00000000-0000-4000-8000-0000000000b3';
-  const { wrapper, schermo, percorso } = await scegliRamo(sessionId, 2, {
+  const { wrapper, schermo, percorso } = await scegliRamo(sessionId, {
     esitoRipristino: {
       ok: true,
       uscita: 'Error: No file checkpoint found for this message.',
@@ -275,7 +386,7 @@ async function testNessunoSnapshotNonEUnErrore() {
 
 async function testRipristinoFallitoAvvisaEProsegue() {
   const sessionId = '00000000-0000-4000-8000-0000000000b4';
-  const { wrapper, schermo, percorso } = await scegliRamo(sessionId, 2, {
+  const { wrapper, schermo, percorso } = await scegliRamo(sessionId, {
     esitoRipristino: { ok: false, uscita: 'Failed to rewind: disco pieno', senzaSnapshot: false },
   });
 
@@ -310,10 +421,13 @@ async function testRamoDelPadreVisibileESelezionabile() {
   const attesa = wrapper.mostraOverlay();
   await attendiPrompt(schermo);
 
-  assert.match(schermo(), /strada abbandonata/, 'il ramo del padre e visibile dal figlio');
-  assert.match(schermo(), /strada nuova/, 'e c e anche quello corrente');
+  assert.match(schermo(), /strada nuova/, 'il cursore parte dal ramo corrente');
 
-  premi('2\r'); // voci: 1 = ciao, 2 = strada abbandonata, 3 = strada nuova
+  // Su = fratello precedente, che vive solo nel file del padre.
+  await premiTasti(SU);
+  assert.match(schermo(), /strada abbandonata/, 'il ramo del padre e raggiungibile dal figlio');
+
+  await premiTasti(INVIO);
   await attesa;
 
   assert.equal(ripristini[0]?.sessione, sidPadre, 'il fork riparte dalla sessione del padre');
@@ -356,7 +470,7 @@ async function testAlberoRestaDopoIlCambioRamo() {
 
   const primo = wrapper.mostraOverlay();
   await attendiPrompt(contesto.schermo);
-  premi('2\r'); // "strada uno"
+  await premiTasti(SU, INVIO); // dal ramo attivo al fratello: "strada uno"
   await primo;
 
   assert.ok(wrapper.sessioneRipresa, 'il primo cambio ramo crea e riprende una sessione');
@@ -371,14 +485,24 @@ async function testAlberoRestaDopoIlCambioRamo() {
   const schermoPrima = contesto.schermo().length;
   const secondo = wrapper.mostraOverlay();
   await attendiPrompt(() => contesto.schermo().slice(schermoPrima));
-  const nuovo = contesto.schermo().slice(schermoPrima);
 
-  assert.doesNotMatch(nuovo, /non ha ancora un transcript/, 'non dichiara il transcript assente');
-  assert.match(nuovo, /rami di questa conversazione/, 'l albero viene ancora disegnato');
-  assert.match(nuovo, /strada uno/, 'con tutti i rami');
-  assert.match(nuovo, /strada due/, 'compreso quello lasciato');
+  assert.doesNotMatch(
+    contesto.schermo().slice(schermoPrima),
+    /non ha ancora un transcript/,
+    'non dichiara il transcript assente',
+  );
+  assert.match(
+    contesto.schermo().slice(schermoPrima),
+    /rami di questa conversazione/,
+    'l albero viene ancora disegnato',
+  );
+  assert.match(contesto.schermo().slice(schermoPrima), /strada uno/, 'il ramo appena preso');
 
-  premi('\r'); // chiudo senza scegliere
+  // Il ramo lasciato e' ancora raggiungibile: e' il fratello successivo.
+  await premiTasti(GIU);
+  assert.match(contesto.schermo().slice(schermoPrima), /strada due/, 'compreso quello lasciato');
+
+  premi(ANNULLA); // chiudo senza scegliere
   await secondo;
 
   fs.unlinkSync(percorso);
@@ -419,7 +543,7 @@ async function testRiattivazioneSopravviveAScrittureInRitardo() {
 
   const attesa = wrapper.mostraOverlay();
   await attendiPrompt(contesto.schermo);
-  premi('2\r'); // "strada uno", ramo in disparte
+  await premiTasti(SU, INVIO); // "strada uno", ramo in disparte
   await attesa;
 
   assert.equal(sabotaggi, 1, 'la scrittura tardiva e stata simulata');
@@ -454,20 +578,21 @@ async function testDueCambiRamoDiFila() {
     wrapper.sessionId = riprendi;
   };
 
-  // Primo cambio ramo: scelgo "come sati?"
+  // Primo cambio ramo: dal ramo attivo ("cosa fai?") al fratello "come sati?"
   const primo = wrapper.mostraOverlay();
   await attendiPrompt(contesto.schermo);
-  premi('2\r');
+  await premiTasti(SU, INVIO);
   await primo;
 
   assert.ok(avvii[0], 'primo cambio ramo avvenuto');
   assert.equal(contesto.ripristini[0].uuid, 'c1', 'primo ramo scelto');
 
-  // Secondo cambio ramo: scelgo "cosa fai?"
+  // Secondo cambio ramo: adesso il cursore parte su "come sati?", e il fratello
+  // successivo e' "cosa fai?", rimasto nel file di partenza.
   const lunghezza = contesto.schermo().length;
   const secondo = wrapper.mostraOverlay();
   await attendiPrompt(() => contesto.schermo().slice(lunghezza));
-  premi('3\r');
+  await premiTasti(GIU, INVIO);
   await secondo;
 
   assert.equal(avvii.length, 2, 'anche il secondo cambio ramo avviene');
@@ -506,7 +631,8 @@ async function testPuntoIntermedioTagliaLaConversazione() {
 
   const attesa = wrapper.mostraOverlay();
   await attendiPrompt(contesto.schermo);
-  premi('2\r'); // voci: 1 = ciao, 2 = "cosa fai?", 3 = "test"
+  // Catena unica: il cursore parte da "test", sinistra risale a "cosa fai?"
+  await premiTasti(SINISTRA, INVIO);
   await attesa;
 
   assert.ok(wrapper.sessioneRipresa, 'viene creata una sessione per il ramo');
@@ -544,6 +670,7 @@ const prove = [
   testOverlayDisegnaAlberoEScegliRamo,
   testOverlayAnnullatoNonTocca,
   testOverlaySopravviveAiRilasci,
+  testOverlaySiRidisegnaAlRidimensionamento,
   testRipristinaAncheIFile,
   testSenzaFileNonRipristina,
   testNessunoSnapshotNonEUnErrore,

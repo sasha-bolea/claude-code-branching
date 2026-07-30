@@ -26,7 +26,10 @@ Sasha, singolo sviluppatore.
 | `src/transcript.js` | Parsing dei `.jsonl`, albero da `parentUuid`, filtro biforcazioni tecniche |
 | `src/attiva.js` | Riattivazione di un ramo abbandonato via append di `last-prompt` |
 | `src/ramo.js` | Crea la sessione del nuovo ramo: copia la catena fino al turno scelto |
-| `src/albero.js` | Albero collassato dei soli prompt utente, rendering ASCII |
+| `src/vista.js` | Albero orizzontale: griglia, colore, navigazione, composizione della pagina |
+| `src/stile.js` | Tavolozza dei colori, in un posto solo |
+| `src/albero.js` | Collasso ai soli prompt utente; elenco verticale numerato per i comandi da fuori |
+| `src/anteprima.js` | Mostra l'overlay su una sessione vera, senza lanciare Claude |
 | `src/indice.js` | Scansione globale di `~/.claude/projects` con cache su mtime+size |
 | `src/percorsi.js` | Slug delle cartelle progetto, risoluzione del transcript di una sessione |
 | `src/eseguibile.js` | Ricerca del binario nativo di Claude (node-pty non lancia gli shim) |
@@ -52,10 +55,14 @@ Regole del contratto con il chiamante:
 
 ```
 npm test                          esegue le prove (assert, nessun framework)
+node src/anteprima.js [file]      l'overlay su una sessione vera, senza lanciare Claude
 node src/verifica-reale.js [file] verifica il parser su una sessione vera
 node bin/cb.js ls                 catalogo globale
 node bin/cb.js tree <sessione>    albero dei rami
 ```
+
+`anteprima.js` senza argomenti prende la sessione con più ripristini, che è quella con
+l'albero più ramificato. `NO_COLOR=1` per leggerlo senza sequenze ANSI.
 
 Procedure multi-passo (installazione, aggancio a `claude`, hook dei commit, spostamento della
 cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
@@ -155,9 +162,31 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   ripristinare i file → rilanciare**. `--rewind-files` ha lo stesso vincolo di
   `--resume-session-at` (il messaggio deve stare nella catena attiva), e gli interventi su
   transcript e file devono essere gli ultimi, senza il processo vecchio che scrive sopra.
-- Le prove stanno in `src/transcript.test.js` e `src/wrapper.test.js`, con `assert`.
+- **Il ramo attivo è l'ultimo record messaggio del file** (`ultimoNodo`), non
+  `last-prompt.leafUuid`: è da lì che il CLI ricostruisce la conversazione riprendendo in
+  interattivo, e `last-prompt` resta spesso indietro (misurato: divergevano in 7 sessioni su
+  12). `leafAttivo` resta però quello giusto per **scrivere**: la riattivazione di un ramo
+  funziona appendendo un `last-prompt`, e `--rewind-files` gira in modalità non interattiva,
+  dove quel campo conta davvero.
+- **Al rilancio dopo un cambio ramo vanno tolti i flag di ripresa dell'utente**
+  (`senzaRipresa`): la ripresa la chiede già cb con la sessione che ha creato, e un `-r` in
+  coda arriva a Claude come seconda richiesta senza id, che riapre il selettore delle
+  conversazioni. Va tolto anche l'id che segue il flag, o resta sciolto e diventa un prompt.
+- **Il ritaglio orizzontale dell'albero si fa sulle celle, mai sul testo prodotto**: le righe
+  finite contengono sequenze ANSI, e tagliarle per numero di caratteri ne spezzerebbe una a
+  metà lasciando il terminale colorato. Vale anche per il taglio di sicurezza finale
+  (`tagliaVisibile`), che conta i caratteri visibili e richiude il colore.
+- **Nessuna riga della schermata può eccedere la larghezza del terminale**: una riga più lunga
+  viene mandata a capo dal terminale, e il capo sfasa tutto il disegno sotto. Le stringhe fisse
+  (legenda, barra dei tasti) hanno varianti accorciate; `tagliaVisibile` è la rete finale.
+- La griglia dell'albero **non dipende dalle dimensioni del terminale**: si compone una volta
+  sola alla larghezza naturale, e finestra e colori si ricalcolano a ogni disegno. È ciò che
+  permette di seguire il ridimensionamento e i movimenti del cursore senza rifare il layout.
+- Le prove stanno in `src/transcript.test.js`, `src/tasti.test.js`, `src/titolo.test.js`,
+  `src/vista.test.js`, `src/wrapper.test.js` e `src/overlay.test.js`, con `assert`.
   Niente framework. Nel wrapper i test usano un pty finto: la logica dei tasti è
-  isolabile, l'interazione con la TUI vera no.
+  isolabile, l'interazione con la TUI vera no. `creaProcesso` è estratto apposta perché i test
+  possano verificare **cosa** viene chiesto a Claude senza lanciarlo.
 
 ## 8. Riferimenti docs
 

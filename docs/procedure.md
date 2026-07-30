@@ -43,11 +43,17 @@ $cbUsabile = (Test-Path $cbEntry) -and (Get-Command node -ErrorAction SilentlyCo
 
 $ripiega = $true
 if ($cbUsabile) {
-    & node $cbEntry --tasto ctrl+g -- --dangerously-skip-permissions @args
+    & node $cbEntry --tasto f2 -- --dangerously-skip-permissions @args
     $ripiega = ($LASTEXITCODE -eq 78)     # 78 = cb non è partito
 }
 if ($ripiega) { & $claudeShim --dangerously-skip-permissions @args }
 ```
+
+**Scelta della scorciatoia.** I tasti funzione sono la fascia libera: Claude Code non li usa,
+né li usa l'editing da riga di comando. Evitare `f10` e `f11`, intercettati dal terminale per
+la barra dei menu e lo schermo intero. Le combinazioni con Ctrl sono quasi tutte prese —
+editing (`ctrl+a/e/k/u/w`), cronologia (`ctrl+r`), comandi di Claude Code fra cui `ctrl+g` — e
+`ctrl+s`/`ctrl+q` sono il controllo di flusso del terminale: con quelli lo schermo si blocca.
 
 **Prima di modificare**: copia di sicurezza del profilo.
 

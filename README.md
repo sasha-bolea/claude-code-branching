@@ -40,15 +40,15 @@ npm link          # rende `cb` disponibile da qualsiasi cartella
 ## Uso
 
 `cb` si lancia al posto di `claude`. Lavori normalmente; quando premi la scorciatoia
-compare l'albero dei rami. Scegli un numero e **conversazione e file** tornano a quel
-punto, in un ramo nuovo, senza uscire dalla sessione.
+compare l'albero dei rami. Ti muovi con le frecce, premi invio e **conversazione e file**
+tornano a quel punto, in un ramo nuovo, senza uscire dalla sessione.
 
 ⚠️ Il ripristino dei file sovrascrive il lavoro non salvato successivo a quel messaggio.
 Con `--senza-file` torna indietro solo la conversazione.
 
 ```
 cb                      Claude avvolto: Esc Esc apre l'albero
-cb --tasto ctrl+g       altra scorciatoia ("ctrl+g", "f2", "esc esc", "ctrl+shift+b")
+cb --tasto f2           altra scorciatoia ("f2", "esc esc", "ctrl+shift+b")
 cb --senza-file         cambiando ramo NON ripristina i file, solo la conversazione
 cb --tasti              stampa i byte dei tasti premuti (diagnosi)
 cb ls [filtro]          elenca le sessioni di tutti i progetti
@@ -57,16 +57,53 @@ cb open <sessione> [n]  riprendi da fuori, opzionalmente dal punto n
 cb pick                 catalogo interattivo da fuori
 ```
 
-Per fissare la scorciatoia una volta per tutte: `setx CB_TASTO "ctrl+g"`.
+Per fissare la scorciatoia una volta per tutte: `setx CB_TASTO "f2"`.
 
-Un tasto singolo (`ctrl+g`, `f2`) scatta subito. Una scorciatoia ripetuta (`esc esc`)
-costa 300 ms di ritardo sulla prima pressione, il tempo di capire se ne arriva una seconda.
+Un tasto singolo (`f2`) scatta subito. Una scorciatoia ripetuta (`esc esc`) costa 300 ms
+di ritardo sulla prima pressione, il tempo di capire se ne arriva una seconda.
+
+**Quale tasto scegliere.** I tasti funzione sono la scelta sicura: Claude Code non li usa,
+e non li usa nemmeno l'editing da riga di comando. Evita `f10` e `f11`, che il terminale
+intercetta per la barra dei menu e lo schermo intero. Le combinazioni con Ctrl sono quasi
+tutte prese: dall'editing (`ctrl+a/e/k/u/w`), dalla cronologia (`ctrl+r`), dai comandi di
+Claude Code (fra cui `ctrl+g`), e `ctrl+s`/`ctrl+q` sono il controllo di flusso del
+terminale — con quelli lo schermo si blocca.
 
 `<sessione>` accetta id completo, prefisso di id, o percorso del `.jsonl`.
 
-Nell'albero: numero + invio riparte da quel punto, invio torna a Claude.
+### L'albero dentro la sessione
 
-Esempio di albero:
+La conversazione scorre da sinistra a destra, un nodo per prompt; ogni biforcazione fa
+scendere un ramo. Sotto l'albero c'è il prompt su cui sta il cursore, e sotto ancora la
+storia che quel punto porta con sé fino alla radice.
+
+```
+  cb  rami di questa conversazione
+  ◯ riparti da qui   ┳ biforcazione   arancione = storia di questo punto
+
+  ⬤━━━⬤━━━⬤━━━⬤━┳━⬤━━━⬤━━━⬤━━━⬤
+                ┗━⬤━┳━⬤━━━◯
+                    ┗━⬤━━━⬤━━━⬤
+
+  ───────────────────────────────────────────────────────────────────
+  24-07 15:51  riparti da qui
+  l'app è diventata lentissima, il rendering della lista si blocca
+
+  precedenti: 3
+    24-07 15:40  aggiungi il filtro per data
+    24-07 15:12  /login
+    24-07 15:10  facciamo la lista dei clienti
+
+  ←→ ad avanti e indietro   ↑↓ ws cambia ramo   invio = riparti   esc = torna a Claude
+```
+
+`←` `→` risalgono e scendono la conversazione, `↑` `↓` passano da un ramo all'altro della
+stessa biforcazione. In alternativa `a` `d` e `w` `s`, se la mano preferisce restare sulle
+lettere. Il cursore parte da dove sei adesso. Invio fa nascere un ramo nuovo da quel punto:
+quello di prima resta dov'è.
+
+I comandi da fuori (`cb tree`, `cb pick`, `cb open`) usano invece l'elenco verticale
+numerato, perché `cb open <sessione> 3` ha bisogno di un numero a cui riferirsi:
 
 ```
  22  └─ ● 07-24 15:51  l'app è diventata lentissima ⑂3
@@ -77,7 +114,6 @@ Esempio di albero:
 ```
 
 `●` ramo attivo · `○` ramo in disparte · `⑂n` biforcazione con n rami.
-Scegli un numero e riparti da lì: nasce un ramo nuovo, quello di prima resta.
 
 ## Come funziona
 
@@ -150,7 +186,7 @@ function claude {
     $claudeShim = "$env:APPDATA/npm/claude.ps1"
 
     if ((Test-Path $cbEntry) -and (Get-Command node -ErrorAction SilentlyContinue)) {
-        & node $cbEntry --tasto ctrl+g -- @args
+        & node $cbEntry --tasto f2 -- @args
         if ($LASTEXITCODE -ne 78) { return }   # 78 = cb non è partito
     }
     & $claudeShim @args                        # ripiego: Claude diretto
@@ -170,7 +206,7 @@ Tre accorgimenti perché non possa peggiorare le cose:
 Con `--resume`/`--continue` l'id sessione lo sceglie Claude: cb non impone `--session-id` e
 scopre la sessione dal transcript più recente della cartella.
 
-Per cambiare scorciatoia basta modificare `--tasto ctrl+g` nel profilo.
+Per cambiare scorciatoia basta modificare `--tasto f2` nel profilo.
 
 Nota: il titolo della tab viene mantenuto (ConPTY lo sovrascriverebbe col percorso di
 `claude.exe` a ogni avvio di processo, quindi a ogni cambio ramo).
@@ -206,12 +242,16 @@ npm test
   retention: su rami vecchi può rispondere `No file checkpoint found`. Per uno storico che
   non scade servono i commit automatici (sotto).
 - Rubare `Esc Esc` costa 300 ms di ritardo su un Esc singolo (l'interruzione), e sostituisce
-  il menu di ripristino nativo. Con una scorciatoia a tasto singolo (`--tasto ctrl+g`) il
+  il menu di ripristino nativo. Con una scorciatoia a tasto singolo (`--tasto f2`) il
   ritardo sparisce e il menu nativo resta disponibile.
 - Il salto è possibile solo dopo il primo turno: prima non esiste un transcript da leggere.
 - `--resume-session-at` non è documentato: può cambiare a un aggiornamento del CLI.
 - La parentela tra sessioni forkate vive nei campi `forkParentSessionId` scritti dal CLI;
   `cb` non li aggrega ancora in una vista cross-sessione.
-- Nessuna interfaccia a frecce: la selezione è per numero.
+- L'albero orizzontale fa partire ogni ramo dalla colonna in cui si è diramato: con
+  biforcazioni molto avanti nella conversazione il ramo comincia a destra e va a capo
+  presto. Si vede da dove nasce, si perde un po' di larghezza.
+- I comandi da fuori (`tree`, `pick`, `open`) mostrano ancora l'elenco verticale numerato,
+  non l'albero orizzontale.
 - `node-pty` richiede il binario nativo di Claude, non lo shim npm. `cb` lo cerca da sé;
   se l'installazione non è standard, imposta `CB_CLAUDE_EXE`.

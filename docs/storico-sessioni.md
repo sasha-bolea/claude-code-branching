@@ -4,6 +4,78 @@ Archivio append-only. Voce più recente in alto.
 
 ---
 
+## 2026-07-30 (19:10) — Interfaccia dell'albero: vista orizzontale, colori, navigazione
+
+Sessione tutta sull'**interfaccia**: l'albero verticale numerato è stato sostituito da una
+vista orizzontale navigabile a frecce. Punto di partenza un disegno fornito dall'utente
+(`docs/esempio-albero.txt`), da cui sono usciti geometria e glifi.
+
+### Cosa è stato fatto
+
+**La vista.** La conversazione scorre da sinistra a destra, un nodo per prompt, e ogni
+biforcazione fa scendere un ramo. Sotto l'albero il prompt selezionato per intero, sotto
+ancora la storia che quel punto porta con sé fino alla radice. Il layout è separato dal
+disegno: `componiVista` calcola la griglia una volta sola, `disegnaRighe` la colora in base
+al cursore, `schermata` compone la pagina. Muovere il cursore non ricalcola nulla.
+
+**La navigazione**, arrivata in tre passi su richiesta:
+1. frecce al posto del numero, più `wasd` per chi tiene le mani sulle lettere;
+2. `↑↓` passano al ramo disegnato sopra/sotto invece che ai *fratelli* — prima da un figlio
+   unico il tasto era inerte, e capitava di rado di trovarsi su una biforcazione;
+3. `→` in fondo a un ramo prosegue su uno affiancato che vada più avanti: fra due vince il
+   più corto, a parità quello di sopra.
+
+**Lo scorrimento.** Le catene non vanno più a capo (un ramo lungo sembrava tanti rami corti):
+l'albero ha la sua larghezza naturale — 357 colonne su una conversazione vera — e se ne mostra
+una finestra che insegue il cursore in orizzontale e in verticale, con gli avvisi di quanto
+resta fuori ai lati.
+
+**I colori.** Arancione del marchio Claude in truecolor. Tre giri di correzione su richiesta:
+prima l'interfaccia sembrava a luminosità abbassata (quasi tutto era grigio scuro), poi tutto
+al massimo tranne la legenda, infine l'arancione è passato a marcare **il percorso dal cursore
+alla radice** — nodi *e* linee di collegamento — invece del ramo attivo.
+
+**Tre bug corretti**, due dei quali preesistenti e trovati dai test nuovi: cursore che partiva
+sul prompt sbagliato, selettore delle conversazioni che riappariva dopo un ripristino avviato
+con `claude -r`, overlay che non si ridisegnava al ridimensionamento della finestra.
+
+Cambiata anche la scorciatoia: **Ctrl+G → F2**, perché Ctrl+G è già usato da Claude Code.
+
+### Cambiamenti al codice
+
+**Vista (nuova)**
+- `src/vista.js` (nuovo): `componiVista` (griglia orizzontale, `rami` sulle celle di raccordo
+  per poterle colorare), `disegnaRighe` (colore + ritaglio orizzontale sulle celle),
+  `schermata` (pagina intera, pura e testabile), `muovi`, `puntaRamoAttivo`, `antenati`,
+  `aCapo`, `tagliaVisibile`, `primaCheEntra`, `finestraAttorno`
+- `src/stile.js` (nuovo): tavolozza in un posto solo, `NO_COLOR`/`CB_COLORI`
+- `src/anteprima.js` (nuovo): mostra l'overlay su una sessione vera senza lanciare Claude
+- `src/albero.js`: esportate `uuidRamoAttivo` e `testoLeggibile`; l'albero verticale numerato
+  resta per `cb tree`/`pick`/`open`
+
+**Tastiera**
+- `src/tasti.js`: frecce riconosciute (CSI, SS3, win32) — prima erano scartate; `wasd`;
+  tasti funzione in codifica ANSI (`ESC OQ`, `ESC[12~`, con i buchi 16 e 22 della numerazione)
+
+**Wrapper**
+- `src/wrapper.js`: ciclo di navigazione al posto della lettura di un numero, `creaProcesso`
+  estratto per poter verificare gli argomenti passati a Claude, `senzaRipresa`/`chiedeRipresa`,
+  `ridimensiona` con ridisegno ritardato, coda dei tasti arrivati in gruppo
+- `src/transcript.js`: nuovo campo `ultimoNodo` (ultimo record messaggio del file)
+
+**Documentazione e integrazione**
+- `README.md`: sezione sull'albero interattivo, guida alla scelta della scorciatoia
+- `bin/cb.js`: aiuto aggiornato, distinzione fra albero interattivo ed elenco numerato
+- `$PROFILE` (fuori repo): `--tasto ctrl+g` → `--tasto f2`
+
+**Test** — da 59 a 89 prove
+- `src/vista.test.js` (nuovo): 25 prove su layout, colore, ritaglio, navigazione
+- `src/tasti.test.js`: frecce, `wasd`, tasti funzione
+- `src/wrapper.test.js`: argomenti passati a Claude al rilancio
+- `src/overlay.test.js`: navigazione a frecce al posto dei numeri, ridimensionamento
+
+---
+
 ## 2026-07-30 (16:45) — Wrapper interattivo, taglio della conversazione, pubblicazione
 
 Sessione lunga, guidata dai sintomi: ogni problema segnalato ha smentito un'assunzione sul

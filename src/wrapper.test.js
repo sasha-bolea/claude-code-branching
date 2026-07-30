@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { Wrapper } from './wrapper.js';
+import { Wrapper, senzaRipresa, chiedeRipresa } from './wrapper.js';
 
 // Costruisce un wrapper con pty e terminale finti, per provare la logica dei
 // tasti senza lanciare Claude.
@@ -167,7 +167,75 @@ async function testTastiIgnoratiInOverlay() {
   assert.equal(inoltrati.length, 0, 'mentre l albero e aperto Claude non riceve tasti');
 }
 
+function testSenzaRipresa() {
+  // Nessun flag di ripresa: gli argomenti passano intatti.
+  assert.deepEqual(senzaRipresa(['--dangerously-skip-permissions']), [
+    '--dangerously-skip-permissions',
+  ]);
+
+  // -r da solo: il selettore lo apriva Claude, al rilancio non serve piu'.
+  assert.deepEqual(senzaRipresa(['--dangerously-skip-permissions', '-r']), [
+    '--dangerously-skip-permissions',
+  ]);
+  assert.deepEqual(senzaRipresa(['--resume']), []);
+  assert.deepEqual(senzaRipresa(['-c']), []);
+  assert.deepEqual(senzaRipresa(['--continue']), []);
+
+  // -r con id: se ne va anche l'id, o Claude lo prenderebbe per un prompt.
+  assert.deepEqual(senzaRipresa(['-r', 'abc-123', '--verbose']), ['--verbose']);
+  assert.deepEqual(senzaRipresa(['--resume', 'abc-123']), []);
+  assert.deepEqual(senzaRipresa(['--resume=abc-123', '--verbose']), ['--verbose']);
+
+  // -r seguito da un altro flag: l'id non c'era, il flag non va mangiato.
+  assert.deepEqual(senzaRipresa(['-r', '--verbose']), ['--verbose']);
+
+  // Riconoscimento della richiesta di ripresa, in tutte le sue forme.
+  assert.equal(chiedeRipresa(['-r']), true);
+  assert.equal(chiedeRipresa(['--resume', 'abc']), true);
+  assert.equal(chiedeRipresa(['--resume=abc']), true);
+  assert.equal(chiedeRipresa(['-c']), true);
+  assert.equal(chiedeRipresa(['--verbose']), false);
+  assert.equal(chiedeRipresa([]), false);
+}
+
+function testCambioRamoNonRiapreIlSelettore() {
+  // Il bug segnalato: avviando con `claude -r` e poi ripristinando un punto,
+  // ricompariva l'elenco delle conversazioni della cartella. Il `-r` dell'utente
+  // restava in coda agli argomenti, e Claude riceveva due richieste di ripresa:
+  // la seconda senza id, quindi riapriva il selettore.
+  const avvii = [];
+  const wrapper = new Wrapper({ argomentiExtra: ['--dangerously-skip-permissions', '-r'] });
+  wrapper.scrivi = () => {};
+  wrapper.registra = () => {};
+  wrapper.eseguibile = 'claude.exe';
+  // Intercetto lo spawn: interessa cosa viene chiesto a Claude, non lanciarlo.
+  wrapper.creaProcesso = (argomenti) => {
+    avvii.push(argomenti);
+    return { onData: () => {}, onExit: () => {}, write: () => {}, kill: () => {}, resize: () => {} };
+  };
+
+  // Primo avvio: il -r dell'utente deve arrivare, e' lui che vuole il selettore.
+  wrapper.avviaClaude();
+  assert.ok(avvii[0].includes('-r'), 'al primo avvio il selettore lo apre Claude');
+  assert.ok(!avvii[0].includes('--session-id'), 'e l id non glielo imponiamo');
+
+  // Cambio ramo: cb riprende la sessione che ha creato, e il -r non va ripetuto.
+  wrapper.avviaClaude({ riprendi: 'ramo-nuovo' });
+  assert.deepEqual(
+    avvii[1],
+    ['--resume', 'ramo-nuovo', '--dangerously-skip-permissions'],
+    'una sola richiesta di ripresa, con l id del ramo',
+  );
+  assert.equal(avvii[1].filter((a) => a === '-r' || a === '--resume').length, 1);
+
+  // Secondo cambio ramo di fila: deve restare pulito.
+  wrapper.avviaClaude({ riprendi: 'ramo-ancora' });
+  assert.deepEqual(avvii[2], ['--resume', 'ramo-ancora', '--dangerously-skip-permissions']);
+}
+
 const prove = [
+  testSenzaRipresa,
+  testCambioRamoNonRiapreIlSelettore,
   testDoppioEscInLettureSeparate,
   testDoppioEscNellaStessaLettura,
   testDoppioEscWin32,

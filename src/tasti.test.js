@@ -137,8 +137,82 @@ function testAzioniIgnoranoIlMouse() {
   assert.deepEqual(azioniTastiera(mouse), [], 'le coordinate del mouse non sono cifre');
 }
 
-function testAzioniIgnoranoLeFrecce() {
-  assert.deepEqual(azioniTastiera(buf(ESC, 0x5b, 0x41)), [], 'le frecce non producono azioni');
+function testAzioniFrecce() {
+  // Servono a navigare l'albero: prima venivano scartate con le altre sequenze.
+  assert.deepEqual(azioniTastiera(buf(ESC, 0x5b, 0x41)), [{ tipo: 'freccia', valore: 'su' }]);
+  assert.deepEqual(azioniTastiera(testo(`${esc}[B`)), [{ tipo: 'freccia', valore: 'giu' }]);
+  assert.deepEqual(azioniTastiera(testo(`${esc}[C`)), [{ tipo: 'freccia', valore: 'destra' }]);
+  assert.deepEqual(azioniTastiera(testo(`${esc}[D`)), [{ tipo: 'freccia', valore: 'sinistra' }]);
+
+  // Codifica SS3, usata da alcuni terminali in modalita' applicazione.
+  assert.deepEqual(azioniTastiera(testo(`${esc}OA`)), [{ tipo: 'freccia', valore: 'su' }]);
+  // Con modificatori: ctrl+destra resta una freccia destra.
+  assert.deepEqual(azioniTastiera(testo(`${esc}[1;5C`)), [{ tipo: 'freccia', valore: 'destra' }]);
+
+  // In win32-input-mode le frecce arrivano come codice virtuale, senza carattere.
+  assert.deepEqual(azioniTastiera(win32(38, 0, 1)), [{ tipo: 'freccia', valore: 'su' }]);
+  assert.deepEqual(azioniTastiera(win32(40, 0, 1)), [{ tipo: 'freccia', valore: 'giu' }]);
+  assert.deepEqual(azioniTastiera(win32(37, 0, 0)), [], 'il rilascio non muove il cursore');
+
+  // Due frecce nella stessa lettura: succede tenendo premuto.
+  assert.deepEqual(azioniTastiera(testo(`${esc}[A${esc}[A`)), [
+    { tipo: 'freccia', valore: 'su' },
+    { tipo: 'freccia', valore: 'su' },
+  ]);
+}
+
+function testTastiFunzione() {
+  const F2 = analizzaScorciatoia('f2');
+
+  // win32-input-mode: F2 arriva come vk 113, senza carattere unicode.
+  assert.equal(contaInTesta(tokenizza(win32(113, 0, 1)), F2).pressioni, 1, 'F2 in win32');
+  assert.equal(contaInTesta(tokenizza(win32(114, 0, 1)), F2).pressioni, 0, 'F3 non scatta');
+  assert.equal(contaInTesta(tokenizza(win32(113, 0, 0)), F2).pressioni, 0, 'il rilascio non scatta');
+
+  // Codifica ANSI: SS3 per i primi quattro, CSI numerico per tutti.
+  assert.equal(contaInTesta(tokenizza(testo(`${esc}OQ`)), F2).pressioni, 1, 'F2 come SS3');
+  assert.equal(contaInTesta(tokenizza(testo(`${esc}[12~`)), F2).pressioni, 1, 'F2 come CSI');
+  assert.equal(contaInTesta(tokenizza(testo(`${esc}[12;5~`)), F2).pressioni, 1, 'con modificatori');
+  assert.equal(contaInTesta(tokenizza(testo(`${esc}OP`)), F2).pressioni, 0, 'F1 non e F2');
+
+  // La numerazione CSI ha due buchi: 15 e' F5, 16 non esiste, 17 e' F6.
+  assert.equal(contaInTesta(tokenizza(testo(`${esc}[15~`)), analizzaScorciatoia('f5')).pressioni, 1);
+  assert.equal(contaInTesta(tokenizza(testo(`${esc}[17~`)), analizzaScorciatoia('f6')).pressioni, 1);
+
+  // Un CSI numerico che non e' un tasto funzione (Canc = ESC[3~) resta byte
+  // grezzi da inoltrare a Claude, non diventa un tasto inventato.
+  const canc = tokenizza(testo(`${esc}[3~`));
+  assert.equal(canc[0].tasto, null, 'Canc non e un tasto funzione');
+  assert.equal(canc[0].bytes.toString('latin1'), `${esc}[3~`, 'e viene inoltrato intatto');
+
+  // Dentro l'overlay un tasto funzione non deve muovere il cursore ne' digitare.
+  assert.deepEqual(azioniTastiera(win32(113, 0, 1)), [], 'F2 non e un movimento');
+  assert.deepEqual(azioniTastiera(testo(`${esc}OQ`)), [], 'nemmeno in ANSI');
+}
+
+function testAzioniWasd() {
+  // Le lettere valgono come le frecce: w su, s giu, a sinistra, d destra.
+  assert.deepEqual(azioniTastiera(testo('wasd')), [
+    { tipo: 'freccia', valore: 'su' },
+    { tipo: 'freccia', valore: 'sinistra' },
+    { tipo: 'freccia', valore: 'giu' },
+    { tipo: 'freccia', valore: 'destra' },
+  ]);
+
+  // Anche maiuscole: con shift premuto il movimento resta lo stesso.
+  assert.deepEqual(azioniTastiera(testo('W')), [{ tipo: 'freccia', valore: 'su' }]);
+
+  // In win32-input-mode il carattere arriva nel campo unicode.
+  assert.deepEqual(azioniTastiera(win32(87, 119, 1)), [{ tipo: 'freccia', valore: 'su' }]);
+  assert.deepEqual(azioniTastiera(win32(68, 100, 1)), [{ tipo: 'freccia', valore: 'destra' }]);
+  assert.deepEqual(azioniTastiera(win32(87, 119, 0)), [], 'il rilascio non muove il cursore');
+
+  // Con Ctrl e' una scorciatoia, non un movimento: Ctrl+D non deve navigare.
+  const ctrlD = testo(`${esc}[68;1;100;1;${8};1_`);
+  assert.deepEqual(azioniTastiera(ctrlD), [], 'ctrl+d non e un movimento');
+
+  // Le altre lettere non fanno niente, come prima.
+  assert.deepEqual(azioniTastiera(testo('qz')), []);
 }
 
 function testAzioniByteGrezzi() {
@@ -171,7 +245,9 @@ const prove = [
   testAzioniIgnoranoIRilasci,
   testAzioniCifreEInvioWin32,
   testAzioniIgnoranoIlMouse,
-  testAzioniIgnoranoLeFrecce,
+  testAzioniFrecce,
+  testTastiFunzione,
+  testAzioniWasd,
   testAzioniByteGrezzi,
 ];
 

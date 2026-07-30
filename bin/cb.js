@@ -20,17 +20,20 @@ const AIUTO = `
 cb — branching per conversazioni Claude Code
 
   cb                    avvia Claude avvolto: ${SCORCIATOIA_PREDEFINITA} apre l'albero dei rami
-  cb --tasto <tasto>    come sopra con un'altra scorciatoia: "ctrl+g", "f2", "esc esc"
+  cb --tasto <tasto>    come sopra con un'altra scorciatoia: "f2", "esc esc", "ctrl+shift+b"
+                        (i tasti funzione sono liberi; ctrl+g lo usa Claude Code)
   cb --senza-file       cambiando ramo NON ripristina i file, solo la conversazione
   cb --tasti            stampa i byte dei tasti e scrive ~/.claude/cb/diagnosi.log
-                        (combinabile: cb --tasti --tasto ctrl+g)
+                        (combinabile: cb --tasti --tasto f2)
   cb ls [filtro]        elenca le sessioni (filtro su progetto o prompt)
   cb tree <sessione>    mostra l'albero dei rami di una sessione
   cb open <sessione> [n]  riprendi una sessione da fuori, opzionalmente dal ramo n
   cb pick               catalogo interattivo: scegli sessione, poi ramo
   cb --aiuto            questo testo
 
-Dentro l'albero: numero + invio riparte da quel punto, invio torna a Claude.
+Nell'albero dentro la sessione: ←→ (o a/d) scorrono la conversazione, ↑↓ (o w/s)
+cambiano ramo, invio riparte da lì, esc torna a Claude. I comandi qui sopra usano
+l'elenco numerato, così "cb open <sessione> 3" ha un numero a cui riferirsi.
 La scorciatoia si fissa una volta per tutte con la variabile CB_TASTO.
 <sessione> = id completo, prefisso di id, o percorso del .jsonl
 `;

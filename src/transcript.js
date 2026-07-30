@@ -31,12 +31,16 @@ function estraiTesto(record) {
 // messaggio principale e produrrebbero biforcazioni inesistenti.
 // percorso: path assoluto del file .jsonl
 // ritorna: { nodi: Map<uuid, nodo>, radici: nodo[], leafAttivo: uuid|null,
-//            sessionId, titolo, cwd, gitBranch, primoPrompt, ultimoTimestamp,
-//            righe, sidechain }
+//            ultimoNodo: uuid|null, sessionId, titolo, cwd, gitBranch,
+//            primoPrompt, ultimoTimestamp, righe, sidechain }
 export async function leggiTranscript(percorso) {
   const nodi = new Map();
   const orfani = [];
   let leafAttivo = null;
+  // Ultimo record messaggio scritto nel file. E' da qui che il CLI ricostruisce
+  // la conversazione quando riprende in interattivo, quindi e' questo — non
+  // last-prompt — a dire dove si trova davvero la sessione.
+  let ultimoNodo = null;
   let sessionId = null;
   let titolo = null;
   let cwd = null;
@@ -85,6 +89,7 @@ export async function leggiTranscript(percorso) {
       testo !== '[risultato tool]';
     if (isPrompt && !primoPrompt) primoPrompt = testo;
 
+    ultimoNodo = record.uuid;
     nodi.set(record.uuid, {
       uuid: record.uuid,
       parentUuid: record.parentUuid ?? null,
@@ -118,6 +123,7 @@ export async function leggiTranscript(percorso) {
     nodi,
     radici,
     leafAttivo,
+    ultimoNodo,
     sessionId,
     titolo,
     cwd,

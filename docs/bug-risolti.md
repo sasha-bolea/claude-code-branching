@@ -230,3 +230,95 @@ Reso realistico anche il pty finto (notifica l'uscita): la suite passava da 44 s
 perché prima aspettava le reti di sicurezza.
 
 **File.** `src/overlay.test.js`
+
+---
+
+## 2026-07-30 — Il cursore dell'albero partiva su un prompt vecchio
+
+**Sintomo.** Aprendo l'albero, il punto selezionato non era quello da cui si era premuta la
+scorciatoia ma uno di qualche turno prima. Anche i colori sbagliavano: i turni successivi
+erano disegnati come ramo in disparte.
+
+**Causa.** Il ramo attivo si ricavava da `last-prompt.leafUuid`, che Claude aggiorna a
+intermittenza. In interattivo il CLI ricostruisce invece dall'**ultimo record messaggio del
+file**. Misurato su 12 sessioni vere: i due valori divergevano in **7**.
+
+**Fix.** `leggiTranscript` restituisce `ultimoNodo`; `uuidRamoAttivo` parte da quello e ripiega
+su `leafAttivo` solo se non è nell'albero (file troncato, record filtrati). Cursore e colori
+derivano entrambi da qui, quindi si sistemano insieme. Nel caso fork va sovrascritto anche
+`ultimoNodo`, non solo `leafAttivo`: l'ultimo record del file di provenienza sta sul ramo
+lasciato.
+
+**File.** `src/transcript.js`, `src/albero.js`, `src/wrapper.js`
+
+---
+
+## 2026-07-30 — Dopo un ripristino riappariva l'elenco delle conversazioni
+
+**Sintomo.** Avviando con `claude -r`, scegliendo una sessione e poi ripristinando un punto
+qualsiasi, invece del ramo ricompariva il selettore delle conversazioni della cartella.
+
+**Causa.** `avviaClaude` riaccodava `argomentiExtra` a **ogni** rilancio. Con `-r` fra gli
+argomenti dell'utente, dopo un cambio ramo il comando diventava
+`--resume <ramo> … -r`: due richieste di ripresa, la seconda **senza id**, quindi Claude
+riapriva il selettore. Non c'entrava il navigatore di cartelle del profilo.
+
+**Fix.** `senzaRipresa()` toglie i flag di ripresa dagli argomenti dell'utente, ma solo al
+rilancio dopo un cambio ramo — al primo avvio `-r` deve passare. Toglie anche l'id che segue
+il flag, che altrimenti resterebbe sciolto e Claude lo prenderebbe per un prompt. Estratto
+`creaProcesso()` per poter verificare nei test *cosa* viene chiesto a Claude: prima non era
+verificabile, ed è il motivo per cui il bug è passato.
+
+**File.** `src/wrapper.js`, `src/wrapper.test.js`
+
+---
+
+## 2026-07-30 — L'overlay non seguiva il ridimensionamento della finestra
+
+**Sintomo.** Ridimensionando il terminale con l'albero aperto, il disegno restava con le
+vecchie dimensioni finché non si premeva un tasto.
+
+**Causa.** Il ciclo dell'overlay ridisegnava solo dopo un tasto; il gestore di `resize`
+avvisava il pty di Claude ma non toccava l'overlay.
+
+**Fix.** `ridimensiona()` avvisa sempre Claude (al ritorno deve conoscere le misure nuove) e
+ridisegna l'overlay se aperto, tramite `this.ridisegnaOverlay` — riregistrata a ogni giro del
+ciclo perché cattura la selezione corrente. Ridisegno ritardato di 80 ms: trascinando il bordo
+gli eventi arrivano a decine al secondo. Alla chiusura il riferimento va azzerato e il timer
+annullato, o l'albero verrebbe scritto sopra lo schermo di Claude.
+
+Possibile solo perché `componiVista` non dipende più dalle dimensioni del terminale.
+
+**File.** `src/wrapper.js`
+
+---
+
+## 2026-07-30 — Legenda e barra dei tasti sfondavano i terminali stretti
+
+**Sintomo.** Trovato da un test nuovo, non segnalato. Sotto le ~115 colonne le due righe di
+intestazione andavano a capo, e il capo sfasava tutto il disegno sotto.
+
+**Causa.** Erano stringhe di lunghezza fissa (~70 e ~110 caratteri), scritte senza guardare la
+larghezza disponibile.
+
+**Fix.** Due livelli. `primaCheEntra` sceglie fra varianti in ordine di ricchezza (una legenda
+o una barra accorciata si legge meglio di una troncata). Sopra, `tagliaVisibile` passa su tutte
+le righe alla fine come rete di sicurezza: conta solo i caratteri visibili ignorando le
+sequenze ANSI, lavora per punti di codice (un'emoji in un prompt non viene spezzata a metà) e
+richiude il colore se il taglio cade dentro un tratto colorato.
+
+**File.** `src/vista.js`
+
+---
+
+## 2026-07-30 — Albero disegnato tutto a cerchi vuoti
+
+**Sintomo.** Trovato da un test durante il lavoro sui colori: `⬤◯◯◯⬤` invece di `⬤━━━⬤`.
+
+**Causa.** Semplificando la colorazione era sparita la guardia su `cella.uuid`. I raccordi
+hanno `uuid` nullo, quindi con `selezione` a `null` il confronto `cella.uuid === selezione`
+era vero anche per loro, e venivano disegnati come cursore.
+
+**Fix.** Ripristinata la guardia, con un commento che spiega perché non è ridondante.
+
+**File.** `src/vista.js`

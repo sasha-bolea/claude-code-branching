@@ -49,11 +49,22 @@ export function alberoPrompt(albero) {
 }
 
 // Insieme degli uuid che compongono il ramo attualmente attivo.
+//
+// La punta del ramo e' l'ULTIMO record messaggio del file, non
+// `last-prompt.leafUuid`: e' da lì che il CLI ricostruisce la conversazione
+// riprendendo in interattivo, e last-prompt resta spesso indietro (misurato su
+// dodici sessioni vere: i due valori divergevano in sette). Prendere last-prompt
+// faceva partire il cursore dell'albero su un prompt vecchio invece che su quello
+// da cui si e' aperto l'albero. Resta come ripiego per i file senza record utili.
+//
+// L'ordine di inserimento e' quello della catena, dalla radice alla foglia:
+// chi legge il Set puo' contarci per trovare la punta del ramo.
 // albero: risultato di leggiTranscript
 // ritorna: Set di uuid
-function uuidRamoAttivo(albero) {
-  if (!albero.leafAttivo || !albero.nodi.has(albero.leafAttivo)) return new Set();
-  return new Set(catenaFinoA(albero, albero.leafAttivo).map((n) => n.uuid));
+export function uuidRamoAttivo(albero) {
+  const punta = [albero.ultimoNodo, albero.leafAttivo].find((u) => u && albero.nodi.has(u));
+  if (!punta) return new Set();
+  return new Set(catenaFinoA(albero, punta).map((n) => n.uuid));
 }
 
 // Riconosce i prompt che non sono testo digitato ma rumore di protocollo
@@ -77,10 +88,18 @@ function etichettaSpeciale(testo) {
   return null;
 }
 
+// Testo di un prompt in forma leggibile, su una riga: i prompt di protocollo
+// diventano l'etichetta corta di etichettaSpeciale, gli altri restano come sono.
+// testo: contenuto grezzo del prompt
+// ritorna: testo normalizzato, senza spaziature multiple
+export function testoLeggibile(testo) {
+  const grezzo = (testo ?? '').trim();
+  return (etichettaSpeciale(grezzo) ?? grezzo).replace(/\s+/g, ' ').trim();
+}
+
 // Accorcia un testo su una riga sola, comprimendo i prompt di protocollo.
 function riassumi(testo, larghezza) {
-  const grezzo = (testo ?? '').trim();
-  const pulito = (etichettaSpeciale(grezzo) ?? grezzo).replace(/\s+/g, ' ').trim();
+  const pulito = testoLeggibile(testo);
   return pulito.length > larghezza ? `${pulito.slice(0, larghezza - 1)}…` : pulito;
 }
 

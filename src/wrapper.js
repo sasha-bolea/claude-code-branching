@@ -12,7 +12,8 @@ import {
   sessioneDaPercorso,
 } from './percorsi.js';
 import { leggiTranscript, unisciAlberi } from './transcript.js';
-import { disegnaAlbero } from './albero.js';
+import { testoLeggibile } from './albero.js';
+import { componiVista, schermata, muovi, puntaRamoAttivo } from './vista.js';
 import { attivaRamoDi, fineDelTurno } from './attiva.js';
 import { senzaTitolo, sequenzaTitolo } from './titolo.js';
 import { creaSessioneTroncata } from './ramo.js';
@@ -34,6 +35,65 @@ const MOSTRA_CURSORE = '[?25h';
 // aprirebbe il proprio menu di ripristino prima che il secondo arrivi.
 // Il costo e' questo ritardo su un Esc singolo (interruzione).
 const ATTESA_DOPPIO_ESC = 300;
+
+// Millisecondi di calma prima di ridisegnare l'overlay dopo un ridimensionamento.
+// Trascinando il bordo della finestra gli eventi arrivano a decine al secondo:
+// ridisegnare a ognuno farebbe sfarfallare lo schermo. Abbastanza corto da
+// sembrare immediato quando si lascia il bordo.
+const ATTESA_RIDIMENSIONA = 80;
+
+// Flag con cui l'utente chiede a Claude di riprendere una conversazione.
+// `-r`/`--resume` accettano un id di sessione facoltativo; `-c`/`--continue` no.
+const FLAG_RIPRESA = new Set(['-r', '--resume', '-c', '--continue']);
+const PRENDE_ID = new Set(['-r', '--resume']);
+
+// Vero se fra gli argomenti c'e' una richiesta di ripresa dell'utente.
+// argomenti: argomenti destinati a Claude
+// ritorna: true se l'id di sessione lo decide Claude e non cb
+export function chiedeRipresa(argomenti) {
+  return argomenti.some((a) => FLAG_RIPRESA.has(a) || a.startsWith('--resume='));
+}
+
+// Toglie i flag di ripresa dagli argomenti dell'utente.
+//
+// Serve al rilancio dopo un cambio ramo: cb passa gia' `--resume <ramo>` con la
+// sessione che ha appena creato, e lasciare in coda il `-r` con cui l'utente
+// aveva avviato farebbe arrivare a Claude due richieste di ripresa. La seconda e'
+// senza id, quindi Claude riapre il selettore delle conversazioni della cartella
+// invece di riprendere il ramo — il bug per cui, dopo un ripristino, ricompariva
+// l'elenco delle sessioni passate.
+//
+// argomenti: argomenti destinati a Claude
+// ritorna: gli stessi argomenti senza i flag di ripresa e i loro id
+export function senzaRipresa(argomenti) {
+  const puliti = [];
+
+  for (let i = 0; i < argomenti.length; i += 1) {
+    const argomento = argomenti[i];
+    if (argomento.startsWith('--resume=')) continue;
+    if (!FLAG_RIPRESA.has(argomento)) {
+      puliti.push(argomento);
+      continue;
+    }
+    // L'id che segue il flag va tolto con lui, o resterebbe come argomento
+    // sciolto e Claude lo prenderebbe per un prompt. Un altro flag, invece,
+    // significa che l'id non c'era.
+    const successivo = argomenti[i + 1];
+    if (PRENDE_ID.has(argomento) && successivo && !successivo.startsWith('-')) i += 1;
+  }
+
+  return puliti;
+}
+
+// Traduce un'azione di tastiera in un movimento dell'overlay.
+// azione: risultato di azioniTastiera
+// ritorna: azione di navigazione, o null se quel tasto non naviga
+function navigazioneDa(azione) {
+  if (azione.tipo === 'freccia') return azione;
+  if (azione.tipo === 'invio') return { tipo: 'conferma' };
+  if (azione.tipo === 'annulla') return { tipo: 'annulla' };
+  return null;
+}
 
 // Avvolge Claude Code in uno pseudo-terminale, intercettando la scorciatoia di
 // ripristino per mostrare l'albero dei rami invece del menu nativo.
@@ -83,6 +143,9 @@ export class Wrapper {
     this.pressioniInAttesa = 0; // pressioni della scorciatoia gia' viste
     this.byteTrattenuti = null; // byte da inoltrare se la sequenza non si completa
     this.uscitaVolontaria = false; // distingue il kill nostro dall'uscita utente
+    this.azioniInAttesa = []; // tasti di navigazione arrivati in gruppo
+    this.ridisegnaOverlay = null; // come ridisegnare l'overlay aperto, se c'e'
+    this.timerRidimensiona = null;
   }
 
   // Scrive sul terminale reale.
@@ -101,6 +164,22 @@ export class Wrapper {
     }
   }
 
+  // Apre uno pseudo-terminale con Claude dentro.
+  // E' un metodo a se' perche' e' l'unico punto che tocca il mondo esterno: le
+  // prove lo sostituiscono per verificare cosa viene chiesto a Claude senza
+  // lanciarlo davvero.
+  // argomenti: riga di comando per Claude
+  // ritorna: il processo pty
+  creaProcesso(argomenti) {
+    return pty.spawn(this.eseguibile, argomenti, {
+      name: 'xterm-256color',
+      cols: process.stdout.columns || 120,
+      rows: process.stdout.rows || 30,
+      cwd: this.cwd,
+      env: process.env,
+    });
+  }
+
   // Lancia un processo Claude.
   // riprendi: id di una sessione da riprendere (creata da cb, gia' tagliata al
   //   punto scelto). Se assente, parte una sessione nuova.
@@ -115,17 +194,18 @@ export class Wrapper {
     // --session-id ci fa sapere in anticipo quale transcript leggere, ma non si
     // puo' imporre quando e' l'utente a chiedere di riprendere una sessione: in
     // quel caso l'id lo decide Claude e lo scopriamo dal disco.
-    const riprendeGiaLui = this.argomentiExtra.some((a) =>
-      ['-r', '--resume', '-c', '--continue'].includes(a),
-    );
     if (riprendi) {
       // la sessione esiste gia': imporre un id nuovo la scarterebbe
-    } else if (riprendeGiaLui) {
+    } else if (chiedeRipresa(this.argomentiExtra)) {
       this.sessionId = null;
     } else {
       argomenti.push('--session-id', this.sessionId);
     }
-    argomenti.push(...this.argomentiExtra);
+
+    // Al cambio ramo la ripresa la chiede cb, con la sessione che ha creato: il
+    // `-r` dell'utente e' gia' stato esaudito al primo avvio, e ripassarlo qui
+    // farebbe riaprire il selettore delle conversazioni.
+    argomenti.push(...(riprendi ? senzaRipresa(this.argomentiExtra) : this.argomentiExtra));
 
     this.avviatoIl = Date.now();
     this.eraCambioRamo = Boolean(riprendi);
@@ -134,13 +214,7 @@ export class Wrapper {
     // Il titolo va riaffermato a ogni avvio: ConPTY lo sovrascrive col percorso
     // dell'eseguibile quando crea il processo, e a un cambio ramo il processo e' nuovo.
     this.scrivi(sequenzaTitolo(this.titolo));
-    this.processo = pty.spawn(this.eseguibile, argomenti, {
-      name: 'xterm-256color',
-      cols: process.stdout.columns || 120,
-      rows: process.stdout.rows || 30,
-      cwd: this.cwd,
-      env: process.env,
-    });
+    this.processo = this.creaProcesso(argomenti);
 
     this.processo.onData((dati) => {
       if (!this.inOverlay) this.scrivi(senzaTitolo(dati));
@@ -184,8 +258,32 @@ export class Wrapper {
   // Chiude l'overlay e restituisce il terminale a Claude.
   chiudiOverlay() {
     this.inOverlay = false;
+    this.ridisegnaOverlay = null; // da qui in poi lo schermo e' di Claude
+    clearTimeout(this.timerRidimensiona);
     this.scrivi(PULISCI_SCHERMO);
     this.forzaRidisegno();
+  }
+
+  // Reagisce al ridimensionamento della finestra del terminale.
+  //
+  // Claude va avvisato sempre, anche mentre l'overlay lo copre: al ritorno deve
+  // gia' conoscere le dimensioni nuove. L'overlay invece si ridisegna solo se e'
+  // aperto — senza, resterebbe a schermo com'era, tagliato o con lo scorrimento
+  // calcolato su una larghezza che non esiste piu', finche' non si preme un tasto.
+  //
+  // Il ridisegno e' ritardato perche' trascinando il bordo della finestra gli
+  // eventi arrivano a decine al secondo, e ripulire lo schermo a ogni evento
+  // produrrebbe uno sfarfallio.
+  ridimensiona() {
+    const colonne = process.stdout.columns || 120;
+    const righe = process.stdout.rows || 30;
+    this.processo?.resize(colonne, righe);
+
+    if (!this.inOverlay) return;
+    clearTimeout(this.timerRidimensiona);
+    this.timerRidimensiona = setTimeout(() => {
+      if (this.inOverlay) this.ridisegnaOverlay?.();
+    }, ATTESA_RIDIMENSIONA);
   }
 
   // Mostra una schermata di sola informazione e attende un invio.
@@ -193,10 +291,16 @@ export class Wrapper {
   // coperto dal ridisegno di Claude e la scorciatoia sembrerebbe non funzionare.
   async mostraAvviso(righe) {
     this.inOverlay = true;
-    this.scrivi(MOSTRA_CURSORE + PULISCI_SCHERMO);
-    this.scrivi(`  cb\r\n\r\n`);
-    for (const riga of righe) this.scrivi(`  ${riga}\r\n`);
-    this.scrivi(`\r\n  invio per tornare a Claude\r\n  > `);
+    // Registrato come ridisegno cosi' anche questa schermata segue il
+    // ridimensionamento della finestra (vedi ridisegnaOverlay).
+    this.ridisegnaOverlay = () => {
+      this.scrivi(MOSTRA_CURSORE + PULISCI_SCHERMO);
+      this.scrivi(`  cb\r\n\r\n`);
+      for (const riga of righe) this.scrivi(`  ${riga}\r\n`);
+      this.scrivi(`\r\n  invio per tornare a Claude\r\n  > `);
+    };
+
+    this.ridisegnaOverlay();
     await this.leggiNumero(0);
     this.chiudiOverlay();
   }
@@ -232,6 +336,7 @@ export class Wrapper {
 
   // Mostra l'albero dei rami della sessione corrente e attende una scelta.
   async mostraOverlay() {
+    this.azioniInAttesa = []; // tasti rimasti da un overlay precedente
     const percorso = this.trovaTranscript();
     this.registra(`overlay sessione=${this.sessionId} transcript=${percorso ?? 'ASSENTE'}`);
     if (!percorso) {
@@ -262,18 +367,25 @@ export class Wrapper {
     this.alberiFamiglia = new Map(famiglia.map((file, i) => [file, alberi[i]]));
 
     // Se siamo agganciati al transcript di provenienza, il ramo attivo scritto
-    // la' non e' il nostro: e' quello da cui siamo ripartiti.
+    // la' non e' il nostro: e' quello da cui siamo ripartiti. Vale per entrambi i
+    // modi di indicare la punta, o il cursore partirebbe sul ramo dell'altra
+    // sessione (l'ultimo record di quel file sta su un ramo che abbiamo lasciato).
     if (this.uuidRipreso && percorso === this.percorsoOrigine) {
       albero.leafAttivo = this.uuidRipreso;
+      albero.ultimoNodo = this.uuidRipreso;
     }
     this.registra(`famiglia=${famiglia.length} sessioni, nodi uniti=${albero.nodi.size}`);
-    const { righe, voci } = disegnaAlbero(albero, {
-      larghezza: Math.max(30, (process.stdout.columns || 120) - 40),
-    });
+    // La griglia si calcola una volta sola, alla larghezza naturale dell'albero:
+    // muovere il cursore cambia il colore dei nodi e la finestra mostrata, non il
+    // disegno. Non dipende dalle dimensioni del terminale, quindi non va rifatta
+    // se la finestra viene ridimensionata mentre l'overlay e' aperto.
+    const vista = componiVista(albero);
+    this.registra(
+      `vista nodi=${vista.nodi.length} righe=${vista.griglia.length} ` +
+        `larghezza=${vista.larghezza} uniti=${albero.nodi.size}`,
+    );
 
-    this.registra(`albero righe=${righe.length} voci=${voci.length} nodi=${albero.nodi.size}`);
-
-    if (voci.length === 0) {
+    if (vista.nodi.length === 0) {
       this.inOverlay = false;
       await this.mostraAvviso([
         'La conversazione non contiene ancora messaggi da cui ripartire.',
@@ -284,42 +396,70 @@ export class Wrapper {
       return;
     }
 
-    this.scrivi(`  cb — rami di questa conversazione\r\n`);
-    this.scrivi(`  ● ramo attivo   ○ ramo in disparte   ⑂ biforcazione\r\n\r\n`);
+    let selezione = puntaRamoAttivo(vista);
+    let voce = null;
 
-    // Con molti messaggi mostro solo la coda: e' dove si sceglie quasi sempre.
-    const massimo = Math.max(8, (process.stdout.rows || 30) - 8);
-    const inizio = Math.max(0, righe.length - massimo);
-    if (inizio > 0) this.scrivi(`  … ${inizio} righe precedenti omesse\r\n`);
-    for (const riga of righe.slice(inizio)) this.scrivi(`${riga}\r\n`);
+    // Ciclo di navigazione: disegna, aspetta un tasto, ridisegna.
+    for (;;) {
+      // Il ridisegno si registra a ogni giro perche' la selezione cambia: cosi'
+      // un ridimensionamento della finestra ridisegna con il cursore giusto.
+      this.ridisegnaOverlay = () => this.disegnaSchermata(vista, selezione);
+      this.ridisegnaOverlay();
+      const azione = await this.leggiNavigazione();
 
-    this.scrivi(
-      this.ripristinaCodice
-        ? '\r\n  numero + invio = riparti da lì (ripristina anche i file)   ·   invio = torna a Claude\r\n  > '
-        : '\r\n  numero + invio = riparti da lì (i file restano come sono)   ·   invio = torna a Claude\r\n  > ',
-    );
-
-    const scelta = await this.leggiNumero(voci.length);
-    this.registra(
-      `scelta=${scelta === null ? 'annullata' : scelta + 1} su ${voci.length} voci` +
-        (scelta === null
-          ? ''
-          : ` -> uuid=${voci[scelta].uuid} testo="${voci[scelta].testo.replace(/\s+/g, ' ').slice(0, 40)}"`),
-    );
-    // Elenco completo delle voci: serve a verificare l'allineamento tra il numero
-    // mostrato a schermo e il nodo effettivamente selezionato.
-    voci.forEach((v, i) =>
-      this.registra(
-        `  voce ${i + 1}: ${v.uuid} "${v.testo.replace(/\s+/g, ' ').slice(0, 30)}"`,
-      ),
-    );
-
-    if (scelta === null) {
-      this.chiudiOverlay();
-      return;
+      if (azione.tipo === 'annulla') {
+        this.registra('overlay chiuso senza scegliere');
+        this.chiudiOverlay();
+        return;
+      }
+      if (azione.tipo === 'conferma') {
+        voce = vista.perUuid.get(selezione);
+        break;
+      }
+      selezione = muovi(vista, selezione, azione.valore);
     }
 
-    await this.cambiaRamo(percorso, albero, voci[scelta]);
+    this.registra(`scelta uuid=${voce.uuid} testo="${testoLeggibile(voce.testo).slice(0, 40)}"`);
+    await this.cambiaRamo(percorso, albero, voce);
+  }
+
+  // Disegna l'overlay. La composizione sta in vista.js: qui si scrive soltanto,
+  // con i ritorni a capo che vuole il terminale in raw mode.
+  // vista: risultato di componiVista
+  // selezione: uuid del nodo su cui sta il cursore
+  disegnaSchermata(vista, selezione) {
+    const righe = schermata(vista, selezione, {
+      colonne: process.stdout.columns || 120,
+      altezza: process.stdout.rows || 30,
+      ripristinaCodice: this.ripristinaCodice,
+    });
+
+    this.scrivi(PULISCI_SCHERMO);
+    for (const riga of righe) this.scrivi(`${riga}\r\n`);
+  }
+
+  // Legge un tasto di navigazione dallo stdin grezzo.
+  // Non uso readline perche' lo stdin e' in raw mode e condiviso col pty; i tasti
+  // vanno tokenizzati e non letti a byte, o il rilascio di un tasto qualsiasi
+  // verrebbe scambiato per Esc (vedi azioniTastiera).
+  // ritorna: Promise<{ tipo: 'freccia', valore } | { tipo: 'conferma' } | { tipo: 'annulla' }>
+  leggiNavigazione() {
+    // Una sola lettura di stdin puo' contenere piu' tasti: tenendo premuta una
+    // freccia arrivano in gruppo. Quelli in eccesso vanno in coda, altrimenti la
+    // navigazione salta dei passi e il cursore sembra incantarsi.
+    if (this.azioniInAttesa.length > 0) return Promise.resolve(this.azioniInAttesa.shift());
+
+    return new Promise((risolvi) => {
+      const ascoltatore = (dati) => {
+        const azioni = azioniTastiera(dati).map(navigazioneDa).filter(Boolean);
+        if (azioni.length === 0) return; // cifre, cancella, rilasci: non navigano
+        process.stdin.off('data', ascoltatore);
+        this.azioniInAttesa.push(...azioni.slice(1));
+        risolvi(azioni[0]);
+      };
+
+      process.stdin.on('data', ascoltatore);
+    });
   }
 
   // Chiude il processo corrente e ne apre uno nuovo forkato dal punto scelto.
@@ -674,9 +814,7 @@ export class Wrapper {
     process.stdin.resume();
     process.stdin.on('data', (dati) => this.gestisciInput(dati));
 
-    process.stdout.on('resize', () => {
-      this.processo?.resize(process.stdout.columns || 120, process.stdout.rows || 30);
-    });
+    process.stdout.on('resize', () => this.ridimensiona());
 
     this.avviaClaude();
   }

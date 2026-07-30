@@ -17,6 +17,34 @@ const CTRL_PREMUTO = 0x000c; // destro | sinistro
 const SHIFT_PREMUTO = 0x0010;
 
 export const VK_ESCAPE = 27;
+// Codici virtuali delle frecce: sono quelli che manda win32-input-mode, e li
+// riusiamo anche per le frecce in codifica ANSI, cosi' a valle la codifica non
+// si vede piu'.
+export const VK_SINISTRA = 37;
+export const VK_SU = 38;
+export const VK_DESTRA = 39;
+export const VK_GIU = 40;
+
+// Frecce nelle codifiche ANSI: CSI (ESC[A) e SS3 (ESCOA). Sono quelle che arrivano
+// quando win32-input-mode non e' attivo (terminali Unix, o Claude non ancora
+// avviato). Il gruppo di cifre accetta i modificatori (ESC[1;5C = ctrl+destra) e
+// li ignora: per navigare l'albero non servono.
+const RE_FRECCIA = /^\x1b(?:\[[0-9;]*|O)([ABCD])/;
+const VK_DELLA_FRECCIA = { A: VK_SU, B: VK_GIU, C: VK_DESTRA, D: VK_SINISTRA };
+
+// Codice virtuale del primo tasto funzione: VK_F2 = VK_F1 + 1, e cosi' via.
+const VK_F1 = 0x70;
+
+// Tasti funzione in codifica ANSI, nelle due forme che manda un terminale:
+// SS3 per i primi quattro (ESC OP..ESC OS) e CSI numerico per tutti
+// (ESC[11~ = F1). La numerazione CSI ha due buchi storici, 16 e 22, quindi la
+// corrispondenza si scrive per esteso invece di calcolarla.
+const RE_TASTO_FUNZIONE = /^\x1b(?:O([PQRS])|\[(\d{1,2})(?:;[0-9:]+)?~)/;
+const F_DA_SS3 = { P: 1, Q: 2, R: 3, S: 4 };
+const F_DA_CSI = {
+  11: 1, 12: 2, 13: 3, 14: 4, 15: 5, 17: 6, 18: 7, 19: 8,
+  20: 9, 21: 10, 23: 11, 24: 12,
+};
 
 // Descrive un tasto in modo indipendente dalla codifica del terminale.
 // vk: codice virtuale (VK_ESCAPE, 71 per G, …)
@@ -72,6 +100,43 @@ export function tokenizza(dati) {
     if (win32) {
       aggiungi(tastoWin32(win32), win32[0].length);
       continue;
+    }
+
+    const freccia = RE_FRECCIA.exec(resto);
+    if (freccia) {
+      aggiungi(
+        {
+          vk: VK_DELLA_FRECCIA[freccia[1]],
+          carattere: null,
+          ctrl: false,
+          alt: false,
+          shift: false,
+          rilascio: false,
+        },
+        freccia[0].length,
+      );
+      continue;
+    }
+
+    const funzione = RE_TASTO_FUNZIONE.exec(resto);
+    if (funzione) {
+      const numero = funzione[1] ? F_DA_SS3[funzione[1]] : F_DA_CSI[Number(funzione[2])];
+      if (numero) {
+        aggiungi(
+          {
+            vk: VK_F1 + numero - 1,
+            carattere: null,
+            ctrl: false,
+            alt: false,
+            shift: false,
+            rilascio: false,
+          },
+          funzione[0].length,
+        );
+        continue;
+      }
+      // Numero CSI che non e' un tasto funzione (Ins, Canc, PagSu…): lo lascio
+      // ai byte non riconosciuti, che vengono inoltrati a Claude intatti.
     }
 
     const kitty = RE_ESC_KITTY.exec(resto);
@@ -131,7 +196,7 @@ export function analizzaScorciatoia(testo) {
   if (tasto === 'esc') {
     scorciatoia.vk = VK_ESCAPE;
   } else if (/^f\d{1,2}$/.test(tasto)) {
-    scorciatoia.vk = 0x70 + Number(tasto.slice(1)) - 1; // VK_F1 = 0x70
+    scorciatoia.vk = VK_F1 + Number(tasto.slice(1)) - 1;
   } else if (tasto.length === 1) {
     scorciatoia.carattere = tasto;
     scorciatoia.vk = tasto.toUpperCase().charCodeAt(0);
@@ -170,12 +235,26 @@ export function corrisponde(tasto, scorciatoia) {
 const VK_INVIO = 13;
 const VK_BACKSPACE = 8;
 
+// Direzione associata a ogni freccia, per non far girare i codici virtuali
+// fino a chi disegna l'albero.
+const DIREZIONE = {
+  [VK_SU]: 'su',
+  [VK_GIU]: 'giu',
+  [VK_SINISTRA]: 'sinistra',
+  [VK_DESTRA]: 'destra',
+};
+
+// Le stesse direzioni sulle lettere: la mano resta dove sta a digitare, e su
+// alcune tastiere le frecce sono scomode da raggiungere. Con Ctrl o Alt premuti
+// non contano: sono scorciatoie, non movimenti.
+const DIREZIONE_WASD = { w: 'su', s: 'giu', a: 'sinistra', d: 'destra' };
+
 // Traduce i byte ricevuti in azioni per un campo di input testuale.
 // Necessario perche' in win32-input-mode ogni evento tastiera comincia con
 // 0x1b: leggere i byte grezzi farebbe scambiare per Esc anche il rilascio di un
 // tasto qualsiasi, e farebbe leggere come cifre le coordinate del mouse.
 // dati: Buffer letto da stdin
-// ritorna: array di { tipo: 'cifra'|'invio'|'cancella'|'annulla', valore? }
+// ritorna: array di { tipo: 'cifra'|'invio'|'cancella'|'annulla'|'freccia', valore? }
 export function azioniTastiera(dati) {
   const azioni = [];
 
@@ -185,7 +264,15 @@ export function azioniTastiera(dati) {
       if (voce.tasto.vk === VK_INVIO) azioni.push({ tipo: 'invio' });
       else if (voce.tasto.vk === VK_BACKSPACE) azioni.push({ tipo: 'cancella' });
       else if (voce.tasto.vk === VK_ESCAPE) azioni.push({ tipo: 'annulla' });
-      else if (voce.tasto.carattere && /^[0-9]$/.test(voce.tasto.carattere)) {
+      else if (DIREZIONE[voce.tasto.vk]) {
+        azioni.push({ tipo: 'freccia', valore: DIREZIONE[voce.tasto.vk] });
+      } else if (
+        !voce.tasto.ctrl &&
+        !voce.tasto.alt &&
+        DIREZIONE_WASD[voce.tasto.carattere]
+      ) {
+        azioni.push({ tipo: 'freccia', valore: DIREZIONE_WASD[voce.tasto.carattere] });
+      } else if (voce.tasto.carattere && /^[0-9]$/.test(voce.tasto.carattere)) {
         azioni.push({ tipo: 'cifra', valore: voce.tasto.carattere });
       }
       continue;
@@ -200,6 +287,12 @@ export function azioniTastiera(dati) {
       else if (byte === 0x03) azioni.push({ tipo: 'annulla' });
       else if (byte >= 0x30 && byte <= 0x39) {
         azioni.push({ tipo: 'cifra', valore: String.fromCharCode(byte) });
+      } else {
+        // Le lettere di movimento valgono anche maiuscole (shift premuto). Le
+        // versioni con Ctrl sono caratteri di controllo (0x01-0x1a), quindi qui
+        // non arrivano mai e non c'e' da distinguerle.
+        const direzione = DIREZIONE_WASD[String.fromCharCode(byte).toLowerCase()];
+        if (direzione) azioni.push({ tipo: 'freccia', valore: direzione });
       }
     }
   }
