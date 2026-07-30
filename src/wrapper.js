@@ -23,6 +23,7 @@ import {
   analizzaScorciatoia,
   soloRilasci,
   azioniTastiera,
+  azioniNavigazione,
 } from './tasti.js';
 
 // Sequenze ANSI usate dall'overlay. Nominate perche' scritte come caratteri di
@@ -85,13 +86,19 @@ export function senzaRipresa(argomenti) {
   return puliti;
 }
 
-// Traduce un'azione di tastiera in un movimento dell'overlay.
-// azione: risultato di azioniTastiera
+// Traduce un comando di azioniNavigazione in un'azione dell'overlay.
+// I tasti che qui non hanno senso ("r", spazio) diventano null e vengono
+// scartati: l'overlay non deve reagire a un tasto che non gli appartiene.
+// comando: stringa prodotta da azioniNavigazione
 // ritorna: azione di navigazione, o null se quel tasto non naviga
-function navigazioneDa(azione) {
-  if (azione.tipo === 'freccia') return azione;
-  if (azione.tipo === 'invio') return { tipo: 'conferma' };
-  if (azione.tipo === 'annulla') return { tipo: 'annulla' };
+function navigazioneDa(comando) {
+  if (['su', 'giu', 'sinistra', 'destra'].includes(comando)) {
+    return { tipo: 'freccia', valore: comando };
+  }
+  if (comando === 'conferma') return { tipo: 'conferma' };
+  if (comando === 'annulla') return { tipo: 'annulla' };
+  if (comando === 'conversazione') return { tipo: 'conversazione' };
+  if (comando === 'progetto') return { tipo: 'progetto' };
   return null;
 }
 
@@ -416,6 +423,12 @@ export class Wrapper {
         voce = vista.perUuid.get(selezione);
         break;
       }
+      // Da qui si esce dalla conversazione corrente: si sceglie un'altra
+      // conversazione della stessa cartella, o prima un'altra cartella.
+      if (azione.tipo === 'conversazione' || azione.tipo === 'progetto') {
+        await this.cambiaConversazione({ ancheCartella: azione.tipo === 'progetto' });
+        return;
+      }
       selezione = muovi(vista, selezione, azione.valore);
     }
 
@@ -432,6 +445,7 @@ export class Wrapper {
       colonne: process.stdout.columns || 120,
       altezza: process.stdout.rows || 30,
       ripristinaCodice: this.ripristinaCodice,
+      extra: { lunga: 'c = altra conversazione   p = altra cartella', corta: 'c/p altra conv.' },
     });
 
     this.scrivi(PULISCI_SCHERMO);
@@ -451,7 +465,7 @@ export class Wrapper {
 
     return new Promise((risolvi) => {
       const ascoltatore = (dati) => {
-        const azioni = azioniTastiera(dati).map(navigazioneDa).filter(Boolean);
+        const azioni = azioniNavigazione(dati).map(navigazioneDa).filter(Boolean);
         if (azioni.length === 0) return; // cifre, cancella, rilasci: non navigano
         process.stdin.off('data', ascoltatore);
         this.azioniInAttesa.push(...azioni.slice(1));
@@ -462,10 +476,94 @@ export class Wrapper {
     });
   }
 
+  // Apre i selettori di cb — cartella e conversazioni — senza uscire da Claude,
+  // e riparte da quello che l'utente sceglie.
+  //
+  // I selettori si prendono lo stdin per conto loro e alla chiusura lo lasciano
+  // com'era prima (raw mode spento, flusso in pausa): qui va rimesso come lo
+  // vuole il wrapper, o i tasti non arriverebbero piu' a Claude. L'ascoltatore
+  // registrato in avvia() resta attaccato, e `inOverlay` gli fa ignorare tutto
+  // quello che digitiamo nei selettori.
+  //
+  // ancheCartella: true per scegliere prima un'altra cartella di lavoro
+  async cambiaConversazione({ ancheCartella = false } = {}) {
+    const { selezionaCartella, annotaCartellaScelta } = await import('./cartelle.js');
+    const { selezionaConversazione } = await import('./conversazioni.js');
+
+    // Lo stdin torna al wrapper comunque vada: anche annullando, anche in errore.
+    const restituisciTastiera = () => {
+      if (process.stdin.isTTY) process.stdin.setRawMode(true);
+      process.stdin.resume();
+    };
+
+    let cartella = this.cwd;
+    try {
+      if (ancheCartella) {
+        const scelta = await selezionaCartella({ cwd: cartella, ripresa: true });
+        if (!scelta) return this.chiudiOverlay(); // annullato: si torna a Claude
+        cartella = scelta.percorso;
+      }
+
+      const conversazione = await selezionaConversazione({
+        cartella,
+        ripristinaCodice: this.ripristinaCodice,
+      });
+      if (!conversazione) return this.chiudiOverlay();
+
+      this.registra(
+        `cambio conversazione cartella=${cartella} ` +
+          `scelta=${conversazione.nuova ? 'nuova' : (conversazione.riprendi ?? 'taglio')}`,
+      );
+
+      // La cartella nuova vale per lo spawn di Claude, per la ricerca dei
+      // transcript e per il titolo della tab: sono tutti derivati da this.cwd.
+      // Va segnata anche per la shell, che a fine sessione ci si sposta.
+      this.cwd = cartella;
+      this.titolo = path.basename(cartella);
+      annotaCartellaScelta(cartella);
+
+      // Il processo si chiude prima di scoprire lo schermo: finche' e' vivo
+      // continua a disegnare, e lo si vedrebbe lampeggiare sotto.
+      await this.chiudiProcesso();
+      this.inOverlay = false;
+      this.scrivi(PULISCI_SCHERMO);
+
+      if (conversazione.nuova) {
+        // Nessuna conversazione da riprendere in quella cartella: si comincia.
+        this.percorsoOrigine = null;
+        this.uuidRipreso = null;
+        this.avviaClaude();
+        return;
+      }
+
+      if (conversazione.riprendi) {
+        this.percorsoOrigine = conversazione.percorso;
+        this.uuidRipreso = conversazione.voce?.uuid ?? null;
+        this.avviaClaude({ riprendi: conversazione.riprendi });
+        return;
+      }
+
+      this.alberiFamiglia = conversazione.alberi;
+      const ripartito = await this.cambiaRamo(
+        conversazione.percorso,
+        conversazione.albero,
+        conversazione.voce,
+      );
+      // Il messaggio d'errore l'ha gia' scritto cambiaRamo: qui resta da non
+      // lasciare l'utente senza Claude.
+      if (!ripartito) this.avviaClaude();
+    } finally {
+      restituisciTastiera();
+    }
+  }
+
   // Chiude il processo corrente e ne apre uno nuovo forkato dal punto scelto.
+  // Vale anche all'avvio, quando un processo ancora non c'e': e' il modo in cui
+  // cb riprende una conversazione scelta dal selettore (vedi src/conversazioni.js).
   // percorso: transcript della sessione corrente
   // albero: risultato di leggiTranscript
   // voce: nodo prompt scelto
+  // ritorna: true se Claude e' ripartito, false se qualcosa e' andato storto
   async cambiaRamo(percorso, albero, voce) {
     // Il nodo scelto puo' vivere solo nel file di una sessione antenata: in quel
     // caso si riparte da quella, non da quella corrente.
@@ -491,7 +589,7 @@ export class Wrapper {
     if (!nodoOrigine) {
       this.inOverlay = false;
       this.lampeggia(`cb: il messaggio non e' in questa sessione`);
-      return;
+      return false;
     }
     this.fineTurno = fineDelTurno(nodoOrigine).uuid;
 
@@ -502,7 +600,7 @@ export class Wrapper {
     } catch (errore) {
       this.inOverlay = false;
       this.lampeggia(`cb: ${errore.message}`);
-      return;
+      return false;
     }
 
     // Riporta anche i file allo stato di quel messaggio. Senza questo la
@@ -532,7 +630,7 @@ export class Wrapper {
     } catch (errore) {
       this.inOverlay = false;
       this.lampeggia(`cb: non riesco a creare il ramo (${errore.message})`);
-      return;
+      return false;
     }
 
     this.inOverlay = false;
@@ -544,6 +642,7 @@ export class Wrapper {
     this.uuidRipreso = voce.uuid;
 
     this.avviaClaude({ riprendi: ramo.sessionId });
+    return true;
   }
 
   // Termina il processo Claude e attende che sia davvero uscito.
@@ -805,7 +904,13 @@ export class Wrapper {
   }
 
   // Avvia il wrapper: collega il terminale e lancia il primo processo Claude.
-  avvia() {
+  //
+  // ripartenza: conversazione scelta nel selettore (src/conversazioni.js), nella
+  //   forma prodotta da esitoScelta: { percorso, albero, alberi, voce, riprendi }.
+  //   Con `riprendi` valorizzato il punto scelto e' gia' la fine della
+  //   conversazione e basta riprenderla; altrimenti si passa dalla stessa strada
+  //   del cambio ramo, che taglia al turno scelto e riporta indietro i file.
+  async avvia({ ripartenza = null } = {}) {
     if (!process.stdin.isTTY) {
       throw new Error('cb wrap richiede un terminale interattivo');
     }
@@ -815,6 +920,28 @@ export class Wrapper {
     process.stdin.on('data', (dati) => this.gestisciInput(dati));
 
     process.stdout.on('resize', () => this.ridimensiona());
+
+    if (ripartenza?.riprendi) {
+      this.percorsoOrigine = ripartenza.percorso;
+      this.uuidRipreso = ripartenza.voce?.uuid ?? null;
+      this.avviaClaude({ riprendi: ripartenza.riprendi });
+      return;
+    }
+
+    if (ripartenza?.voce) {
+      // Ogni file della famiglia va riattivato con il proprio albero, non con
+      // quello unito: e' il vincolo di riattivaConVerifica.
+      this.alberiFamiglia = ripartenza.alberi;
+      const ripartito = await this.cambiaRamo(
+        ripartenza.percorso,
+        ripartenza.albero,
+        ripartenza.voce,
+      );
+      // Se il ripristino non e' riuscito il messaggio l'ha gia' scritto
+      // cambiaRamo: qui resta da non lasciare l'utente senza Claude.
+      if (!ripartito) this.avviaClaude();
+      return;
+    }
 
     this.avviaClaude();
   }

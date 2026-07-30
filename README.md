@@ -48,6 +48,7 @@ Con `--senza-file` torna indietro solo la conversazione.
 
 ```
 cb                      Claude avvolto: Esc Esc apre l'albero
+cb --scegli             prima chiede cartella e conversazione (vedi sotto)
 cb --tasto f2           altra scorciatoia ("f2", "esc esc", "ctrl+shift+b")
 cb --senza-file         cambiando ramo NON ripristina i file, solo la conversazione
 cb --tasti              stampa i byte dei tasti premuti (diagnosi)
@@ -58,6 +59,26 @@ cb pick                 catalogo interattivo da fuori
 ```
 
 Per fissare la scorciatoia una volta per tutte: `setx CB_TASTO "f2"`.
+
+### Scegliere cartella e conversazione all'avvio
+
+Con `cb --scegli` cb mette due schermate davanti a Claude: l'albero delle cartelle sotto la
+home (radice configurabile con `CB_RADICE`), dove `r` alterna avvio normale e ripresa, e —
+in ripresa — l'elenco delle conversazioni di quella cartella, ognuna con il suo albero in
+cima. `↑↓` scorrono le conversazioni, invio entra nell'albero, dove si sceglie il punto da
+cui ripartire.
+
+Perché non il selettore di `claude -r`: quello elenca i **file** di sessione, e siccome un
+fork ne crea uno nuovo, i rami della stessa conversazione compaiono come conversazioni
+diverse. Qui le sessioni si raggruppano per uuid di radice, e una conversazione è tutto il
+suo albero.
+
+Le stesse due schermate si riaprono a sessione avviata, dall'albero (`c` le conversazioni,
+`p` le cartelle): si cambia progetto senza chiudere Claude.
+
+Se la variabile `CB_CARTELLA_SCELTA` punta a un file, cb ci scrive la cartella scelta: chi
+lancia cb può leggerla all'uscita e spostarcisi (un processo figlio non può cambiare la
+cartella corrente di chi lo ha lanciato).
 
 Un tasto singolo (`f2`) scatta subito. Una scorciatoia ripetuta (`esc esc`) costa 300 ms
 di ritardo sulla prima pressione, il tempo di capire se ne arriva una seconda.
@@ -185,11 +206,29 @@ function claude {
     $cbEntry = "C:/percorso/di/cb/bin/cb.js"
     $claudeShim = "$env:APPDATA/npm/claude.ps1"
 
-    if ((Test-Path $cbEntry) -and (Get-Command node -ErrorAction SilentlyContinue)) {
-        & node $cbEntry --tasto f2 -- @args
-        if ($LASTEXITCODE -ne 78) { return }   # 78 = cb non è partito
+    # Senza argomenti (o con -r) apri i selettori di cartella e conversazione.
+    $scegli = @()
+    if ($args.Count -eq 0 -or $args[0] -in @('-r', '--resume')) { $scegli = @('--scegli') }
+
+    # cb ci scrive la cartella scelta: la shell ci si sposta all'uscita.
+    $fileCartella = Join-Path ([IO.Path]::GetTempPath()) "cb-cartella-$PID.txt"
+    Remove-Item $fileCartella -ErrorAction SilentlyContinue
+    $env:CB_CARTELLA_SCELTA = $fileCartella
+
+    try {
+        if ((Test-Path $cbEntry) -and (Get-Command node -ErrorAction SilentlyContinue)) {
+            & node $cbEntry @scegli --tasto f2 -- @args
+            if ($LASTEXITCODE -ne 78) { return }   # 78 = cb non è partito
+        }
+        & $claudeShim @args                        # ripiego: Claude diretto
+    } finally {
+        if (Test-Path $fileCartella) {
+            $scelta = (Get-Content $fileCartella -Raw).Trim()
+            Remove-Item $fileCartella -ErrorAction SilentlyContinue
+            if ($scelta -and (Test-Path -LiteralPath $scelta)) { Set-Location -LiteralPath $scelta }
+        }
+        $env:CB_CARTELLA_SCELTA = $null
     }
-    & $claudeShim @args                        # ripiego: Claude diretto
 }
 ```
 

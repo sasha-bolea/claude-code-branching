@@ -4,6 +4,90 @@ Archivio append-only. Voce più recente in alto.
 
 ---
 
+## 2026-07-31 (00:57) — cb si prende l'avvio: selettore di cartella e di conversazioni
+
+Sessione che sposta dentro cb tutto quello che stava intorno: la scelta della cartella (prima
+nel profilo PowerShell) e la scelta della conversazione da riprendere (prima il selettore
+nativo di `claude -r`). Più cinque correzioni alla navigazione dell'albero, tutte nate
+guardando screenshot dell'interfaccia vera.
+
+### Cosa è stato fatto
+
+**Il selettore di cartella dentro cb** (`src/cartelle.js`). L'albero delle cartelle sotto la
+home, navigabile a frecce, con `r` che alterna avvio normale e ripresa. Era `Select-RepoFolder`
+nel profilo: ora il profilo passa solo `--scegli`. La cartella scelta la sa solo cb — un
+processo figlio non cambia la cwd del padre — quindi cb la scrive nel file indicato da
+`CB_CARTELLA_SCELTA` e la shell ci si sposta all'uscita, com'era prima con `Set-Location`.
+
+**Il selettore di conversazioni** (`src/conversazioni.js`), che sostituisce quello nativo.
+La differenza è il raggruppamento: un fork crea un file nuovo, quindi il selettore di Claude
+elenca i rami della stessa conversazione come conversazioni diverse. Qui le sessioni si
+raggruppano per uuid di radice e **una conversazione è tutto il suo albero**. In cima l'albero
+della conversazione selezionata, sotto l'elenco; `↑↓` scorrono e l'albero sopra cambia; invio
+entra nell'albero e da lì si sceglie il punto, con la stessa schermata dell'overlay F2.
+
+**Cambio conversazione o cartella a sessione avviata**: dall'overlay F2, `c` apre l'elenco
+delle conversazioni della cartella, `p` prima il selettore delle cartelle. Il wrapper chiude
+Claude, aggiorna `cwd` e titolo, e riparte da quello che è stato scelto.
+
+**Cinque correzioni all'albero**, tutte da screenshot:
+1. le giunzioni `┣`/`┗` attraversate dal percorso restavano grigie: una cella può appartenere
+   a più rami, e conosceva solo il primo che l'aveva occupata;
+2. `→` in fondo a un ramo ora scende anche su un ramo che finisce **esattamente dove siamo**,
+   non solo su uno che va più avanti;
+3. `←` sul primo prompt di un ramo **sale e basta**, invece di salire e tornare indietro in
+   diagonale fino alla forca;
+4. la biforcazione **sul primo prompt** disegnava due linee separate, senza niente che le
+   collegasse: ora ha la sua forca prima della prima colonna;
+5. scorrendo l'elenco delle conversazioni, alberi di altezza diversa facevano salire e
+   scendere il separatore e tutto l'elenco. Il pannello dell'albero ha ora altezza fissa.
+
+### Cambiamenti al codice
+
+**Selettori (nuovi)**
+- `src/cartelle.js` (nuovo): `figli`, `componiRighe`, `statoIniziale`, `applicaAzione`,
+  `disegna`, `selezionaCartella`, `annotaCartellaScelta`, `radicePredefinita` (radice da
+  `CB_RADICE`, ripiego su `~/Documents/REPOSITORY` e poi sulla home)
+- `src/conversazioni.js` (nuovo): `raggruppaPerFamiglia`, `famiglieDellaCartella`,
+  `caricaFamiglia`, `disegnaConversazioni`, `pannelloAlbero`, `esitoScelta`,
+  `selezionaConversazione`
+- `src/cartelle.test.js`, `src/conversazioni.test.js` (nuovi): 115 assert in tutto, con
+  terminale finto (EventEmitter) per provare i cicli interattivi senza un TTY
+
+**Albero e navigazione**
+- `src/vista.js`: `aggiungiRami` (una cella attraversata da più rami li conosce tutti);
+  forca di radice quando le radici sono più d'una; `aSinistra` (sale invece di tagliare in
+  diagonale, e vale anche per le radici senza padre); `proseguiSuUnRamoAffiancato` accetta
+  verso il basso anche un ramo che finisce alla colonna del cursore; `schermata` parametrica
+  su `titolo`, `esc` e `extra` (i tasti in più da annunciare), con le varianti della barra
+  ordinate per preferenza e non solo per lunghezza
+
+**Wrapper**
+- `src/wrapper.js`: `avvia({ripartenza})` — riusa `cambiaRamo` anche quando un processo non
+  c'è ancora; `cambiaConversazione({ancheCartella})` per i tasti `c`/`p`, con restituzione
+  dello stdin al wrapper in un `finally`; `cambiaRamo` restituisce se Claude è ripartito;
+  `leggiNavigazione` passa da `azioniNavigazione`
+
+**Tastiera**
+- `src/tasti.js`: `azioniNavigazione` — unico lettore di tasti per le schermate a elenco e ad
+  albero (frecce, `wasd`, spazio, `r`, `c`, `p`, invio, esc), al posto della copia che stava
+  in `cartelle.js`
+
+**Indice**
+- `src/indice.js`: la scheda porta `radice` (uuid), che serve a raggruppare le conversazioni;
+  `primoPrompt` salta il rumore di protocollo (una conversazione aperta con `/clear` si
+  chiamava «/clear»); le schede in cache senza `radice` valgono come assenti
+
+**Entrypoint e profilo**
+- `bin/cb.js`: flag `--scegli`, orchestrazione cartella → conversazione → wrapper, `await`
+  su `avvia()` perché l'errore arrivi al ripiego 78
+- `src/anteprima.js`: annuncia gli stessi tasti dell'overlay vero
+- Profilo PowerShell (fuori repo): `Select-RepoFolder` resta solo per `vai`; la funzione
+  `claude` passa `--scegli`, legge il file di hand-off e fa `Set-Location`; tolto il loop di
+  rinomina della tab, che ora è compito di cb
+
+---
+
 ## 2026-07-30 (19:10) — Interfaccia dell'albero: vista orizzontale, colori, navigazione
 
 Sessione tutta sull'**interfaccia**: l'albero verticale numerato è stato sostituito da una

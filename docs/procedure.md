@@ -32,22 +32,51 @@ Per rimuoverlo: `npm unlink -g cb`.
 **Quando serve.** Per non dover ricordarsi di scrivere `cb`.
 
 La funzione `claude` sta nel profilo PowerShell (`$PROFILE`, qui
-`C:\Users\sasha\Documents\PowerShell\Microsoft.PowerShell_profile.ps1`) e fa già altre cose
-(selettore di cartella, blocco sospensione, titolo della tab). **Va sostituita solo la riga
-che lancia `claude.ps1`**, lasciando il resto:
+`C:\Users\sasha\Documents\PowerShell\Microsoft.PowerShell_profile.ps1`) e continua a occuparsi
+di quello che cb non fa: blocco della sospensione e ripiego su Claude diretto.
 
 ```powershell
+# Selettore di cartella: solo quando l'utente non ha gia' detto dove lavorare.
+# "claude ." salta il selettore, "claude -r" lo apre in modo ripresa.
+$scegli = @()
+if ($args.Count -eq 1 -and $args[0] -eq '.') { $args = @() }
+elseif ($args.Count -eq 0 -or $args[0] -in @('-r', '--resume')) { $scegli = @('--scegli') }
+
+# La cartella scelta la sa solo cb: un figlio non cambia la cwd del padre.
+$fileCartella = Join-Path ([IO.Path]::GetTempPath()) "cb-cartella-$PID.txt"
+Remove-Item $fileCartella -ErrorAction SilentlyContinue
+$env:CB_CARTELLA_SCELTA = $fileCartella
+
 $cbEntry = "C:\Users\sasha\Documents\REPOSITORY\personale\cb\bin\cb.js"
 $claudeShim = "C:\Users\sasha\AppData\Roaming\npm\claude.ps1"
 $cbUsabile = (Test-Path $cbEntry) -and (Get-Command node -ErrorAction SilentlyContinue)
 
-$ripiega = $true
-if ($cbUsabile) {
-    & node $cbEntry --tasto f2 -- --dangerously-skip-permissions @args
-    $ripiega = ($LASTEXITCODE -eq 78)     # 78 = cb non è partito
+try {
+    $ripiega = $true
+    if ($cbUsabile) {
+        & node $cbEntry @scegli --tasto f2 -- --dangerously-skip-permissions @args
+        $ripiega = ($LASTEXITCODE -eq 78)     # 78 = cb non è partito
+    }
+    if ($ripiega) { & $claudeShim --dangerously-skip-permissions @args }
+} finally {
+    # La shell segue la cartella scelta, come faceva prima Set-Location.
+    if (Test-Path $fileCartella) {
+        $cartellaScelta = (Get-Content $fileCartella -Raw).Trim()
+        Remove-Item $fileCartella -ErrorAction SilentlyContinue
+        if ($cartellaScelta -and (Test-Path -LiteralPath $cartellaScelta)) {
+            Set-Location -LiteralPath $cartellaScelta
+        }
+    }
+    $env:CB_CARTELLA_SCELTA = $null
 }
-if ($ripiega) { & $claudeShim --dangerously-skip-permissions @args }
 ```
+
+**Il titolo della tab lo mette cb**, non il profilo: la cartella la sceglie lui, quindi al
+momento del lancio il profilo non la conosce ancora. Serve comunque
+`CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` in `~/.claude/settings.json`.
+
+⚠️ Se il profilo ha una funzione `vai` (naviga senza avviare Claude) che usa
+`Select-RepoFolder`, quella funzione va lasciata dov'è: cb non la sostituisce.
 
 **Scelta della scorciatoia.** I tasti funzione sono la fascia libera: Claude Code non li usa,
 né li usa l'editing da riga di comando. Evitare `f10` e `f11`, intercettati dal terminale per

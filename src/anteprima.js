@@ -40,7 +40,14 @@ const altezza = process.stdout.rows || 34;
 const vista = componiVista(albero);
 const selezione = puntaRamoAttivo(vista);
 
-for (const riga of schermata(vista, selezione, { colonne, altezza })) console.log(riga);
+// Gli stessi tasti in piu' che annuncia l'overlay dentro la sessione: senza,
+// l'anteprima mostrerebbe una barra che nella realta' non si vede mai.
+const righe = schermata(vista, selezione, {
+  colonne,
+  altezza,
+  extra: { lunga: 'c = altra conversazione   p = altra cartella', corta: 'c/p altra conv.' },
+});
+for (const riga of righe) console.log(riga);
 console.log(
   `\n  ${grigio(
     `${vista.nodi.length} prompt · ${vista.griglia.length} righe di albero · ` +

@@ -6,6 +6,72 @@ un comportamento del CLI di Claude Code invece di misurarlo.
 
 ---
 
+## 2026-07-31 — Le giunzioni attraversate dal percorso restavano grigie
+
+**Sintomo.** Con tre o più rami dalla stessa forca, scegliendo l'ultimo il percorso arancione
+arrivava spezzato: il tratto verticale era acceso ma le giunzioni `┣` delle righe di mezzo
+restavano grigie.
+
+**Causa.** Una cella di raccordo porta `rami`, gli uuid dei nodi a valle, ed è così che sa se
+appartiene al percorso. La discesa di un ramo attraversa le righe dei rami disegnati prima, ma
+trovando la cella già occupata la saltava: quella cella conosceva solo il primo ramo che
+l'aveva scritta.
+
+**Fix.** `aggiungiRami`: dove la cella è già occupata, il ramo che ci passa si **aggiunge** ai
+suoi `rami` invece di essere perso. L'array va rifatto e non modificato sul posto, perché
+`poni` lo condivide fra tutte le celle di una stessa discesa.
+
+**File.** `src/vista.js`
+
+---
+
+## 2026-07-31 — Conversazioni intitolate «/clear»
+
+**Sintomo.** Nell'elenco delle conversazioni (e in `cb ls`) una sessione aperta con un comando
+slash si chiamava «/clear», o «⚙ promemoria di sistema».
+
+**Causa.** `primoPrompt` è il primo prompt del transcript, qualunque cosa sia. Se la sessione
+comincia con un comando locale o un promemoria, quello è il primo prompt.
+
+**Fix.** `primoPromptVero`: scorre i prompt utente e prende il primo che `testoLeggibile` non
+marca come rumore di protocollo (`/comando`, `⌁`, `⎋`, `⚑`, `⚙`). Le schede in cache vengono
+rilette perché la chiave di validità include il campo nuovo.
+
+**File.** `src/indice.js`
+
+---
+
+## 2026-07-31 — L'elenco delle conversazioni saliva e scendeva scorrendo
+
+**Sintomo.** Scorrendo l'elenco con `↑↓`, separatore ed elenco si spostavano su e giù a ogni
+conversazione: effetto di salto continuo.
+
+**Causa.** Il pannello dell'albero restituiva tante righe quante ne serviva l'albero, e gli
+alberi hanno altezze diverse. Tutto quello che veniva dopo si spostava di conseguenza.
+
+**Fix.** Il pannello occupa sempre le righe che gli spettano, riempite di vuoto (`alta()`).
+Aggiunta anche una riga di stacco fissa fra elenco e barra dei tasti, che con l'elenco lungo
+quanto lo schermo si toccavano.
+
+**File.** `src/conversazioni.js`
+
+---
+
+## 2026-07-31 — «carico la conversazione…» eterno in una cartella senza conversazioni
+
+**Sintomo.** In una cartella senza sessioni, il pannello in cima diceva «carico la
+conversazione…» per sempre.
+
+**Causa.** Lo stato «nessuna conversazione da caricare» non era distinto da «sto caricando»:
+`caricata` era `null` in tutti e due i casi.
+
+**Fix.** `caricata === false` significa che non c'è niente da caricare, e il pannello resta
+vuoto. Il messaggio di attesa resta solo per `null`.
+
+**File.** `src/conversazioni.js`
+
+---
+
 ## 2026-07-30 — Punto intermedio: ripartiva sempre dalla fine del ramo
 
 **Sintomo.** Scegliendo un prompt in mezzo a un ramo, la conversazione ripartiva con tutti

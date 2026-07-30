@@ -20,6 +20,10 @@ const AIUTO = `
 cb — branching per conversazioni Claude Code
 
   cb                    avvia Claude avvolto: ${SCORCIATOIA_PREDEFINITA} apre l'albero dei rami
+  cb --scegli           prima chiede in quale cartella lavorare (albero dei progetti;
+                        radice da CB_RADICE, "r" alterna avvio normale e ripresa).
+                        In ripresa mostra le conversazioni della cartella, ognuna
+                        con il suo albero: ↑↓ scegli, invio entra nell'albero
   cb --tasto <tasto>    come sopra con un'altra scorciatoia: "f2", "esc esc", "ctrl+shift+b"
                         (i tasti funzione sono liberi; ctrl+g lo usa Claude Code)
   cb --senza-file       cambiando ramo NON ripristina i file, solo la conversazione
@@ -32,7 +36,9 @@ cb — branching per conversazioni Claude Code
   cb --aiuto            questo testo
 
 Nell'albero dentro la sessione: ←→ (o a/d) scorrono la conversazione, ↑↓ (o w/s)
-cambiano ramo, invio riparte da lì, esc torna a Claude. I comandi qui sopra usano
+cambiano ramo, invio riparte da lì, esc torna a Claude. Da lì "c" apre l'elenco
+delle conversazioni della cartella e "p" prima il selettore delle cartelle: si
+cambia conversazione o progetto senza chiudere Claude. I comandi qui sopra usano
 l'elenco numerato, così "cb open <sessione> 3" ha un numero a cui riferirsi.
 La scorciatoia si fissa una volta per tutte con la variabile CB_TASTO.
 <sessione> = id completo, prefisso di id, o percorso del .jsonl
@@ -144,7 +150,7 @@ async function main() {
   // Modalita' predefinita: Claude avvolto, con l'albero a portata di tasto.
   // --tasto e --tasti sono opzioni combinabili, non comandi alternativi.
   const argomenti = [comando, ...resto].filter(Boolean);
-  const modiWrapper = ['--tasti', '--tasto', '--senza-file'];
+  const modiWrapper = ['--tasti', '--tasto', '--senza-file', '--scegli'];
   if (argomenti.length === 0 || modiWrapper.includes(argomenti[0])) {
     // Uso non interattivo: niente pseudo-terminale, cb si fa da parte.
     const stampa = argomentiClaude.some((a) => a === '-p' || a === '--print');
@@ -153,7 +159,42 @@ async function main() {
       process.exit(codice ?? 0);
     }
 
-    const { Wrapper } = await import('../src/wrapper.js');
+    const { Wrapper, chiedeRipresa, senzaRipresa } = await import('../src/wrapper.js');
+
+    // Selettore della cartella: prima si sceglie dove lavorare, poi parte Claude.
+    // Il modo (avvio normale o ripresa) si decide li' dentro col tasto "r", e il
+    // -r della riga di comando e' solo il modo di partenza.
+    let cartella = process.cwd();
+    let perClaude = argomentiClaude;
+    let ripartenza = null;
+    if (argomenti.includes('--scegli')) {
+      const { selezionaCartella, annotaCartellaScelta } = await import('../src/cartelle.js');
+      const iniziale = chiedeRipresa(argomentiClaude);
+      const scelta = await selezionaCartella({ cwd: cartella, ripresa: iniziale });
+      // Esc: nessuna cartella scelta, e nessuna sessione da avviare.
+      if (!scelta) return;
+      cartella = scelta.percorso;
+      annotaCartellaScelta(cartella);
+
+      if (scelta.ripresa) {
+        // La ripresa la gestisce cb con il suo selettore, che raggruppa i rami
+        // di una conversazione in un albero solo: il -r dell'utente aprirebbe
+        // quello nativo, dove ogni fork e' una conversazione a se'.
+        const { selezionaConversazione } = await import('../src/conversazioni.js');
+        const conversazione = await selezionaConversazione({
+          cartella,
+          ripristinaCodice: !argomenti.includes('--senza-file'),
+        });
+        // Esc nel selettore: non si avvia niente, come per la cartella.
+        if (!conversazione) return;
+        // Cartella senza conversazioni: si parte da zero, non si riprende nulla.
+        ripartenza = conversazione.nuova ? null : conversazione;
+        perClaude = senzaRipresa(argomentiClaude);
+      } else if (iniziale) {
+        perClaude = senzaRipresa(argomentiClaude);
+      }
+    }
+
     const diagnostica = argomenti.includes('--tasti');
     const posizioneTasto = argomenti.indexOf('--tasto');
     const scorciatoia =
@@ -165,13 +206,15 @@ async function main() {
         : SCORCIATOIA_PREDEFINITA;
 
     try {
-      new Wrapper({
-        cwd: process.cwd(),
-        argomentiExtra: argomentiClaude,
+      // Va atteso: avvia() e' asincrona (puo' passare dal ripristino di un ramo),
+      // e senza await il suo errore non arriverebbe a questo catch.
+      await new Wrapper({
+        cwd: cartella,
+        argomentiExtra: perClaude,
         scorciatoia: scorciatoia || SCORCIATOIA_PREDEFINITA,
         ripristinaCodice: !argomenti.includes('--senza-file'),
         diagnostica,
-      }).avvia();
+      }).avvia({ ripartenza });
     } catch (errore) {
       // Codice dedicato: dice a chi ci ha lanciato che cb non e' partito, e che
       // puo' ripiegare su Claude diretto. Un'uscita normale di Claude non lo usa.

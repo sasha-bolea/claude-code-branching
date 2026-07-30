@@ -26,6 +26,8 @@ Sasha, singolo sviluppatore.
 | `src/transcript.js` | Parsing dei `.jsonl`, albero da `parentUuid`, filtro biforcazioni tecniche |
 | `src/attiva.js` | Riattivazione di un ramo abbandonato via append di `last-prompt` |
 | `src/ramo.js` | Crea la sessione del nuovo ramo: copia la catena fino al turno scelto |
+| `src/cartelle.js` | Selettore della cartella di lavoro: albero dei progetti, hand-off alla shell |
+| `src/conversazioni.js` | Selettore delle conversazioni passate: albero in cima, elenco sotto |
 | `src/vista.js` | Albero orizzontale: griglia, colore, navigazione, composizione della pagina |
 | `src/stile.js` | Tavolozza dei colori, in un posto solo |
 | `src/albero.js` | Collasso ai soli prompt utente; elenco verticale numerato per i comandi da fuori |
@@ -56,9 +58,12 @@ Regole del contratto con il chiamante:
 ```
 npm test                          esegue le prove (assert, nessun framework)
 node src/anteprima.js [file]      l'overlay su una sessione vera, senza lanciare Claude
+node src/cartelle.js              il selettore delle cartelle, da solo
+node src/conversazioni.js [dir]   il selettore delle conversazioni, da solo
 node src/verifica-reale.js [file] verifica il parser su una sessione vera
 node bin/cb.js ls                 catalogo globale
 node bin/cb.js tree <sessione>    albero dei rami
+node bin/cb.js --scegli           avvio completo: cartella, conversazione, Claude
 ```
 
 `anteprima.js` senza argomenti prende la sessione con più ripristini, che è quella con
@@ -182,8 +187,26 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
 - La griglia dell'albero **non dipende dalle dimensioni del terminale**: si compone una volta
   sola alla larghezza naturale, e finestra e colori si ricalcolano a ogni disegno. È ciò che
   permette di seguire il ridimensionamento e i movimenti del cursore senza rifare il layout.
+- **Una conversazione è una famiglia di sessioni, non un file.** Le sessioni si raggruppano
+  per uuid di radice (`scheda.radice`, prodotto da `src/indice.js`): è l'unica chiave che il
+  fork copia insieme alla storia. Elencare i file, come fa il selettore nativo di Claude,
+  mostra i rami della stessa conversazione come conversazioni diverse.
+- **Un processo figlio non cambia la cwd del padre**: la cartella scelta si restituisce alla
+  shell scrivendola nel file indicato da `CB_CARTELLA_SCELTA` (`annotaCartellaScelta`), che il
+  chiamante legge all'uscita. Senza la variabile cb non scrive niente.
+- **Riprendere la punta di una conversazione non richiede un taglio**: `esitoScelta` distingue
+  i due casi, altrimenti ogni ripresa duplicherebbe l'intera conversazione in un file nuovo.
+- **I selettori aperti dal wrapper si prendono lo stdin** e alla chiusura lo lasciano com'era
+  (raw mode spento, flusso in pausa): va rimesso come lo vuole il wrapper in un `finally`, o i
+  tasti non arrivano più a Claude. Mentre sono aperti `inOverlay` resta vero, così
+  l'ascoltatore del wrapper ignora tutto e l'output del pty non copre la schermata.
+- **Nel selettore delle conversazioni il pannello dell'albero ha altezza fissa**: gli alberi
+  hanno altezze diverse, e un pannello che si adatta fa saltare separatore ed elenco a ogni
+  freccia. Il riempimento è invisibile, il salto no.
 - Le prove stanno in `src/transcript.test.js`, `src/tasti.test.js`, `src/titolo.test.js`,
-  `src/vista.test.js`, `src/wrapper.test.js` e `src/overlay.test.js`, con `assert`.
+  `src/vista.test.js`, `src/wrapper.test.js`, `src/overlay.test.js`, `src/cartelle.test.js` e
+  `src/conversazioni.test.js`, con `assert`. I cicli interattivi dei selettori si provano con
+  un terminale finto (un `EventEmitter` con `write`/`resume`/`pause`), senza TTY.
   Niente framework. Nel wrapper i test usano un pty finto: la logica dei tasti è
   isolabile, l'interazione con la TUI vera no. `creaProcesso` è estratto apposta perché i test
   possano verificare **cosa** viene chiesto a Claude senza lanciarlo.

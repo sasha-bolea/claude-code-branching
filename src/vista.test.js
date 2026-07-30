@@ -173,6 +173,38 @@ function testRitaglioNonSpezzaLeSequenzeAnsi() {
   }
 }
 
+function testGiunzioniAttraversateSiIlluminano() {
+  // Tre rami dalla stessa forca: la discesa verso il terzo attraversa le righe
+  // dei primi due, e passa quindi sopra le loro giunzioni (┣). Quelle celle
+  // fanno parte del percorso quanto il tratto verticale, e vanno illuminate:
+  // senza, il percorso arrivava al ramo scelto spezzato a meta'.
+  process.env.NO_COLOR = '';
+  process.env.CB_COLORI = '1';
+  try {
+    const albero = alberoFinto(
+      [
+        ['a', null, 'u'],
+        ['r1', 'a', 'u'],
+        ['r2', 'a', 'u'],
+        ['r3', 'a', 'u'],
+      ],
+      'r1',
+    );
+    const righe = disegnaRighe(componiVista(albero), 'r3');
+    const arancione = (riga) => /\x1b\[38;2;255;140;102m[^\x1b]*[┣┗┃]/.test(riga);
+
+    assert.ok(arancione(righe[1]), 'la giunzione del secondo ramo e attraversata dal percorso');
+    assert.ok(arancione(righe[2]), 'e quella del ramo scelto lo e per conto suo');
+
+    // Scegliendo il primo ramo, le giunzioni sotto non c'entrano piu' nulla.
+    const altre = disegnaRighe(componiVista(albero), 'r1');
+    assert.ok(!arancione(altre[1]), 'le giunzioni fuori dal percorso restano grigie');
+  } finally {
+    process.env.CB_COLORI = '';
+    process.env.NO_COLOR = '1';
+  }
+}
+
 function testSelezioneEIlCerchioVuoto() {
   const albero = alberoFinto(
     [
@@ -330,6 +362,122 @@ function testDestraSceglieIlRamoDiSopraAParita() {
   assert.equal(vista.posizioni.get('c').colonna, 8, 'i due rami finiscono alla stessa colonna');
   assert.equal(vista.posizioni.get('f').colonna, 8);
   assert.equal(muovi(vista, 'd', 'destra'), 'c', 'a parita di lunghezza vince quello di sopra');
+}
+
+function testBiforcazioneSulPrimoPromptHaLaSuaForca() {
+  // Con la biforcazione sul primo prompt non c'e' un nodo padre da cui far
+  // pendere i rami: senza una forca davanti, le catene sembrerebbero due
+  // conversazioni separate invece che due strade dello stesso inizio.
+  const vista = componiVista(
+    alberoFinto(
+      [
+        ['a', null, 'u'],
+        ['b', 'a', 'u'],
+        ['x', null, 'u'],
+        ['y', 'x', 'u'],
+      ],
+      'b',
+    ),
+  );
+
+  const righe = disegnaRighe(vista, null);
+  assert.equal(righe[0], '┳━⬤━━━⬤', 'la prima radice pende da una forca');
+  assert.equal(righe[1], '┗━⬤━━━⬤', 'e l ultima si aggancia li sotto');
+  assert.equal(vista.posizioni.get('a').colonna, 2, 'le catene lasciano posto alla forca');
+  assert.equal(vista.posizioni.get('x').colonna, 2);
+
+  // Le radici restano incolonnate, quindi ci si muove fra loro come fra rami.
+  assert.equal(muovi(vista, 'a', 'giu'), 'x', 'giu passa all altra strada');
+  assert.equal(muovi(vista, 'x', 'sinistra'), 'a', 'e la sinistra risale, non essendoci un padre');
+
+  // Con una radice sola non cambia niente: nessuna forca, catena in colonna 0.
+  const semplice = componiVista(alberoFinto([['a', null, 'u'], ['b', 'a', 'u']], 'b'));
+  assert.equal(disegnaRighe(semplice, null)[0], '⬤━━━⬤', 'una radice sola non prende la forca');
+  assert.equal(semplice.posizioni.get('a').colonna, 0);
+}
+
+function testSinistraSaleInvecediTagliareInDiagonale() {
+  // Sul primo prompt di un ramo il padre e' la forca, su un'altra riga: andarci
+  // sarebbe salire e tornare indietro in un colpo solo. La sinistra sale e basta,
+  // restando incolonnata, finche' il padre non e' in linea.
+  //
+  //   riga 0:  a━┳━b        b e' figlio di a, sulla sua riga
+  //   riga 1:    ┣━c        primo prompt del suo ramo, colonna 4
+  //   riga 2:    ┗━d━━━e
+  const vista = componiVista(
+    alberoFinto(
+      [
+        ['a', null, 'u'],
+        ['b', 'a', 'u'],
+        ['c', 'a', 'u'],
+        ['d', 'a', 'u'],
+        ['e', 'd', 'u'],
+      ],
+      'b',
+    ),
+  );
+
+  assert.equal(muovi(vista, 'd', 'sinistra'), 'c', 'dal ramo piu basso si sale di una riga');
+  assert.equal(muovi(vista, 'c', 'sinistra'), 'b', 'e ancora, restando alla stessa colonna');
+  assert.equal(muovi(vista, 'b', 'sinistra'), 'a', 'in linea col padre la sinistra torna indietro');
+
+  // Dentro un ramo il padre e' sulla stessa riga: nessun cambiamento.
+  assert.equal(muovi(vista, 'e', 'sinistra'), 'd', 'a meta ramo la sinistra e un passo indietro');
+}
+
+function testSinistraRipiegaSulPadreSeSopraNonCeNessuno() {
+  // Due forche a distanza diversa: sopra il primo prompt del ramo di h non c'e'
+  // nessun prompt incolonnato, perche' la riga di mezzo appartiene a un ramo
+  // nato prima e piu' corto. Li' la sinistra torna a essere il passo indietro.
+  //
+  //   riga 0:  a━┳━b━┳━c
+  //   riga 1:    ┗━g       g e' una foglia in colonna 4
+  //   riga 2:      ┗━h     h nasce in colonna 8: sopra, in colonna 8, c'e' un vuoto
+  const vista = componiVista(
+    alberoFinto(
+      [
+        ['a', null, 'u'],
+        ['b', 'a', 'u'],
+        ['c', 'b', 'u'],
+        ['g', 'a', 'u'],
+        ['h', 'b', 'u'],
+      ],
+      'c',
+    ),
+  );
+
+  assert.equal(vista.posizioni.get('h').colonna, 8, 'h nasce in colonna 8');
+  assert.equal(vista.posizioni.get('g').colonna, 4, 'e sopra, in quella colonna, non c e nessuno');
+  assert.equal(muovi(vista, 'h', 'sinistra'), 'b', 'senza nessuno sopra si ripiega sul padre');
+}
+
+function testDestraScendeSuUnRamoCheFinisceDoveSiamo() {
+  // Il ramo di sotto non va oltre il punto in cui sta il cursore: finisce
+  // esattamente li'. Con la destra ci si deve poter scendere, invece di
+  // scavalcarlo per un ramo piu' in basso che va piu' avanti.
+  //
+  //   riga 0:  a━┳━b         il cursore e' su b, colonna 4
+  //   riga 1:    ┣━c         finisce dove siamo: colonna 4
+  //   riga 2:    ┗━d━━━e     va oltre: colonna 8
+  const vista = componiVista(
+    alberoFinto(
+      [
+        ['a', null, 'u'],
+        ['b', 'a', 'u'],
+        ['c', 'a', 'u'],
+        ['d', 'a', 'u'],
+        ['e', 'd', 'u'],
+      ],
+      'b',
+    ),
+  );
+
+  assert.equal(vista.posizioni.get('c').colonna, 4, 'c finisce alla colonna di b');
+  assert.equal(muovi(vista, 'b', 'destra'), 'c', 'la destra scende sul ramo che finisce qui');
+
+  // E da li' si continua a scendere, invece di tornare su: il ramo di sopra non
+  // va piu' avanti di dove siamo, quindi non e' un approdo.
+  assert.equal(muovi(vista, 'c', 'destra'), 'e', 'il passo dopo prosegue sul ramo che va oltre');
 }
 
 function testDestraIgnoraIRamiCheFinisconoPrima() {
@@ -606,6 +754,10 @@ const prove = [
   testCambioRamoAParitaDiDistanza,
   testDestraInFondoAUnRamoProsegueSuUnAffiancato,
   testDestraSceglieIlRamoDiSopraAParita,
+  testBiforcazioneSulPrimoPromptHaLaSuaForca,
+  testSinistraSaleInvecediTagliareInDiagonale,
+  testSinistraRipiegaSulPadreSeSopraNonCeNessuno,
+  testDestraScendeSuUnRamoCheFinisceDoveSiamo,
   testDestraIgnoraIRamiCheFinisconoPrima,
   testPuntaRamoAttivo,
   testPuntaSegueLUltimoRecord,
@@ -616,6 +768,7 @@ const prove = [
   testSchermataStaNelloSchermo,
   testBarraETestateSiAccorcianoSuTerminaleStretto,
   testTaglioNonLasciaIlColoreAcceso,
+  testGiunzioniAttraversateSiIlluminano,
   testSchermataScorreDietroAlCursore,
   testACapo,
 ];

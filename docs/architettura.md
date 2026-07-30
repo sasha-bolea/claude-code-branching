@@ -21,6 +21,9 @@ ed è il motivo per cui i rami sopravvivono.
 ```
   bin/cb.js            entrypoint: sottocomandi, argomenti, ripiego non interattivo
         │
+        ├── src/cartelle.js     selettore della cartella di lavoro (albero dei progetti)
+        ├── src/conversazioni.js selettore delle conversazioni passate (albero + elenco)
+        │
         ├── src/wrapper.js      il cuore: pty, tasti, overlay, cambio ramo
         │       ├── tasti.js       byte → tasti (3 codifiche) → azioni
         │       ├── titolo.js      filtra gli OSC di titolo dei figli
@@ -63,12 +66,58 @@ Tre vincoli imparati costruendola:
 - **La griglia non dipende dalle dimensioni del terminale.** È ciò che permette di ridisegnare
   a ogni ridimensionamento e a ogni movimento del cursore senza ricalcolare niente.
 
-Navigazione: `←→` seguono la conversazione (e in fondo a un ramo la destra prosegue su uno
-affiancato); `↑↓` passano al ramo disegnato sopra o sotto, non ai *fratelli* — ogni riga del
-disegno è un ramo, quindi cambiare riga è cambiare ramo, ed è quello che l'occhio si aspetta.
+Navigazione: `←→` seguono la conversazione; `↑↓` passano al ramo disegnato sopra o sotto, non
+ai *fratelli* — ogni riga del disegno è un ramo, quindi cambiare riga è cambiare ramo, ed è
+quello che l'occhio si aspetta. Le frecce orizzontali cambiano ramo quando l'albero lo suggerisce
+all'occhio:
+
+- **destra** in fondo a un ramo prosegue su uno affiancato che vada più avanti; se il ramo di
+  sotto finisce *esattamente dove siamo*, ci si scende comunque. Verso l'alto la parità non vale,
+  o due rami che finiscono alla stessa colonna si rimanderebbero il cursore a vicenda.
+- **sinistra** sul primo prompt di un ramo sale di una riga restando incolonnata, invece di
+  tornare al padre in diagonale. Salendo si arriva sulla riga dove il padre è in linea, e da lì
+  la sinistra torna a essere un passo indietro.
+
+Quando le radici sono più d'una — la biforcazione è sul **primo prompt** — non c'è un nodo padre
+da cui far pendere i rami: la forca si mette prima della prima colonna, come se le radici
+pendessero dall'inizio della conversazione. Senza, si vedevano due conversazioni separate.
 
 Geometria e glifi vengono da `esempio-albero.txt`, il disegno di riferimento: passo di 4
 colonne fra i nodi, `⬤━┳━⬤`, ramo che parte con `┗` sulla colonna della forca.
+
+## I due selettori dell'avvio
+
+`cb --scegli` mette due schermate davanti a Claude, prima che il pty esista:
+
+```
+selezionaCartella()          albero delle cartelle sotto la home (radice: CB_RADICE)
+   │                         "r" alterna avvio normale / ripresa
+   ├── avvio normale ──────► Wrapper.avvia()                    sessione nuova
+   └── ripresa ────────────► selezionaConversazione()
+                                 │  albero della conversazione in cima, elenco sotto
+                                 │  invio → si entra nell'albero (schermata di F2)
+                                 └─► Wrapper.avvia({ripartenza})
+```
+
+**Una conversazione è una famiglia, non un file.** Il selettore nativo di Claude elenca le
+sessioni: siccome un fork crea un file nuovo, i rami della stessa conversazione compaiono come
+conversazioni diverse. Qui le schede dell'indice si raggruppano per **uuid di radice** — che il
+fork copia insieme alla storia — e l'albero mostrato è l'unione di tutta la famiglia.
+
+`esitoScelta` decide come ripartire: se il punto scelto è già la fine di quella sessione basta
+riprenderla (`--resume`), altrimenti si passa dal taglio, cioè dalla stessa strada del cambio
+ramo. Senza questa distinzione ogni ripresa duplicherebbe l'intera conversazione in un file
+nuovo.
+
+Le stesse schermate si riaprono a sessione avviata, dall'overlay F2: `c` le conversazioni,
+`p` prima le cartelle (`Wrapper.cambiaConversazione`). I selettori si prendono lo stdin e alla
+chiusura lo lasciano com'era prima: il wrapper se lo ripiglia in un `finally`, o i tasti non
+arriverebbero più a Claude.
+
+**La cartella scelta torna alla shell per file.** Un processo figlio non può cambiare la cwd
+del padre: cb scrive il percorso in `CB_CARTELLA_SCELTA` (se impostata) e chi ha lanciato cb
+la legge all'uscita. È il modo in cui la funzione `claude` del profilo continua a fare il `cd`
+nella cartella scelta.
 
 ## Flusso: dalla scorciatoia al nuovo ramo
 

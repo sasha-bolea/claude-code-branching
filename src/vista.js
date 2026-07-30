@@ -95,14 +95,48 @@ export function componiVista(albero) {
   };
   const libera = (riga, colonna) => !griglia[riga]?.[colonna];
 
+  // Aggiunge rami a una cella gia' disegnata.
+  // Per una stessa cella possono passare piu' rami: la discesa di un ramo
+  // attraversa le righe dei rami disegnati prima, e la cella deve conoscerli
+  // tutti o si illumina solo per il primo che l'ha occupata.
+  // L'array va rifatto e non modificato sul posto: `poni` lo condivide fra tutte
+  // le celle di una stessa discesa.
+  const aggiungiRami = (riga, colonna, rami) => {
+    const cella = griglia[riga]?.[colonna];
+    if (!cella) return;
+    cella.rami = [...new Set([...(cella.rami ?? []), ...rami])];
+  };
+
   // Ogni voce in coda e' una catena da disegnare, con il punto da cui pende.
-  const coda = radici.map((voce) => ({ voce, rigaForca: null, colonnaForca: null, giunzione: null }));
+  //
+  // Le radici sono piu' d'una quando la biforcazione e' sul primo prompt: li' non
+  // c'e' un nodo padre da cui far pendere i rami, e le catene verrebbero disegnate
+  // come conversazioni separate, senza niente che le colleghi. La forca si mette
+  // allora prima della prima colonna, come se le radici pendessero da un punto
+  // che non e' un prompt — perche' quel punto e' l'inizio della conversazione.
+  const uuidRadici = radici.map((voce) => voce.uuid);
+  const coda = radici.map((voce, i) => ({
+    voce,
+    rigaForca: i === 0 ? null : 0, // la prima radice sta sulla riga 0: e' la prima disegnata
+    colonnaForca: i === 0 ? null : 0,
+    giunzione: i === radici.length - 1 ? ULTIMO : INNESTO,
+    forcaDiRadice: i === 0 && radici.length > 1,
+  }));
 
   while (coda.length > 0) {
     const lavoro = coda.shift();
     const riga0 = nuovaRiga();
     let riga = riga0;
     let colonna = lavoro.colonnaForca === null ? 0 : lavoro.colonnaForca + 2;
+
+    // Prima radice di una conversazione biforcata in partenza: la forca la
+    // precede, e la catena comincia due colonne piu' in la' per farle posto.
+    if (lavoro.forcaDiRadice) {
+      const versoTutteLeRadici = { rami: uuidRadici };
+      poni(riga0, 0, FORCA, versoTutteLeRadici);
+      poni(riga0, 1, TRATTO, versoTutteLeRadici);
+      colonna = 2;
+    }
 
     if (lavoro.colonnaForca !== null) {
       // Discesa dalla forca fino a questa riga: porta solo a questo ramo. Il
@@ -111,7 +145,14 @@ export function componiVista(albero) {
       // quindi la discesa condivisa resta marcata dal primo che l'ha occupata.
       const versoQuestoRamo = { rami: [lavoro.voce.uuid] };
       for (let r = lavoro.rigaForca + 1; r < riga0; r += 1) {
-        if (libera(r, lavoro.colonnaForca)) poni(r, lavoro.colonnaForca, VERTICALE, versoQuestoRamo);
+        if (libera(r, lavoro.colonnaForca)) {
+          poni(r, lavoro.colonnaForca, VERTICALE, versoQuestoRamo);
+        } else {
+          // Cella gia' occupata dalla giunzione di un ramo disegnato prima (┣ o
+          // ┗) o da una discesa condivisa: la nostra discesa ci passa attraverso,
+          // quindi quella cella fa parte anche del nostro percorso.
+          aggiungiRami(r, lavoro.colonnaForca, [lavoro.voce.uuid]);
+        }
       }
       poni(riga0, lavoro.colonnaForca, lavoro.giunzione, versoQuestoRamo);
       poni(riga0, lavoro.colonnaForca + 1, TRATTO, versoQuestoRamo);
@@ -256,9 +297,16 @@ export function disegnaRighe(vista, selezione, { da = 0, quante = Infinity } = {
 // Si atterra sul primo prompt oltre la colonna attuale, cosi' il movimento
 // continua verso destra invece di saltare indietro.
 //
+// Verso il basso conta anche il ramo che arriva esattamente dove siamo e li'
+// finisce: guardando l'albero e' il ramo che termina sotto al cursore, e la
+// destra deve poterci scendere invece di scavalcarlo. Verso l'alto no, e non e'
+// un'asimmetria gratuita: accettando la parita' anche di sopra, due rami che
+// finiscono alla stessa colonna si rimanderebbero il cursore l'un l'altro a ogni
+// pressione, invece di lasciarlo scendere fino all'ultimo.
+//
 // vista: risultato di componiVista
 // uuid: foglia da cui si riparte
-// ritorna: uuid su cui spostarsi, o null se nessun ramo affiancato va piu' avanti
+// ritorna: uuid su cui spostarsi, o null se nessun ramo affiancato arriva fin qui
 function proseguiSuUnRamoAffiancato(vista, uuid) {
   const posizione = vista.posizioni.get(uuid);
   if (!posizione) return null;
@@ -268,7 +316,13 @@ function proseguiSuUnRamoAffiancato(vista, uuid) {
     const vicina = vista.nodiPerRiga[posizione.riga + passo];
     if (!vicina || vicina.length === 0) continue;
 
-    const approdo = vicina.find((nodo) => nodo.colonna > posizione.colonna);
+    // Prima si cerca un approdo piu' avanti, cosi' la destra continua ad andare
+    // avanti quando puo'. Solo se il ramo di sotto non va oltre si accetta il
+    // nodo che sta esattamente dove siamo: e' il ramo che finisce sotto al
+    // cursore, e da li' si scende.
+    const approdo =
+      vicina.find((nodo) => nodo.colonna > posizione.colonna) ??
+      (passo === 1 ? vicina.find((nodo) => nodo.colonna === posizione.colonna) : undefined);
     if (!approdo) continue; // quel ramo finisce prima di dove siamo
 
     candidati.push({ passo, uuid: approdo.uuid, fine: vicina[vicina.length - 1].colonna });
@@ -279,11 +333,44 @@ function proseguiSuUnRamoAffiancato(vista, uuid) {
   return candidati[0]?.uuid ?? null;
 }
 
+// Dove porta la freccia sinistra.
+// Di norma al prompt precedente, cioe' al padre. Sul primo prompt di un ramo il
+// padre sta sulla riga della forca: li' si sale di una riga restando incolonnati,
+// e solo se sopra non c'e' niente a quella colonna si ripiega sul padre.
+// vista: risultato di componiVista
+// uuid: nodo selezionato adesso
+// ritorna: uuid su cui spostarsi, invariato se non si puo'
+function aSinistra(vista, uuid) {
+  const padre = vista.padri.get(uuid);
+  const posizione = vista.posizioni.get(uuid);
+  const rigaPadre = padre ? vista.posizioni.get(padre.uuid)?.riga : null;
+
+  // Una radice non ha padre: se sta sotto la prima riga e' una conversazione
+  // biforcata in partenza, e la sinistra sale come su qualsiasi altro ramo.
+  const inTestaAUnRamo = padre ? rigaPadre !== posizione?.riga : posizione?.riga > 0;
+
+  if (posizione && inTestaAUnRamo) {
+    const sopra = vista.nodiPerRiga[posizione.riga - 1]?.find(
+      (nodo) => nodo.colonna === posizione.colonna,
+    );
+    if (sopra) return sopra.uuid;
+  }
+
+  return padre?.uuid ?? uuid;
+}
+
 // Sposta la selezione di un passo nell'albero.
 //
 // Sinistra e destra seguono la conversazione, indietro e avanti nel tempo. In
 // fondo a un ramo la destra non si blocca: passa a un ramo affiancato che vada
 // piu' avanti (vedi proseguiSuUnRamoAffiancato).
+//
+// Sul primo prompt di un ramo il padre e' il punto di biforcazione, che sta su
+// un'altra riga: andarci significherebbe salire e tornare indietro con un tasto
+// solo. La sinistra sale e basta, se sopra c'e' un prompt alla stessa colonna —
+// e' quello che si vede guardando il disegno, dove i rami nati dalla stessa
+// forca sono incolonnati. Salendo cosi' si arriva prima o poi sulla riga dove il
+// padre e' in linea, e da li' la sinistra torna a essere un passo indietro.
 //
 // Su e giu' passano al ramo disegnato sopra o sotto, sul nodo piu' vicino in
 // orizzontale. Non si limitano ai fratelli del nodo corrente: cosi' il cambio
@@ -301,7 +388,7 @@ export function muovi(vista, uuid, direzione) {
   const voce = vista.perUuid.get(uuid);
   if (!voce) return uuid;
 
-  if (direzione === 'sinistra') return vista.padri.get(uuid)?.uuid ?? uuid;
+  if (direzione === 'sinistra') return aSinistra(vista, uuid);
   if (direzione === 'destra') {
     // In fondo a un ramo si prosegue su uno affiancato, invece di fermarsi.
     return voce.figli[0]?.uuid ?? proseguiSuUnRamoAffiancato(vista, uuid) ?? uuid;
@@ -440,11 +527,25 @@ function finestraAttorno(posizione, quante, totale) {
 // selezione: uuid del nodo su cui sta il cursore
 // opzioni.colonne, opzioni.altezza: dimensioni del terminale
 // opzioni.ripristinaCodice: se il cambio ramo riporta indietro anche i file
+// opzioni.titolo: cosa si sta guardando (in cima, accanto a "cb")
+// opzioni.esc: dove porta Esc, nella forma { lunga, corta }. Dentro la sessione
+//   si torna a Claude; aprendo l'albero dal selettore delle conversazioni si
+//   torna al loro elenco.
+// opzioni.extra: altri tasti da annunciare nella barra, se c'e' spazio. Dentro
+//   la sessione sono quelli che portano a un'altra conversazione o cartella;
+//   aprendo l'albero dal selettore non servono, perche' si e' gia' li'.
 // ritorna: array di righe pronte da scrivere
 export function schermata(
   vista,
   selezione,
-  { colonne = 120, altezza = 30, ripristinaCodice = true } = {},
+  {
+    colonne = 120,
+    altezza = 30,
+    ripristinaCodice = true,
+    titolo = 'rami di questa conversazione',
+    esc = { lunga: 'torna a Claude', corta: 'esci' },
+    extra = { lunga: '', corta: '' },
+  } = {},
 ) {
   const scelto = vista.perUuid.get(selezione);
   const testoScelto = aCapo(scelto?.testo, colonne - 6, 3);
@@ -473,7 +574,7 @@ export function schermata(
   // La legenda e' l'unica riga in grigio: tutto il resto sta al primo piano del
   // terminale, cioe' alla massima luminosita' disponibile.
   const righe = [
-    `  ${arancioneForte('cb')}  ${normale(primaCheEntra(['rami di questa conversazione', 'rami'], spazioColonne - 4))}`,
+    `  ${arancioneForte('cb')}  ${normale(primaCheEntra([titolo, 'rami'], spazioColonne - 4))}`,
     `  ${grigio(primaCheEntra(LEGENDA, spazioColonne))}`,
     '',
   ];
@@ -513,15 +614,29 @@ export function schermata(
   const cosaFaInvio = ripristinaCodice
     ? 'invio = riparti (ripristina anche i file)'
     : 'invio = riparti (i file restano come sono)';
+  // Le varianti stanno in ordine di preferenza, non solo di lunghezza: i tasti
+  // in piu' valgono piu' della forma distesa delle spiegazioni, quindi la
+  // variante che li nomina viene prima di quella piu' lunga che li tace.
+  const pezzi = (...voci) => voci.filter(Boolean).join('   ');
+  const conExtra = extra.corta
+    ? [
+        pezzi('←→ ad avanti e indietro', '↑↓ ws cambia ramo', cosaFaInvio, extra.lunga, `esc = ${esc.lunga}`),
+        pezzi('←→ ad avanti e indietro', '↑↓ ws ramo', cosaFaInvio, extra.corta, `esc = ${esc.corta}`),
+        pezzi('←→ ad', '↑↓ ws ramo', cosaFaInvio, extra.corta, `esc = ${esc.corta}`),
+        pezzi('←→ ad', '↑↓ ws ramo', 'invio = riparti', extra.corta, `esc = ${esc.corta}`),
+      ]
+    : [];
+
   righe.push(
     '',
     `  ${normale(
       primaCheEntra(
         [
-          `←→ ad avanti e indietro   ↑↓ ws cambia ramo   ${cosaFaInvio}   esc = torna a Claude`,
-          `←→ ad indietro/avanti   ↑↓ ws ramo   ${cosaFaInvio}   esc = esci`,
-          '←→ ad   ↑↓ ws   invio = riparti   esc = esci',
-          '←→↑↓ muovi  invio riparti  esc esci',
+          ...conExtra,
+          pezzi('←→ ad avanti e indietro', '↑↓ ws cambia ramo', cosaFaInvio, `esc = ${esc.lunga}`),
+          pezzi('←→ ad indietro/avanti', '↑↓ ws ramo', cosaFaInvio, `esc = ${esc.corta}`),
+          pezzi('←→ ad', '↑↓ ws', 'invio = riparti', `esc = ${esc.corta}`),
+          `←→↑↓ muovi  invio riparti  esc ${esc.corta}`,
         ],
         spazioColonne,
       ),

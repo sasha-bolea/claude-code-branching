@@ -3,11 +3,31 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { leggiTranscript, ripristini, foglie } from './transcript.js';
+import { testoLeggibile } from './albero.js';
 
 const CARTELLA_CLAUDE = path.join(os.homedir(), '.claude');
 export const CARTELLA_PROGETTI = path.join(CARTELLA_CLAUDE, 'projects');
 const CARTELLA_CB = path.join(CARTELLA_CLAUDE, 'cb');
 const FILE_CACHE = path.join(CARTELLA_CB, 'indice.json');
+
+// Etichette con cui testoLeggibile marca i prompt di protocollo: comandi slash,
+// output locali, interruzioni, notifiche, promemoria di sistema.
+const RUMORE = /^[/⌁⎋⚑⚙]/;
+
+// Primo prompt scritto davvero dall'utente.
+// Una sessione che comincia con `/clear` o con un promemoria di sistema avrebbe
+// come primo prompt quel rumore, e nell'elenco delle conversazioni non direbbe
+// niente di cosa contiene.
+// albero: risultato di leggiTranscript
+// ritorna: testo del prompt, o null
+function primoPromptVero(albero) {
+  for (const nodo of albero.nodi.values()) {
+    if (!nodo.isPromptUtente) continue;
+    const testo = testoLeggibile(nodo.testo);
+    if (testo && !RUMORE.test(testo)) return testo;
+  }
+  return null;
+}
 
 // Estrae i metadati leggeri di una singola sessione.
 // Il parsing completo serve per contare rami e ripristini: e' il motivo per cui
@@ -22,10 +42,16 @@ async function schedaSessione(percorso) {
   return {
     percorso,
     sessionId: albero.sessionId ?? path.basename(percorso, '.jsonl'),
+    // Uuid della radice: identifica la famiglia. Le sessioni nate da un fork
+    // copiano i record dell'antenato con gli stessi uuid, quindi condividono la
+    // radice — ed e' cosi' che si riconoscono i rami di una stessa conversazione.
+    radice: albero.radici[0]?.uuid ?? null,
     titolo: albero.titolo,
     cwd: albero.cwd,
     gitBranch: albero.gitBranch,
-    primoPrompt: (albero.primoPrompt ?? '').replace(/\s+/g, ' ').slice(0, 120),
+    primoPrompt: (primoPromptVero(albero) ?? albero.primoPrompt ?? '')
+      .replace(/\s+/g, ' ')
+      .slice(0, 120),
     ultimoTimestamp: albero.ultimoTimestamp,
     messaggi: albero.nodi.size,
     rami: punte.length,
@@ -93,7 +119,9 @@ export async function scansiona({ forza = false } = {}) {
 
       const chiave = `${percorso}|${stat.mtimeMs}|${stat.size}`;
       let scheda = cache[chiave];
-      if (!scheda) {
+      // Una scheda in cache senza `radice` viene da una versione precedente:
+      // vale come assente, o le conversazioni non si potrebbero raggruppare.
+      if (!scheda || !('radice' in scheda)) {
         try {
           scheda = await schedaSessione(percorso);
         } catch {

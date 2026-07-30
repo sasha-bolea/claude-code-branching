@@ -660,7 +660,57 @@ async function testPuntoIntermedioTagliaLaConversazione() {
   fs.unlinkSync(creata);
 }
 
+// Dall'albero si esce anche verso un'altra conversazione o un'altra cartella,
+// senza chiudere Claude: qui si verifica che i due tasti arrivino, e con quale
+// richiesta. Cosa fanno poi i selettori e' provato in conversazioni.test.js e
+// cartelle.test.js, che non hanno bisogno di un pty finto.
+async function testTastiPerCambiareConversazioneOCartella() {
+  const sessionId = '00000000-0000-4000-8000-0000000000c1';
+  creaTranscript(sessionId, CARTELLA, [
+    msg('a', null, 'user', 'primo prompt', 1),
+    msg('b', 'a', 'assistant', 'prima risposta', 2),
+    { type: 'last-prompt', leafUuid: 'b', sessionId },
+  ]);
+
+  for (const [tasto, ancheCartella] of [
+    ['c', false],
+    ['p', true],
+  ]) {
+    const { wrapper, schermo } = wrapperFinto(sessionId, CARTELLA);
+    const richieste = [];
+    // Il selettore vero prende lo stdin e legge il disco: qui interessa solo
+    // che il tasto arrivi fin qui, e con quale richiesta.
+    wrapper.cambiaConversazione = async (opzioni) => {
+      richieste.push(opzioni);
+      wrapper.inOverlay = false;
+    };
+
+    const attesa = wrapper.mostraOverlay();
+    await attendiPrompt(schermo);
+    assert.match(schermo(), /c = altra conversazione|c\/p altra conv/, 'la barra li annuncia');
+
+    await premiTasti(tasto);
+    await attesa;
+
+    assert.equal(richieste.length, 1, `"${tasto}" apre il selettore`);
+    assert.equal(
+      richieste[0].ancheCartella,
+      ancheCartella,
+      `"${tasto}" chiede${ancheCartella ? '' : ' di non'} cambiare anche cartella`,
+    );
+    pulisciCartella();
+    creaTranscript(sessionId, CARTELLA, [
+      msg('a', null, 'user', 'primo prompt', 1),
+      msg('b', 'a', 'assistant', 'prima risposta', 2),
+      { type: 'last-prompt', leafUuid: 'b', sessionId },
+    ]);
+  }
+
+  pulisciCartella();
+}
+
 const prove = [
+  testTastiPerCambiareConversazioneOCartella,
   testOverlaySenzaTranscript,
   testPuntoIntermedioTagliaLaConversazione,
   testRamoDelPadreVisibileESelezionabile,

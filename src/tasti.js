@@ -300,6 +300,57 @@ export function azioniTastiera(dati) {
   return azioni;
 }
 
+// Tasti che non muovono il cursore ma comandano la schermata. Chi non li
+// gestisce li ignora: il selettore delle cartelle non sa che farsene di
+// "conversazione", e l'albero dentro la sessione non sa che farsene di "modo".
+const COMANDI_LETTERA = {
+  r: 'modo',
+  ' ': 'apri',
+  c: 'conversazione', // cambia conversazione senza uscire da Claude
+  p: 'progetto', // cambia cartella di lavoro
+};
+
+// Traduce i byte ricevuti in comandi per le schermate che si navigano: il
+// selettore delle cartelle e quello delle conversazioni.
+// Rispetto ad azioniTastiera non ci sono cifre da digitare, e in piu' ci sono
+// spazio (apre e chiude) e "r" (cambia modo).
+// dati: Buffer letto da stdin
+// ritorna: array di stringhe: 'su'|'giu'|'sinistra'|'destra'|'apri'|'conferma'|'modo'|'annulla'
+export function azioniNavigazione(dati) {
+  const azioni = [];
+
+  for (const voce of tokenizza(dati)) {
+    if (voce.tasto) {
+      if (voce.tasto.rilascio) continue; // il rilascio non e' un comando
+      const direzione = DIREZIONE[voce.tasto.vk];
+      if (direzione) azioni.push(direzione);
+      else if (voce.tasto.vk === VK_INVIO) azioni.push('conferma');
+      else if (voce.tasto.vk === VK_ESCAPE) azioni.push('annulla');
+      else if (!voce.tasto.ctrl && !voce.tasto.alt && voce.tasto.carattere) {
+        const comando =
+          DIREZIONE_WASD[voce.tasto.carattere] ?? COMANDI_LETTERA[voce.tasto.carattere];
+        if (comando) azioni.push(comando);
+      }
+      continue;
+    }
+
+    // Byte non riconosciuti: se cominciano con ESC sono sequenze di controllo
+    // (mouse, tasti che non ci interessano) e vanno ignorate.
+    if (voce.bytes[0] === 0x1b) continue;
+    for (const byte of voce.bytes) {
+      if (byte === 0x0d || byte === 0x0a) azioni.push('conferma');
+      else if (byte === 0x03) azioni.push('annulla');
+      else {
+        const carattere = String.fromCharCode(byte).toLowerCase();
+        const comando = DIREZIONE_WASD[carattere] ?? COMANDI_LETTERA[carattere];
+        if (comando) azioni.push(comando);
+      }
+    }
+  }
+
+  return azioni;
+}
+
 // Verifica se una lettura contiene solo eventi di rilascio del tasto della
 // scorciatoia. In win32-input-mode il rilascio arriva come lettura separata tra
 // due pressioni: senza riconoscerlo, spezzerebbe la sequenza.
