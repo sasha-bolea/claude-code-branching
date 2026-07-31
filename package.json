@@ -14,7 +14,7 @@
   ],
   "type": "module",
   "bin": {
-    "cb": "./bin/cb.js"
+    "cb": "bin/cb.js"
   },
   "scripts": {
     "test": "node src/prove.js"
