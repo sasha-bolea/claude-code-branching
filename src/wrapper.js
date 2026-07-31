@@ -315,32 +315,45 @@ export class Wrapper {
   }
 
   // Percorso del transcript della sessione in corso.
-  // Se l'id lo conosciamo (--session-id nostro) e' una ricerca diretta; se e'
-  // Claude ad averlo scelto (--resume, --continue) si ripiega sul transcript
-  // piu' recente della cartella, scritto dopo l'avvio.
+  //
+  // Si guarda il disco **a ogni chiamata**, senza fidarsi dell'id che avevamo:
+  // `/clear` non taglia dentro al file, fa nascere un file di sessione nuovo, e
+  // l'id in mano a cb resta quello di prima. Agganciandosi una volta sola
+  // l'albero continuava a mostrare la conversazione precedente il clear — e,
+  // peggio del disegno, invio ci forkava sopra, ripristinando i file all'istante
+  // di un turno di un'altra conversazione.
+  //
+  // Il criterio e' "il piu' recente scritto dopo l'avvio di cb": con due Claude
+  // aperti nella stessa cartella si prende quello che ha scritto per ultimo,
+  // cioe' quasi sempre quello con cui l'utente sta parlando.
   // ritorna: percorso del .jsonl, o null se non esiste ancora
   trovaTranscript() {
+    const recente = transcriptPiuRecente(this.cwd, this.avviatoIl ?? 0);
+    if (recente) {
+      if (recente.sessionId !== this.sessionId) {
+        this.registra(`sessione cambiata: ${this.sessionId ?? '(ignota)'} -> ${recente.sessionId}`);
+        this.sessionId = recente.sessionId;
+      }
+      return recente.percorso;
+    }
+
+    // Niente scritto dopo l'avvio: la sessione e' ancora quella che conoscevamo.
+    // Succede appena avviati, e subito dopo un cambio ramo — li' il file della
+    // sessione troncata lo ha scritto cb prima di rilanciare, quindi e' piu'
+    // vecchio di `avviatoIl` e va cercato per id.
     if (this.sessionId) {
       const suo = percorsoTranscript(this.sessionId, this.cwd);
       if (suo) return suo;
-
-      // Appena forkato, Claude non ha ancora scritto il file: lo crea al primo
-      // messaggio. Ci si aggancia al transcript da cui siamo ripartiti, che fa
-      // parte della stessa famiglia e contiene tutti i rami.
-      if (this.percorsoOrigine) {
-        this.registra(`transcript non ancora scritto, uso l origine ${this.percorsoOrigine}`);
-        return this.percorsoOrigine;
-      }
-      return null;
     }
 
-    const trovato = transcriptPiuRecente(this.cwd, this.avviatoIl ?? 0);
-    if (!trovato) return this.percorsoOrigine ?? null;
-
-    // Da qui in poi la sessione ha un id noto: i fork ripartiranno da questo.
-    this.sessionId = trovato.sessionId;
-    this.registra(`sessione scoperta dal disco: ${trovato.sessionId}`);
-    return trovato.percorso;
+    // Appena forkato con --fork-session, Claude non ha ancora scritto il file: lo
+    // crea al primo messaggio. Ci si aggancia al transcript da cui siamo
+    // ripartiti, che fa parte della stessa famiglia e contiene tutti i rami.
+    if (this.percorsoOrigine) {
+      this.registra(`transcript non ancora scritto, uso l origine ${this.percorsoOrigine}`);
+      return this.percorsoOrigine;
+    }
+    return null;
   }
 
   // Mostra l'albero dei rami della sessione corrente e attende una scelta.

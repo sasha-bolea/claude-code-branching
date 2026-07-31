@@ -136,6 +136,45 @@ async function testOverlaySenzaTranscript() {
   assert.equal(wrapper.inOverlay, false, 'l overlay si richiude');
 }
 
+// Dopo un /clear Claude non taglia dentro al file: comincia un file di sessione
+// nuovo. cb si era agganciato all'id all'avvio e non lo ricontrollava, quindi
+// continuava a mostrare la conversazione precedente il clear — e invio ci
+// forkava sopra, ripristinando i file all'istante di un'altra conversazione.
+async function testSeguelaSessioneDopoUnClear() {
+  const primaDelClear = '00000000-0000-4000-8000-0000000c1ea1';
+  const dopoIlClear = '00000000-0000-4000-8000-0000000c1ea2';
+
+  const vecchio = creaTranscript(primaDelClear, CARTELLA, [
+    msg('v1', null, 'user', 'prima del clear', 1),
+    { type: 'last-prompt', leafUuid: 'v1', sessionId: primaDelClear },
+  ]);
+  const nuovo = creaTranscript(dopoIlClear, CARTELLA, [
+    // Radice diversa: dopo un clear le due sessioni non sono parenti, quindi
+    // l'albero non le unisce e l'una non puo' comparire dentro l'altra.
+    msg('n1', null, 'user', 'dopo il clear', 1),
+    { type: 'last-prompt', leafUuid: 'n1', sessionId: dopoIlClear },
+  ]);
+
+  // Le due scritture possono cadere nello stesso millisecondo: l'ordine va
+  // imposto, altrimenti la prova passerebbe o no a seconda del disco.
+  const adesso = Date.now() / 1000;
+  fs.utimesSync(vecchio, adesso - 60, adesso - 60);
+  fs.utimesSync(nuovo, adesso, adesso);
+
+  // Lo stato in cui cb si trovava: l'id della sessione di prima del clear.
+  const { wrapper, schermo } = wrapperFinto(primaDelClear, CARTELLA);
+  wrapper.avviatoIl = 0;
+
+  const attesa = wrapper.mostraOverlay();
+  await attendiPrompt(schermo);
+  premi(ANNULLA);
+  await attesa;
+
+  assert.match(schermo(), /dopo il clear/, 'mostra la conversazione viva');
+  assert.doesNotMatch(schermo(), /prima del clear/, 'e non quella di prima del clear');
+  assert.equal(wrapper.sessionId, dopoIlClear, 'e da qui in poi forka la sessione giusta');
+}
+
 async function testOverlayDisegnaAlberoEScegliRamo() {
   const sessionId = '00000000-0000-4000-8000-00000000beef';
   const percorso = creaTranscript(sessionId, CARTELLA, [
@@ -848,6 +887,7 @@ async function testTastiPerCambiareConversazioneOCartella() {
 const prove = [
   testTastiPerCambiareConversazioneOCartella,
   testOverlaySenzaTranscript,
+  testSeguelaSessioneDopoUnClear,
   testPuntoIntermedioTagliaLaConversazione,
   testRamoDelPadreVisibileESelezionabile,
   testAlberoRestaDopoIlCambioRamo,

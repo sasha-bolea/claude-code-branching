@@ -113,6 +113,15 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   di dedurre dallo schermo: registra byte, interpretazione e decisioni dell'overlay.
 - Ogni cambio di ramo **riavvia il processo Claude**: non esiste modo di ricaricare una
   conversazione in un processo vivo.
+- **`/clear` fa nascere un file di sessione nuovo**, non taglia dentro a quello corrente: le
+  due sessioni hanno radici diverse, quindi non sono parenti e nel selettore compaiono come
+  due conversazioni, che è giusto. Ma **l'id in mano al wrapper resta quello di prima**:
+  `trovaTranscript` deve rileggere il disco a ogni chiamata (`transcriptPiuRecente`, il più
+  recente scritto dopo `avviatoIl`) e non fidarsi di `this.sessionId`. Agganciandosi una volta
+  sola, l'albero mostrava la conversazione precedente il clear — e invio ci forkava sopra,
+  ripristinando i file all'istante di un turno di un'altra conversazione. La prova è
+  `testSeguelaSessioneDopoUnClear`, che impone le date con `utimesSync` perché due scritture
+  possono cadere nello stesso millisecondo.
 - **Un fork spezza la conversazione su due file.** Il file nuovo copia la storia solo fino
   al punto di fork, quindi i rami abbandonati restano in quello di partenza: leggere solo la
   sessione corrente li perde. Gli uuid però sono stabili nella copia e la radice è comune,
