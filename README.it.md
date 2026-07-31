@@ -298,7 +298,7 @@ function claude {
 
     try {
         if ((Test-Path $cbEntry) -and (Get-Command node -ErrorAction SilentlyContinue)) {
-            & node $cbEntry @scegli --tasto f2 -- @args
+            & node $cbEntry @scegli -- @args
             if ($LASTEXITCODE -ne 78) { return }   # 78 = cb non è partito
         }
         & $claudeShim @args                        # ripiego: Claude diretto
@@ -326,7 +326,10 @@ Tre accorgimenti perché non possa peggiorare le cose:
 Con `--resume`/`--continue` l'id sessione lo sceglie Claude: cb non impone `--session-id` e
 scopre la sessione dal transcript più recente della cartella.
 
-Per cambiare scorciatoia basta modificare `--tasto f2` nel profilo.
+Nota che nello snippet **non** c'è `--tasto`: la scorciatoia viene dalle impostazioni, quindi
+per cambiarla basta `cb --impostazioni`. Mettendo `--tasto` qui la scelta fatta nella
+schermata verrebbe scavalcata a ogni avvio e sembrerebbe non avere effetto — il flag vince di
+proposito, essendo la scelta più esplicita.
 
 Nota: il titolo della tab viene mantenuto (ConPTY lo sovrascriverebbe col percorso di
 `claude.exe` a ogni avvio di processo, quindi a ogni cambio ramo).

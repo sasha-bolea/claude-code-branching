@@ -264,6 +264,16 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   README documenta sulle variabili continua a valere. `impostazioni.js` **non importa
   `lingua.js`**: è `lingua.js` a leggere di lì quale lingua è stata scelta, e importarsi a
   vicenda sarebbe un ciclo.
+- **Un flag nel profilo rende muta l'impostazione corrispondente.** `--tasto` vince sul file,
+  ed è giusto — è la scelta più esplicita — ma lo snippet del README montava `--tasto f2`
+  fisso, così chi sceglieva `esc esc` nella schermata continuava a vedere F2 e concludeva che
+  il wizard fosse rotto (successo davvero, il 2026-08-01). Lo snippet ora non passa `--tasto`:
+  la scorciatoia viene dalle impostazioni. Vale per ogni impostazione nuova — se ha un flag
+  corrispondente, il profilo consigliato non deve passarlo.
+- **Il percorso della cartella di lavoro si scrive, non si sceglie da un albero.** Serve
+  `azioniTesto` e non `azioniTastiera`: quella mappa w/a/s/d sulle direzioni, e in un campo di
+  testo servono come lettere. Serve anche `tasto.grezzo` e non `tasto.carattere`, che
+  win32-input-mode consegna già in minuscolo: in un percorso `C:` non è `c:`.
 - **Cambiare lingua a processo avviato non basta.** `T` si risolve all'import, e `vista.js`
   ne cattura `LEGENDA` e `VOCI_RIPRISTINO` in costanti: dopo la schermata del primo avvio,
   se la lingua scelta è diversa da `LINGUA`, `bin/cb.js` si rilancia con `spawnSync` — una

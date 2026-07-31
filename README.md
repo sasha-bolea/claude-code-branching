@@ -293,7 +293,7 @@ function claude {
 
     try {
         if ((Test-Path $cbEntry) -and (Get-Command node -ErrorAction SilentlyContinue)) {
-            & node $cbEntry @scegli --tasto f2 -- @args
+            & node $cbEntry @scegli -- @args
             if ($LASTEXITCODE -ne 78) { return }   # 78 = cb did not start
         }
         & $claudeShim @args                        # fallback: Claude directly
@@ -323,7 +323,10 @@ Three precautions so it cannot make things worse:
 With `--resume`/`--continue` the session id is Claude's choice: cb does not force
 `--session-id` and discovers the session from the most recent transcript in the folder.
 
-To change the shortcut, edit `--tasto f2` in the profile.
+Note there is no `--tasto` in the snippet: the shortcut comes from your settings, so
+`cb --impostazioni` is enough to change it. Passing `--tasto` here would override the setting
+every time and the settings screen would have no effect on it — the flag wins on purpose,
+being the most explicit choice.
 
 Note: the tab title is preserved (ConPTY would overwrite it with the path of `claude.exe`
 at every process start, so at every branch switch).

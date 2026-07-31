@@ -20,9 +20,8 @@ const {
   leggiImpostazioni,
   scriviImpostazioni,
 } = await import('./impostazioni.js');
-const { applicaAzione, disegnaImpostazioni, statoIniziale, configura } = await import(
-  './configura.js'
-);
+const { applicaAzione, applicaTesto, disegnaImpostazioni, espandiTilde, statoIniziale, configura } =
+  await import('./configura.js');
 
 // Riporta il file allo stato "mai visto" fra una prova e l'altra.
 function pulisci() {
@@ -107,7 +106,9 @@ function testInvioAgisceSullaRiga() {
   assert.equal(applicaAzione(stato, 'conferma').esito, 'continua', 'su lingua ruota');
 
   applicaAzione(stato, 'giu'); // cartella
-  assert.equal(applicaAzione(stato, 'conferma').esito, 'cartella', 'apre l albero');
+  applicaAzione(stato, 'conferma');
+  assert.equal(stato.modifica, stato.valori.radice, 'sulla cartella apre il campo di testo');
+  applicaTesto(stato, { tipo: 'annulla' });
 
   applicaAzione(stato, 'giu'); // scorciatoia
   const prima = stato.valori.scorciatoia;
@@ -117,6 +118,61 @@ function testInvioAgisceSullaRiga() {
   applicaAzione(stato, 'giu'); // fatto
   assert.equal(applicaAzione(stato, 'conferma').esito, 'fatto', 'e fatto chiude');
   console.log('ok  testInvioAgisceSullaRiga');
+}
+
+// Il percorso si scrive, non si sceglie da un albero.
+function testIlPercorsoSiScrive() {
+  pulisci();
+  const stato = statoIniziale();
+  applicaAzione(stato, 'giu'); // cartella
+  applicaAzione(stato, 'conferma');
+
+  // Si parte dal percorso in vigore, cosi' lo si corregge invece di riscriverlo.
+  assert.equal(stato.modifica, stato.valori.radice, 'il campo parte da quello di adesso');
+
+  for (const c of 'C:\\lavoro') applicaTesto(stato, { tipo: 'carattere', valore: c });
+  assert.ok(stato.modifica.endsWith('C:\\lavoro'), 'i caratteri si accodano');
+  assert.ok(stato.modifica.includes('C:'), 'le maiuscole restano maiuscole');
+
+  applicaTesto(stato, { tipo: 'cancella' });
+  assert.ok(stato.modifica.endsWith('lavor'), 'backspace toglie l ultimo');
+
+  console.log('ok  testIlPercorsoSiScrive');
+}
+
+function testInvioConfermaEscLasciaComEra() {
+  pulisci();
+  const stato = statoIniziale();
+  const prima = stato.valori.radice;
+
+  stato.modifica = 'C:\\altrove';
+  applicaTesto(stato, { tipo: 'invio' });
+  assert.equal(stato.valori.radice, 'C:\\altrove', 'invio prende quello che si e scritto');
+  assert.equal(stato.modifica, null, 'e chiude il campo');
+
+  stato.modifica = 'C:\\mai';
+  applicaTesto(stato, { tipo: 'annulla' });
+  assert.equal(stato.valori.radice, 'C:\\altrove', 'esc lascia il percorso di prima');
+  assert.equal(stato.modifica, null, 'e chiude comunque il campo');
+
+  // Un campo svuotato non e' una scelta.
+  stato.modifica = '';
+  applicaTesto(stato, { tipo: 'invio' });
+  assert.equal(stato.valori.radice, 'C:\\altrove', 'vuoto non cancella la cartella');
+  void prima;
+  console.log('ok  testInvioConfermaEscLasciaComEra');
+}
+
+// La schermata mostra i percorsi con la tilde, quindi deve accettarli riscritti
+// cosi': chi legge `~\Documents` e lo ridigita non deve ottenere una cartella
+// chiamata "~".
+function testTildeSiEspande() {
+  assert.equal(espandiTilde('~'), os.homedir());
+  assert.equal(espandiTilde('~/progetti'), path.join(os.homedir(), 'progetti'));
+  assert.equal(espandiTilde('~\\progetti'), path.join(os.homedir(), 'progetti'));
+  assert.equal(espandiTilde('  C:\\lavoro  '), 'C:\\lavoro', 'e toglie gli spazi ai lati');
+  assert.equal(espandiTilde('/opt/~strano'), '/opt/~strano', 'ma solo la tilde iniziale');
+  console.log('ok  testTildeSiEspande');
 }
 
 // Esc non annulla: tiene quello che si vede. Richiedere la schermata a ogni
@@ -172,15 +228,53 @@ async function testIlCicloSalvaSuDisco() {
   console.log('ok  testIlCicloSalvaSuDisco');
 }
 
+// Il percorso digitato davvero, dai byte fino al file salvato. E' la prova che
+// coglie gli errori di collegamento: le prove che chiamano applicaTesto a mano
+// confermerebbero anche un ciclo che non chiama mai il tokenizzatore giusto.
+async function testSiScriveDavveroDaTastiera() {
+  pulisci();
+  const ingresso = new EventEmitter();
+  ingresso.resume = () => {};
+  ingresso.pause = () => {};
+  const uscita = new EventEmitter();
+  uscita.write = () => {};
+  uscita.rows = 30;
+  uscita.columns = 100;
+
+  const premi = async (testo) => {
+    ingresso.emit('data', Buffer.from(testo, 'latin1'));
+    await new Promise((r) => setTimeout(r, 5));
+  };
+
+  const attesa = configura({ ingresso, uscita });
+  await premi('\x1b[B'); // giu -> cartella
+  await premi('\r'); // apre il campo
+  await premi('\x7f'.repeat(200)); // svuota quello che c era
+  await premi('C:\\Da\\Tastiera'); // "d" e "a" qui sono lettere, non frecce
+  await premi('\r'); // conferma il percorso
+  await premi('\x1b[B'); // giu -> scorciatoia
+  await premi('\x1b[B'); // giu -> fatto
+  await premi('\r'); // chiude
+
+  const scelte = await attesa;
+  assert.equal(scelte.radice, 'C:\\Da\\Tastiera', 'il percorso e quello digitato');
+  assert.equal(leggiImpostazioni().radice, 'C:\\Da\\Tastiera', 'e finisce sul disco');
+  console.log('ok  testSiScriveDavveroDaTastiera');
+}
+
 testPrimaVoltaNonCiSonoImpostazioni();
 testFileRottoValeComeAssente();
 testAmbientePrimaDelFilePrimaDelPredefinito();
 testLeScorciatoieProposteSonoLibere();
 testFrecceCambianoIlValore();
 testInvioAgisceSullaRiga();
+testIlPercorsoSiScrive();
+testInvioConfermaEscLasciaComEra();
+testTildeSiEspande();
 testEscTieneQuelloCheSiVede();
 testLaSchermataDiceTutto();
 await testIlCicloSalvaSuDisco();
+await testSiScriveDavveroDaTastiera();
 
 pulisci();
-console.log('\n9 prove superate');
+console.log('\n13 prove superate');

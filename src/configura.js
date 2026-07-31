@@ -10,10 +10,12 @@
 // un'applicazione di azioni sullo stato: cosi' la schermata si prova senza un
 // terminale vero.
 
+import fs from 'node:fs';
 import os from 'node:os';
-import { azioniNavigazione } from './tasti.js';
-import { arancione, arancioneForte, grigio, normale } from './stile.js';
-import { radicePredefinita, selezionaCartella } from './cartelle.js';
+import path from 'node:path';
+import { azioniNavigazione, azioniTesto } from './tasti.js';
+import { arancioneForte, grigio, normale, rosso } from './stile.js';
+import { radicePredefinita } from './cartelle.js';
 import { LINGUE, SCORCIATOIE, impostazione, scriviImpostazioni } from './impostazioni.js';
 import { T } from './lingua.js';
 
@@ -29,9 +31,25 @@ const COLONNA = 20;
 // Stato di partenza: i valori in vigore adesso, cosi' la schermata non propone
 // mai qualcosa di diverso da quello che cb sta gia' facendo.
 // ritorna: { indice, valori }
+// Espande la tilde iniziale: la schermata mostra i percorsi con `~`, quindi deve
+// anche accettarli riscritti cosi'. Solo in testa — una tilde in mezzo e' un nome
+// di cartella come un altro.
+// testo: percorso digitato
+// ritorna: percorso assoluto
+export function espandiTilde(testo) {
+  const pulito = testo.trim();
+  if (pulito === '~') return os.homedir();
+  if (pulito.startsWith('~/') || pulito.startsWith('~\\')) {
+    return path.join(os.homedir(), pulito.slice(2));
+  }
+  return pulito;
+}
+
 export function statoIniziale() {
   return {
     indice: 0,
+    // Non null quando si sta scrivendo il percorso: e' il testo digitato finora.
+    modifica: null,
     valori: {
       lingua: LINGUE.includes(impostazione('lingua', '')) ? impostazione('lingua', '') : LINGUE[0],
       radice: impostazione('radice', radicePredefinita()),
@@ -55,7 +73,7 @@ function ruota(valori, voce, passo) {
 // Applica un'azione della tastiera allo stato. Muta `stato`, come negli altri
 // selettori.
 // azione: una delle stringhe prodotte da azioniNavigazione
-// ritorna: { esito } — 'continua' | 'fatto' | 'cartella'
+// ritorna: { esito } — 'continua' | 'fatto'
 export function applicaAzione(stato, azione) {
   const voce = VOCI[stato.indice];
 
@@ -73,10 +91,15 @@ export function applicaAzione(stato, azione) {
       if (voce === 'lingua' || voce === 'scorciatoia') stato.valori = ruota(stato.valori, voce, -1);
       break;
     case 'conferma':
-      // Invio agisce sulla riga: sulla cartella apre l'albero, sulle voci a rosa
-      // fa avanzare come la freccia, su "fatto" chiude.
+      // Invio agisce sulla riga: sulla cartella apre il campo dove scriverla,
+      // sulle voci a rosa fa avanzare come la freccia, su "fatto" chiude.
       if (voce === 'fatto') return { esito: 'fatto' };
-      if (voce === 'radice') return { esito: 'cartella' };
+      if (voce === 'radice') {
+        // Si parte dal percorso in vigore: chi vuole cambiarlo di poco corregge
+        // invece di riscriverlo tutto.
+        stato.modifica = stato.valori.radice;
+        break;
+      }
       stato.valori = ruota(stato.valori, voce, 1);
       break;
     case 'annulla':
@@ -84,6 +107,37 @@ export function applicaAzione(stato, azione) {
       // un valore valido, e richiedere la schermata a ogni avvio finche' non la
       // si completa sarebbe una molestia, non un aiuto.
       return { esito: 'fatto' };
+    default:
+      break;
+  }
+
+  return { esito: 'continua' };
+}
+
+// Applica un tasto mentre si sta scrivendo il percorso.
+// Invio conferma quello che si e' scritto, Esc lascia il percorso di prima: sono
+// le due uscite che ci si aspetta da un campo di testo, e non chiudono la
+// schermata — si torna all'elenco delle impostazioni.
+// azione: uno degli oggetti prodotti da azioniTesto
+// ritorna: { esito } — sempre 'continua', il campo non chiude la schermata
+export function applicaTesto(stato, azione) {
+  switch (azione.tipo) {
+    case 'carattere':
+      stato.modifica += azione.valore;
+      break;
+    case 'cancella':
+      stato.modifica = stato.modifica.slice(0, -1);
+      break;
+    case 'invio': {
+      // Un campo lasciato vuoto non e' una scelta: si tiene quello di prima.
+      const scritto = espandiTilde(stato.modifica);
+      if (scritto) stato.valori = { ...stato.valori, radice: scritto };
+      stato.modifica = null;
+      break;
+    }
+    case 'annulla':
+      stato.modifica = null;
+      break;
     default:
       break;
   }
@@ -117,35 +171,53 @@ export function disegnaImpostazioni(stato, altezza = 30, larghezza = 100) {
     '',
   ];
 
+  const scrivendo = stato.modifica !== null;
+
   VOCI.forEach((voce, i) => {
     const scelta = i === stato.indice;
     const etichetta = T.configura.voci[voce];
-    const valore = valoreMostrato(stato.valori, voce);
     // "fatto" e' un'azione, non una coppia etichetta/valore: sta da sola, e una
     // riga vuota sopra la stacca dalle impostazioni.
     if (voce === 'fatto') righe.push('');
 
+    // Mentre si scrive, la riga della cartella mostra il testo digitato con un
+    // cursore in coda: e' l'unico segnale che i tasti stanno finendo li'.
+    if (voce === 'radice' && scrivendo) {
+      const campo = `  ▸ ${etichetta.padEnd(COLONNA)}${stato.modifica}█`;
+      righe.push(arancioneForte(taglia(campo)));
+      return;
+    }
+
+    const valore = valoreMostrato(stato.valori, voce);
+
     // Il suggerimento sta solo sulla riga selezionata: e' un aiuto per chi ci sta
     // sopra adesso, e su tutte le righe sarebbe rumore.
-    const suggerimento = !scelta
-      ? ''
-      : voce === 'radice'
-        ? `   ${T.configura.scegliCartella}`
-        : voce === 'scorciatoia' && stato.valori.scorciatoia === SCORCIATOIE[0]
-          ? `   (${T.configura.consigliata})`
-          : '';
+    const suggerimento =
+      !scelta || scrivendo
+        ? ''
+        : voce === 'radice'
+          ? `   ${T.configura.scegliCartella}`
+          : voce === 'scorciatoia' && stato.valori.scorciatoia === SCORCIATOIE[0]
+            ? `   (${T.configura.consigliata})`
+            : '';
 
     const testo = valore
-      ? `  ${scelta ? '▸' : ' '} ${etichetta.padEnd(COLONNA)}${valore}${suggerimento}`
-      : `  ${scelta ? '▸' : ' '} ${etichetta}`;
-    righe.push(scelta ? arancioneForte(taglia(testo)) : normale(taglia(testo)));
+      ? `  ${scelta && !scrivendo ? '▸' : ' '} ${etichetta.padEnd(COLONNA)}${valore}${suggerimento}`
+      : `  ${scelta && !scrivendo ? '▸' : ' '} ${etichetta}`;
+    righe.push(scelta && !scrivendo ? arancioneForte(taglia(testo)) : normale(taglia(testo)));
   });
+
+  // Una cartella che non c'e' non e' un errore da bloccare — puo' nascere dopo —
+  // ma tacerla lascerebbe l'utente con un selettore vuoto e nessuna spiegazione.
+  if (!scrivendo && !fs.existsSync(stato.valori.radice)) {
+    righe.push('', rosso(taglia(`  ${T.configura.nonEsiste}`)));
+  }
 
   // La legenda in fondo allo schermo, come negli altri selettori: l'elenco e'
   // corto e fisso, ma il posto della legenda dev'essere sempre lo stesso.
+  const varianti = scrivendo ? T.configura.legendeTesto : T.configura.legende;
   const legenda =
-    T.configura.legende.find((testo) => testo.length + 2 <= larghezza) ??
-    T.configura.legende[T.configura.legende.length - 1];
+    varianti.find((testo) => testo.length + 2 <= larghezza) ?? varianti[varianti.length - 1];
   while (righe.length < altezza - 1) righe.push('');
   righe.push(`  ${grigio(taglia(legenda))}`);
 
@@ -176,25 +248,23 @@ export function configura({ ingresso = process.stdin, uscita = process.stdout } 
       risolvi(stato.valori);
     };
 
-    // L'albero delle cartelle si prende lo stdin e alla chiusura lo lascia com'era
-    // (raw mode spento, flusso in pausa): va rimesso come lo vuole questa
-    // schermata, o i tasti non arrivano piu'.
-    const apriCartelle = async () => {
-      ingresso.removeListener('data', suDati);
-      const scelta = await selezionaCartella({ radice: stato.valori.radice, ingresso, uscita });
-      if (scelta) stato.valori = { ...stato.valori, radice: scelta.percorso };
-      uscita.write('\x1b[?1049h\x1b[?25l');
-      if (ingresso.isTTY) ingresso.setRawMode(true);
-      ingresso.resume();
-      ingresso.on('data', suDati);
-      ridisegna();
-    };
-
+    // Quale tokenizzatore usare dipende da dove siamo: mentre si scrive un
+    // percorso le lettere sono lettere, fuori di li' w/a/s/d sono le frecce.
+    // Va deciso a ogni lettura, non una volta sola: si entra e si esce dal campo
+    // senza che il ciclo cambi.
     const suDati = (dati) => {
+      if (stato.modifica !== null) {
+        for (const azione of azioniTesto(dati)) applicaTesto(stato, azione);
+        return ridisegna();
+      }
+
       for (const azione of azioniNavigazione(dati)) {
         const { esito } = applicaAzione(stato, azione);
         if (esito === 'fatto') return chiudi();
-        if (esito === 'cartella') return void apriCartelle();
+        // Invio sulla cartella apre il campo: da qui in poi i tasti sono testo,
+        // e quelli rimasti in questa stessa lettura non vanno interpretati come
+        // navigazione.
+        if (stato.modifica !== null) break;
       }
       ridisegna();
     };

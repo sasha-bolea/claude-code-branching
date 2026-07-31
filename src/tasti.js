@@ -51,6 +51,9 @@ const F_DA_CSI = {
 // Descrive un tasto in modo indipendente dalla codifica del terminale.
 // vk: codice virtuale (VK_ESCAPE, 71 per G, …)
 // carattere: carattere prodotto, minuscolo, se applicabile
+// grezzo: lo stesso carattere come e' stato digitato, maiuscole comprese —
+//   serve a chi raccoglie testo (un percorso), dove "C:" e "c:" non sono la
+//   stessa cosa; le scorciatoie continuano a confrontarsi su `carattere`
 // ctrl/alt/shift: modificatori attivi
 // rilascio: true se e' l'evento di rilascio invece della pressione
 function tastoWin32(campi) {
@@ -61,6 +64,7 @@ function tastoWin32(campi) {
   return {
     vk: Number(vk || 0),
     carattere: codice > 0 ? String.fromCharCode(codice).toLowerCase() : null,
+    grezzo: codice > 0 ? String.fromCharCode(codice) : null,
     ctrl: (stato & CTRL_PREMUTO) !== 0,
     alt: (stato & ALT_PREMUTO) !== 0,
     shift: (stato & SHIFT_PREMUTO) !== 0,
@@ -250,6 +254,45 @@ const DIREZIONE = {
 // alcune tastiere le frecce sono scomode da raggiungere. Con Ctrl o Alt premuti
 // non contano: sono scorciatoie, non movimenti.
 const DIREZIONE_WASD = { w: 'su', s: 'giu', a: 'sinistra', d: 'destra' };
+
+// Traduce i byte ricevuti in azioni per un campo dove si scrive testo libero.
+//
+// Separata da azioniTastiera perche' quella mappa w/a/s/d sulle direzioni: in un
+// campo di testo servono come lettere, non come frecce. Qui passa qualsiasi
+// carattere stampabile, e si usa `grezzo` invece di `carattere` perche' le
+// maiuscole contano — in un percorso "C:" non e' "c:".
+// dati: Buffer letto da stdin
+// ritorna: array di { tipo: 'carattere'|'invio'|'cancella'|'annulla', valore? }
+export function azioniTesto(dati) {
+  const azioni = [];
+
+  for (const voce of tokenizza(dati)) {
+    if (voce.tasto) {
+      if (voce.tasto.rilascio) continue;
+      if (voce.tasto.vk === VK_INVIO) azioni.push({ tipo: 'invio' });
+      else if (voce.tasto.vk === VK_BACKSPACE) azioni.push({ tipo: 'cancella' });
+      else if (voce.tasto.vk === VK_ESCAPE) azioni.push({ tipo: 'annulla' });
+      else if (voce.tasto.grezzo && !voce.tasto.ctrl && !voce.tasto.alt) {
+        azioni.push({ tipo: 'carattere', valore: voce.tasto.grezzo });
+      }
+      continue;
+    }
+
+    // Blocco non riconosciuto: se comincia con ESC e' una sequenza di controllo
+    // (frecce, mouse) e non e' testo.
+    if (voce.bytes[0] === 0x1b) continue;
+    for (const byte of voce.bytes) {
+      if (byte === 0x0d || byte === 0x0a) azioni.push({ tipo: 'invio' });
+      else if (byte === 0x7f || byte === 0x08) azioni.push({ tipo: 'cancella' });
+      else if (byte === 0x03) azioni.push({ tipo: 'annulla' });
+      else if (byte >= 0x20 && byte < 0x7f) {
+        azioni.push({ tipo: 'carattere', valore: String.fromCharCode(byte) });
+      }
+    }
+  }
+
+  return azioni;
+}
 
 // Traduce i byte ricevuti in azioni per un campo di input testuale.
 // Necessario perche' in win32-input-mode ogni evento tastiera comincia con

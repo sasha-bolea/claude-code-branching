@@ -121,12 +121,18 @@ with CB_LINGUA (en, it).
       fatto: 'done',
     },
     nomiLingua: { it: 'italiano', en: 'English' },
-    scegliCartella: 'enter to pick',
+    scegliCartella: 'enter to type it',
     consigliata: 'recommended',
+    nonEsiste: 'this folder does not exist',
     legende: [
       '↑↓ pick the setting   ←→ change   enter acts on the row   esc keep these',
       '↑↓ setting   ←→ change   enter acts   esc keep',
       '↑↓ ←→ enter esc',
+    ],
+    legendeTesto: [
+      'type the path   ~ is your home   enter confirms   esc leaves it as it was',
+      'type the path   enter ok   esc back',
+      'enter ok   esc back',
     ],
   },
 
@@ -307,12 +313,18 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
       fatto: 'fatto',
     },
     nomiLingua: { it: 'italiano', en: 'English' },
-    scegliCartella: 'invio per sceglierla',
+    scegliCartella: 'invio per scriverla',
     consigliata: 'consigliata',
+    nonEsiste: 'questa cartella non esiste',
     legende: [
       "↑↓ scegli l'impostazione   ←→ cambia   invio agisce sulla riga   esc tieni queste",
       '↑↓ impostazione   ←→ cambia   invio agisce   esc tieni',
       '↑↓ ←→ invio esc',
+    ],
+    legendeTesto: [
+      'scrivi il percorso   ~ e la tua home   invio conferma   esc lascia com era',
+      'scrivi il percorso   invio ok   esc indietro',
+      'invio ok   esc indietro',
     ],
   },
 
