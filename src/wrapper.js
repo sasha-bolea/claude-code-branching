@@ -17,6 +17,7 @@ import { attivaRamoDi, fineDelTurno } from './attiva.js';
 import { ripristinaA, riassumiRipristino } from './codice.js';
 import { ripiegoDaiCommit } from './commit.js';
 import { senzaTitolo, sequenzaTitolo } from './titolo.js';
+import { impostazione } from './impostazioni.js';
 import { T } from './lingua.js';
 import { creaSessioneTroncata } from './ramo.js';
 import {
@@ -219,6 +220,15 @@ export class Wrapper {
     this.avviatoIl = Date.now();
     this.eraCambioRamo = Boolean(riprendi);
 
+    // La scorciatoia va registrata, non solo gli argomenti di Claude: quando
+    // l'albero "non si apre" la prima cosa da sapere e' quale tasto cb stia
+    // aspettando, e senza questa riga si finisce a dedurlo dalla riga di comando
+    // del processo. Se un --tasto scavalca una scelta salvata diversa, si dice:
+    // e' l'unico modo di accorgersene senza leggere due file.
+    const salvata = impostazione('scorciatoia', null);
+    const scavalcata =
+      salvata && salvata !== this.descrizioneScorciatoia ? ` (impostazioni: ${salvata})` : '';
+    this.registra(`scorciatoia attiva: ${this.descrizioneScorciatoia}${scavalcata}`);
     this.registra(`avvio claude ${argomenti.join(' ')}`);
     // Il titolo va riaffermato a ogni avvio: ConPTY lo sovrascrive col percorso
     // dell'eseguibile quando crea il processo, e a un cambio ramo il processo e' nuovo.
