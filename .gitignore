@@ -1,3 +1,8 @@
 node_modules/
 *.log
-*.png
+*.tgz
+.env
+.DS_Store
+
+# Quaderno di lavoro: resta sul disco, non nel repo pubblico.
+docs/

@@ -1,233 +1,264 @@
 # cb
 
-Branching per conversazioni Claude Code: albero dei rami, catalogo globale, ripresa da
-qualsiasi messaggio — compresi i rami che hai abbandonato con un ripristino.
+*[Italiano](README.it.md)*
 
-## Il problema
+Branching for Claude Code conversations: the tree of a conversation's branches, a global
+catalogue of your sessions, and restarting from any message — including the branches you
+abandoned with a restore.
 
-Claude Code ha "restore code and conversation" (Esc Esc), ma è un undo a senso unico:
-una volta ripristinato, l'interfaccia non offre più modo di tornare ai prompt e alle
-risposte che ti sei lasciato indietro.
+## The problem
 
-I dati però ci sono tutti: i transcript sono **append-only**, il ramo abbandonato resta
-fisicamente nel file. Manca solo chi lo mostra e chi ti ci fa ripartire.
+Claude Code has "restore code and conversation" (Esc Esc), but it is a one-way undo: once
+you have restored, the interface offers no way back to the prompts and answers you left
+behind.
 
-## Prima di usarlo
+The data is all still there, though: transcripts are **append-only**, so the abandoned
+branch physically stays in the file. All that is missing is something to show it to you and
+put you back on it.
 
-Progetto non ufficiale, senza alcun rapporto con Anthropic. Si appoggia a dettagli interni
-di Claude Code che possono cambiare a ogni aggiornamento:
+## Before you use it
 
-- **legge e scrive** i transcript in `~/.claude/projects/` (solo in append, mai cancellando,
-  più i file delle nuove sessioni che crea);
-- **legge l'archivio di copie** con cui Claude Code ripristina i file
-  (`~/.claude/file-history/`), che è un dettaglio interno e può cambiare;
-- il ripristino dei file **sovrascrive** il lavoro non salvato successivo al punto scelto
-  (cb ne tiene una copia in `~/.claude/cb/file-history/`, ma non c'è ancora un comando per
-  ripescarla).
+Unofficial project, no relationship with Anthropic. It leans on Claude Code internals that
+may change with any release:
 
-Verificato su Claude Code **v2.1.220**, Windows 11, PowerShell 7. Su Linux e macOS il
-parsing dei transcript funziona, l'intercettazione dei tasti non è stata provata.
-Un backup di `~/.claude/projects/` prima di provarlo è tempo bene speso.
+- it **reads and writes** the transcripts in `~/.claude/projects/` (append only, never
+  deleting, plus the files of the new sessions it creates);
+- it **reads the archive of copies** that Claude Code uses to restore files
+  (`~/.claude/file-history/`), which is an internal detail and may change;
+- restoring files **overwrites** unsaved work made after the point you picked (cb keeps a
+  copy of it in `~/.claude/cb/file-history/`, but there is no command to fish it back out
+  yet).
 
-## Installazione
+Verified on Claude Code **v2.1.220**, Windows 11, PowerShell 7. See [Requirements](#requirements)
+for the other platforms. Backing up `~/.claude/projects/` before trying it is time well spent.
 
-Serve Node.js. Windows: `node-pty` usa il prebuilt, nessuna toolchain.
+## Requirements
+
+| | |
+|---|---|
+| **Node.js** | 18 or newer |
+| **Claude Code** | installed and working (`claude` on your PATH, or `CB_CLAUDE_EXE`) |
+| **Windows 10/11** | the tested platform, PowerShell 7 for the optional commit hook |
+| **macOS, Linux** | best effort — see below |
+
+On **macOS and Linux** transcript parsing, the tree and the pickers work, but the key
+interception has not been tested and the automatic-commit hook is PowerShell only.
+
+⚠️ **On Linux `npm install` compiles.** `node-pty` publishes prebuilt binaries for
+`win32-*` and `darwin-*` but not for `linux-*`, so on Linux the install falls back to
+node-gyp and you need `python3`, `make` and a C++ compiler (`build-essential`).
+
+## Install
+
+```
+npm install -g claude-code-branching
+```
+
+The command is `cb`. From the sources instead:
 
 ```
 git clone https://github.com/sasha-bolea/claude-code-branching.git
 cd claude-code-branching
 npm install
-npm link          # rende `cb` disponibile da qualsiasi cartella
+npm link          # makes `cb` available from any folder
 ```
 
-## Uso
+## Use
 
-`cb` si lancia al posto di `claude`. Lavori normalmente; quando premi la scorciatoia
-compare l'albero dei rami. Ti muovi con le frecce, premi invio e scegli **cosa riportare
-indietro**:
-
-```
-riporta indietro:
-▸ 1. conversazione e codice
-  2. solo la conversazione (i file restano come sono)
-  3. solo il codice (la conversazione resta dov'è)
-```
-
-Le prime due ripartono in un ramo nuovo senza uscire dalla sessione; la terza non riavvia
-nemmeno Claude, riporta solo i file. Accanto all'ora del prompt vedi quanto codice quel
-turno ha cambiato (`+42 -7`).
-
-⚠️ Il ripristino dei file sovrascrive il lavoro non salvato successivo a quel messaggio.
-Con `--senza-file` la voce preselezionata diventa «solo la conversazione».
+Run `cb` where you would run `claude`. You work as usual; when you press the shortcut the
+branch tree appears. You move with the arrows, press enter, and choose **what to roll back**:
 
 ```
-cb                      Claude avvolto: Esc Esc apre l'albero
-cb --scegli             prima chiede cartella e conversazione (vedi sotto)
-cb --tasto f2           altra scorciatoia ("f2", "esc esc", "ctrl+shift+b")
-cb --senza-file         cambiando ramo NON ripristina i file, solo la conversazione
-cb --tasti              stampa i byte dei tasti premuti (diagnosi)
-cb ls [filtro]          elenca le sessioni di tutti i progetti
-cb tree <sessione>      albero dei rami di una sessione
-cb open <sessione> [n]  riprendi da fuori, opzionalmente dal punto n
-cb pick                 catalogo interattivo da fuori
+roll back:
+▸ 1. conversation and code
+  2. conversation only (files stay as they are)
+  3. code only (the conversation stays where it is)
 ```
 
-Per fissare la scorciatoia una volta per tutte: `setx CB_TASTO "f2"`.
+The first two restart on a new branch without leaving the session; the third does not even
+restart Claude, it only brings the files back. Next to the prompt's time you see how much
+code that turn changed (`+42 -7`).
 
-### Scegliere cartella e conversazione all'avvio
-
-Con `cb --scegli` cb mette due schermate davanti a Claude: l'albero delle cartelle sotto la
-home (radice configurabile con `CB_RADICE`), dove `r` alterna avvio normale e ripresa, e —
-in ripresa — l'elenco delle conversazioni di quella cartella, ognuna con il suo albero in
-cima. `↑↓` scorrono le conversazioni, invio entra nell'albero, dove si sceglie il punto da
-cui ripartire.
-
-Perché non il selettore di `claude -r`: quello elenca i **file** di sessione, e siccome un
-fork ne crea uno nuovo, i rami della stessa conversazione compaiono come conversazioni
-diverse. Qui le sessioni si raggruppano per uuid di radice, e una conversazione è tutto il
-suo albero.
-
-Le stesse due schermate si riaprono a sessione avviata, dall'albero (`c` le conversazioni,
-`p` le cartelle): si cambia progetto senza chiudere Claude.
-
-Se la variabile `CB_CARTELLA_SCELTA` punta a un file, cb ci scrive la cartella scelta: chi
-lancia cb può leggerla all'uscita e spostarcisi (un processo figlio non può cambiare la
-cartella corrente di chi lo ha lanciato).
-
-Un tasto singolo (`f2`) scatta subito. Una scorciatoia ripetuta (`esc esc`) costa 300 ms
-di ritardo sulla prima pressione, il tempo di capire se ne arriva una seconda.
-
-**Quale tasto scegliere.** I tasti funzione sono la scelta sicura: Claude Code non li usa,
-e non li usa nemmeno l'editing da riga di comando. Evita `f10` e `f11`, che il terminale
-intercetta per la barra dei menu e lo schermo intero. Le combinazioni con Ctrl sono quasi
-tutte prese: dall'editing (`ctrl+a/e/k/u/w`), dalla cronologia (`ctrl+r`), dai comandi di
-Claude Code (fra cui `ctrl+g`), e `ctrl+s`/`ctrl+q` sono il controllo di flusso del
-terminale — con quelli lo schermo si blocca.
-
-`<sessione>` accetta id completo, prefisso di id, o percorso del `.jsonl`.
-
-### L'albero dentro la sessione
-
-La conversazione scorre da sinistra a destra, un nodo per prompt; ogni biforcazione fa
-scendere un ramo. Sotto l'albero c'è il prompt su cui sta il cursore, e sotto ancora la
-storia che quel punto porta con sé fino alla radice.
+⚠️ Restoring files overwrites unsaved work made after that message. With `--senza-file` the
+preselected entry becomes "conversation only".
 
 ```
-  cb  rami di questa conversazione
-  ◯ riparti da qui   ┳ biforcazione   arancione = storia di questo punto
+cb                      Claude wrapped: Esc Esc opens the tree
+cb --scegli             ask for folder and conversation first (see below)
+cb --tasto f2           another shortcut ("f2", "esc esc", "ctrl+shift+b")
+cb --senza-file         on a branch switch, do NOT restore files
+cb --tasti              print the bytes of the keys pressed (diagnostics)
+cb ls [filter]          list the sessions of every project
+cb tree <session>       branch tree of a session
+cb open <session> [n]   resume from outside, optionally from point n
+cb pick                 interactive catalogue from outside
+cb --version            version number
+```
+
+### Environment variables
+
+| Variable | What it does |
+|---|---|
+| `CB_TASTO` | the shortcut that opens the tree (`f2`, `esc esc`, `ctrl+shift+b`) |
+| `CB_LINGUA` | interface language: `en` or `it`. Without it, the system locale decides |
+| `CB_RADICE` | root of the folder picker tree (default `~/Documents/REPOSITORY`, else your home) |
+| `CB_CLAUDE_EXE` | full path of the Claude Code executable, for non-standard installs |
+| `CB_CARTELLA_SCELTA` | file where cb writes the folder you picked, for the calling shell |
+
+To set the shortcut once and for all: `setx CB_TASTO "f2"` on Windows, or
+`export CB_TASTO=f2` in your `.bashrc` / `.zshrc`.
+
+### Picking folder and conversation at startup
+
+With `cb --scegli` cb puts two screens in front of Claude: the tree of the folders under
+your home (root configurable with `CB_RADICE`), where `r` toggles between a normal start and
+a resume, and — on resume — the list of that folder's conversations, each with its own tree
+on top. `↑↓` scroll the conversations, enter goes into the tree, where you pick the point to
+restart from.
+
+Why not the `claude -r` picker: that one lists session **files**, and since a fork creates a
+new one, the branches of the same conversation show up as different conversations. Here
+sessions are grouped by root uuid, and a conversation is its whole tree.
+
+The same two screens reopen from inside a running session, from the tree (`c` for
+conversations, `p` for folders): you change project without closing Claude.
+
+If `CB_CARTELLA_SCELTA` points to a file, cb writes the chosen folder into it: whoever
+launched cb can read it on exit and move there (a child process cannot change the current
+folder of its parent).
+
+A single key (`f2`) fires immediately. A repeated shortcut (`esc esc`) costs 300 ms of delay
+on the first press, the time needed to see whether a second one is coming.
+
+**Which key to pick.** Function keys are the safe choice: Claude Code does not use them, and
+neither does command-line editing. Avoid `f10` and `f11`, which the terminal grabs for the
+menu bar and full screen. Ctrl combinations are almost all taken: by editing
+(`ctrl+a/e/k/u/w`), by history (`ctrl+r`), by Claude Code's own commands (`ctrl+g` among
+them), and `ctrl+s`/`ctrl+q` are the terminal's flow control — with those the screen freezes.
+
+`<session>` accepts a full id, an id prefix, or the path of the `.jsonl`.
+
+### The tree inside a session
+
+The conversation runs left to right, one node per prompt; every fork sends a branch down.
+Under the tree there is the prompt the cursor is on, and under that the history that point
+carries with it, back to the root.
+
+```
+  cb  branches of the conversation
+  ◯ restart here   ┳ fork   orange = history of this point
 
   ⬤━━━⬤━━━⬤━━━⬤━┳━⬤━━━⬤━━━⬤━━━⬤
                 ┗━⬤━┳━⬤━━━◯
                     ┗━⬤━━━⬤━━━⬤
 
   ───────────────────────────────────────────────────────────────────
-  24-07 15:51  riparti da qui
-  l'app è diventata lentissima, il rendering della lista si blocca
+  24-07 15:51  restart here
+  the app got very slow, rendering the list freezes
 
-  precedenti: 3
-    24-07 15:40  aggiungi il filtro per data
+  earlier: 3
+    24-07 15:40  add the date filter
     24-07 15:12  /login
-    24-07 15:10  facciamo la lista dei clienti
+    24-07 15:10  let's do the customer list
 
-  ←→ ad avanti e indietro   ↑↓ ws cambia ramo   invio = riparti   esc = torna a Claude
+  ←→ ad back and forth   ↑↓ ws switch branch   enter = restart   esc = back to Claude
 ```
 
-`←` `→` risalgono e scendono la conversazione, `↑` `↓` passano da un ramo all'altro della
-stessa biforcazione. In alternativa `a` `d` e `w` `s`, se la mano preferisce restare sulle
-lettere. Il cursore parte da dove sei adesso. Invio fa nascere un ramo nuovo da quel punto:
-quello di prima resta dov'è.
+`←` `→` walk up and down the conversation, `↑` `↓` move between the branches of the same
+fork. `a` `d` and `w` `s` work too, if your hand would rather stay on the letters. The
+cursor starts where you are now. Enter grows a new branch from that point: the previous one
+stays where it was.
 
-I comandi da fuori (`cb tree`, `cb pick`, `cb open`) usano invece l'elenco verticale
-numerato, perché `cb open <sessione> 3` ha bisogno di un numero a cui riferirsi:
+The commands from outside (`cb tree`, `cb pick`, `cb open`) use the numbered vertical list
+instead, because `cb open <session> 3` needs a number to refer to:
 
 ```
- 22  └─ ● 07-24 15:51  l'app è diventata lentissima ⑂3
- 23     ├─ ○ 07-24 15:57  molto più fluido, ma ancora troppo scattoso
+ 22  └─ ● 07-24 15:51  the app got very slow ⑂3
+ 23     ├─ ○ 07-24 15:57  much smoother, but still choppy
  24     │  └─ ○ 07-24 17:26  Ultraplan terminated…
- 27     ├─ ○ 07-29 10:17  molto più fluido, ma ancora troppo scattoso
- 28     └─ ● 07-29 10:18  era diventato molto più fluido ma ho mandato un altro prompt…
+ 27     ├─ ○ 07-29 10:17  much smoother, but still choppy
+ 28     └─ ● 07-29 10:18  it had got much smoother but I sent another prompt…
 ```
 
-`●` ramo attivo · `○` ramo in disparte · `⑂n` biforcazione con n rami.
+`●` active branch · `○` branch set aside · `⑂n` fork with n branches.
 
-## Come funziona
+## How it works
 
-Quattro meccanismi. I tre che toccano i dati sono tutti additivi: niente viene cancellato.
+Four mechanisms. The three that touch data are all additive: nothing is deleted.
 
-0. **Claude gira dentro uno pseudo-terminale** (`node-pty`). `cb` sta tra la tastiera e
-   Claude: inoltra tutto tranne la scorciatoia dell'albero. Non legge né interpreta mai
-   ciò che Claude disegna — solo il transcript su disco — così un aggiornamento del CLI
-   non lo rompe.
+0. **Claude runs inside a pseudo-terminal** (`node-pty`). `cb` sits between the keyboard and
+   Claude: it forwards everything except the tree shortcut. It never reads or interprets
+   what Claude draws — only the transcript on disk — so a CLI update does not break it.
 
-   I tasti vanno decodificati, non confrontati byte a byte: Claude attiva
-   **win32-input-mode** (invia `ESC[?9001h`), quindi su Windows ogni tasto arriva come
-   `ESC[Vk;Sc;Uc;Kd;Cs;Rc_` — Esc è `ESC[27;1;27;1;32;1_`, e arrivano anche gli eventi di
-   rilascio. `src/tasti.js` gestisce le tre codifiche possibili (byte grezzi, kitty
-   `ESC[27u`, win32) e normalizza tutto in un descrittore di tasto.
+   Keys have to be decoded, not compared byte by byte: Claude turns on
+   **win32-input-mode** (it sends `ESC[?9001h`), so on Windows every key arrives as
+   `ESC[Vk;Sc;Uc;Kd;Cs;Rc_` — Esc is `ESC[27;1;27;1;32;1_`, and release events arrive too.
+   `src/tasti.js` handles the three possible encodings (raw bytes, kitty `ESC[27u`, win32)
+   and normalises everything into one key descriptor.
 
-1. **L'albero si legge dai `.jsonl`.** Ogni record ha `parentUuid`: i rami sono già lì.
-   Le forche tecniche (retry di tool) vengono filtrate, restano solo i ripristini veri.
+1. **The tree is read from the `.jsonl` files.** Every record has a `parentUuid`: the
+   branches are already there. Technical forks (tool retries) are filtered out, only real
+   restores remain.
 
-2. **Il ramo nuovo è una sessione che cb scrive.** In modalità interattiva il CLI ignora
-   `--resume-session-at` (e anche `last-prompt.leafUuid`): ricostruisce la conversazione
-   dall'ultimo record messaggio del file, quindi scegliendo un punto intermedio ricomparivano
-   sempre i turni successivi. Con `-p` invece taglia — l'help lo dice, *"use with --resume in
-   print mode"*.
+2. **The new branch is a session cb writes.** In interactive mode the CLI ignores
+   `--resume-session-at` (and `last-prompt.leafUuid` too): it rebuilds the conversation from
+   the last message record in the file, so picking an intermediate point always brought the
+   later turns back. With `-p` it does cut — the help says so, *"use with --resume in print
+   mode"*.
 
-   `cb` scrive quindi un file di sessione nuovo con solo la catena fino alla **fine del turno
-   scelto** (il prompt e la sua risposta), e lo riprende con `--resume`. Il file di partenza
-   non viene toccato: i turni successivi restano nell'albero come ramo in disparte.
+   So `cb` writes a new session file containing only the chain up to the **end of the chosen
+   turn** (the prompt and its answer), and resumes that with `--resume`. The original file is
+   not touched: the later turns stay in the tree as a branch set aside.
 
-3. **Cambiando ramo i file tornano allo stato di quel turno**, automaticamente.
+3. **Switching branch brings the files back to the state of that turn**, automatically.
 
-   Claude Code non usa git per i suoi checkpoint: salva copie **integrali** dei file in
-   `~/.claude/file-history/<sessione>/`, annotandole nel transcript accanto ai messaggi.
-   Ogni copia è il contenuto *precedente* alla modifica che l'ha generata, quindi lo stato
-   di un file a un dato istante è la **prima copia successiva** a quell'istante.
+   Claude Code does not use git for its checkpoints: it saves **whole copies** of the files
+   in `~/.claude/file-history/<session>/`, noting them in the transcript next to the
+   messages. Every copy is the content *before* the change that produced it, so the state of
+   a file at a given instant is the **first copy after** that instant.
 
-   cb legge quell'archivio invece di chiamare il ripristino nativo: niente processo da
-   lanciare, e soprattutto si guardano le copie di **tutta la famiglia** di sessioni —
-   il comando nativo ne conosce una sola, mentre i rami di una conversazione stanno in file
-   diversi. Riscontro: ricostruito lo stato all'inizio di una sessione vera, 20 file su 20
-   identici byte per byte al commit che era HEAD in quel momento.
+   cb reads that archive instead of calling the native restore: no process to launch, and
+   above all it looks at the copies of the **whole family** of sessions — the native command
+   knows only one, while the branches of a conversation live in different files. Evidence:
+   reconstructed the state at the beginning of a real session, 20 files out of 20 identical
+   byte for byte to the commit that was HEAD at that moment.
 
-   Due limiti da conoscere: l'archivio copre **solo i file che Claude ha toccato**, e ha una
-   scadenza di qualche settimana. Per il resto c'è l'hook dei commit (sotto).
+   Two limits worth knowing: the archive only covers **the files Claude touched**, and it
+   expires after a few weeks. For the rest there is the commit hook (below).
 
-4. **L'albero unisce tutta la famiglia di sessioni.** `--fork-session` crea un file nuovo
-   che copia la storia **solo fino al punto di fork**: i rami abbandonati restano nel file
-   di partenza e, guardando la sola sessione corrente, diventano invisibili. Riscontro su
-   dati reali: sessione padre `ciao → come va? → come stai?`, figlia `ciao → buuu`,
-   biforcazioni viste dalla figlia: **zero**.
+4. **The tree merges the whole family of sessions.** `--fork-session` creates a new file that
+   copies the history **only up to the fork point**: the abandoned branches stay in the
+   original file and, looking at the current session alone, become invisible. Evidence on
+   real data: parent session `hi → how are you? → how do you feel?`, child `hi → boo`, forks
+   visible from the child: **zero**.
 
-   Il fork però copia i record **mantenendo gli stessi uuid** (87% di sovrapposizione
-   misurata), e le sessioni parenti condividono lo stesso uuid di radice. `cb` raggruppa
-   quindi i transcript per radice (`sessioniDellaFamiglia`, che legge solo la testa dei
-   file) e unisce i nodi per uuid: l'albero completo riemerge. Ogni nodo si porta dietro le
-   `origini`, così un ramo del padre viene ripreso dalla sessione giusta e la riattivazione
-   viene scritta nel file giusto.
+   The fork does copy the records **keeping the same uuids** (87% overlap measured), and
+   related sessions share the same root uuid. So `cb` groups transcripts by root
+   (`sessioniDellaFamiglia`, which reads only the head of each file) and merges nodes by
+   uuid: the complete tree re-emerges. Every node carries its `origini`, so a branch of the
+   parent is resumed from the right session and the reactivation is written to the right file.
 
-5. **I rami abbandonati vengono riattivati appendendo un `last-prompt`.**
-   `--resume-session-at` cerca il messaggio nella catena attiva, che il CLI ricostruisce
-   dall'ultimo `last-prompt.leafUuid`. Un nodo su un ramo abbandonato non è in quella
-   catena e il CLI risponde `No message found`. Appendendo un `last-prompt` che punta
-   alla foglia del ramo voluto, quel ramo torna percorribile. Vedi `src/attiva.js`.
+5. **Abandoned branches are reactivated by appending a `last-prompt`.**
+   `--resume-session-at` looks for the message in the active chain, which the CLI rebuilds
+   from the last `last-prompt.leafUuid`. A node on an abandoned branch is not in that chain
+   and the CLI answers `No message found`. By appending a `last-prompt` pointing at the leaf
+   of the branch you want, that branch becomes walkable again. See `src/attiva.js`.
 
-## Agganciarlo al comando `claude`
+## Hooking it to the `claude` command
 
-Per non dover ricordarsi di scrivere `cb`, si può far passare `claude` attraverso di esso.
-In PowerShell, dentro `$PROFILE`:
+So you do not have to remember to type `cb`, you can route `claude` through it. In
+PowerShell, inside `$PROFILE`:
 
 ```powershell
 function claude {
-    $cbEntry = "C:/percorso/di/cb/bin/cb.js"
+    $cbEntry = "C:/path/to/cb/bin/cb.js"
     $claudeShim = "$env:APPDATA/npm/claude.ps1"
 
-    # Senza argomenti (o con -r) apri i selettori di cartella e conversazione.
+    # With no arguments (or with -r) open the folder and conversation pickers.
     $scegli = @()
     if ($args.Count -eq 0 -or $args[0] -in @('-r', '--resume')) { $scegli = @('--scegli') }
 
-    # cb ci scrive la cartella scelta: la shell ci si sposta all'uscita.
+    # cb writes the chosen folder here: the shell moves there on exit.
     $fileCartella = Join-Path ([IO.Path]::GetTempPath()) "cb-cartella-$PID.txt"
     Remove-Item $fileCartella -ErrorAction SilentlyContinue
     $env:CB_CARTELLA_SCELTA = $fileCartella
@@ -235,9 +266,9 @@ function claude {
     try {
         if ((Test-Path $cbEntry) -and (Get-Command node -ErrorAction SilentlyContinue)) {
             & node $cbEntry @scegli --tasto f2 -- @args
-            if ($LASTEXITCODE -ne 78) { return }   # 78 = cb non è partito
+            if ($LASTEXITCODE -ne 78) { return }   # 78 = cb did not start
         }
-        & $claudeShim @args                        # ripiego: Claude diretto
+        & $claudeShim @args                        # fallback: Claude directly
     } finally {
         if (Test-Path $fileCartella) {
             $scelta = (Get-Content $fileCartella -Raw).Trim()
@@ -249,83 +280,92 @@ function claude {
 }
 ```
 
-Tre accorgimenti perché non possa peggiorare le cose:
+Back up your profile before editing it.
 
-- **Ripiego automatico**: se cb non parte esce con **78**, e la funzione rilancia Claude
-  diretto. Un'uscita normale di Claude non usa quel codice, quindi non viene mai rilanciato
-  per sbaglio. Se node non è installato cb non viene nemmeno tentato.
-- **Usi non interattivi** (`-p`, `--print`, stdin non TTY): niente pseudo-terminale, cb
-  esegue Claude direttamente. Altrimenti il pty sporcherebbe l'output negli script.
-- **Argomenti**: tutto quello che segue `--` va a Claude, non a cb. Così `-r`, i prompt e
-  i flag non collidono coi comandi di cb.
+Three precautions so it cannot make things worse:
 
-Con `--resume`/`--continue` l'id sessione lo sceglie Claude: cb non impone `--session-id` e
-scopre la sessione dal transcript più recente della cartella.
+- **Automatic fallback**: if cb does not start it exits with **78**, and the function
+  relaunches Claude directly. A normal Claude exit never uses that code, so it is never
+  relaunched by mistake. If node is not installed, cb is not even attempted.
+- **Non-interactive uses** (`-p`, `--print`, non-TTY stdin): no pseudo-terminal, cb runs
+  Claude directly. Otherwise the pty would dirty the output in scripts.
+- **Arguments**: everything after `--` goes to Claude, not to cb. That way `-r`, prompts and
+  flags do not collide with cb's own commands.
 
-Per cambiare scorciatoia basta modificare `--tasto f2` nel profilo.
+With `--resume`/`--continue` the session id is Claude's choice: cb does not force
+`--session-id` and discovers the session from the most recent transcript in the folder.
 
-Nota: il titolo della tab viene mantenuto (ConPTY lo sovrascriverebbe col percorso di
-`claude.exe` a ogni avvio di processo, quindi a ogni cambio ramo).
+To change the shortcut, edit `--tasto f2` in the profile.
 
-## Commit automatici (opzionale)
+Note: the tab title is preserved (ConPTY would overwrite it with the path of `claude.exe`
+at every process start, so at every branch switch).
 
-`hooks/cb-commit.ps1` è un hook `Stop`: a ogni fine turno che ha modificato file, salva
-**tutto il working tree** su un ref nascosto `refs/cb/<sessione>/auto`.
+## Automatic commits (optional, Windows)
 
-- Non compare in `git log`, `git branch`, `git tag`, `git status`
-- Non tocca il branch su cui lavori né l'area di staging (usa un index temporaneo)
-- Recupero a mano: `git show refs/cb/<sessione>/auto~2:percorso/file.js`
+`hooks/cb-commit.ps1` is a `Stop` hook: at the end of every turn that changed files, it
+saves **the whole working tree** onto a hidden ref `refs/cb/<session>/auto`.
 
-Nel corpo del commit finisce l'**uuid dell'ultimo messaggio del turno**: è l'aggancio fra
-l'albero e lo storico del codice. Quando la copia nativa di un file è scaduta, cb risale da
-quel punto al commit e ripesca il file da lì — un file per volta, non l'albero intero.
+- It does not show up in `git log`, `git branch`, `git tag`, `git status`
+- It does not touch the branch you work on nor the staging area (it uses a temporary index)
+- Manual recovery: `git show refs/cb/<session>/auto~2:path/to/file.js`
 
-Installazione: aggiungi in `~/.claude/settings.json` sotto `hooks.Stop` (in coda agli
-hook esistenti, senza sostituirli):
+The **uuid of the turn's last message** goes into the commit body: that is the hook between
+the tree and the code history. When the native copy of a file has expired, cb walks from
+that point to the commit and fishes the file out of there — one file at a time, not the
+whole tree.
+
+Install: add this under `hooks.Stop` in `~/.claude/settings.json` (appended to the existing
+hooks, not replacing them):
 
 ```json
 {
   "type": "command",
-  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"C:/percorso/di/cb/hooks/cb-commit.ps1\"",
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"C:/path/to/cb/hooks/cb-commit.ps1\"",
   "timeout": 60
 }
 ```
 
-⚠️ L'hook gira su **ogni** sessione Claude in **ogni** repo git, non solo su questo progetto.
-Non metterlo `async`: girando in parallelo potrebbe leggere il working tree mentre un cambio
-ramo lo sta riscrivendo.
+⚠️ The hook runs on **every** Claude session in **every** git repo, not just this project.
+Do not make it `async`: running in parallel it could read the working tree while a branch
+switch is rewriting it.
 
-## Test
+There is no shell equivalent for macOS and Linux yet.
+
+## Tests
 
 ```
 npm test
 ```
 
-## Limiti noti
+## Known limits
 
-- Ogni cambio di ramo **riavvia il processo Claude**: non si può ricaricare una
-  conversazione in un processo già avviato. Il wrapper lo rende invisibile, non lo evita —
-  vedi il tempo di avvio della TUI a ogni salto. Fa eccezione «solo il codice», che non
-  tocca la conversazione e quindi non riavvia niente.
-- **Il ripristino copre solo i file che Claude ha toccato.** Le modifiche fatte a mano, da un
-  altro terminale o da una build non sono nell'archivio: ripristinando un punto ottieni un
-  albero misto. I commit automatici coprono tutto, ma oggi servono solo da ripiego per le
-  copie scadute.
-- **Nessuna pulizia**: l'archivio delle copie di cb, i ref `refs/cb/*` e le sessioni troncate
-  create a ogni cambio ramo si accumulano senza scadenza.
-- **Nessun modo di guardare dentro agli archivi**: niente anteprima di cosa cambierà, niente
-  annulla. Il ripristino non è atomico: se una scrittura fallisce a metà, l'albero resta misto.
-- Rubare `Esc Esc` costa 300 ms di ritardo su un Esc singolo (l'interruzione), e sostituisce
-  il menu di ripristino nativo. Con una scorciatoia a tasto singolo (`--tasto f2`) il
-  ritardo sparisce e il menu nativo resta disponibile.
-- Il salto è possibile solo dopo il primo turno: prima non esiste un transcript da leggere.
-- `--resume-session-at` non è documentato: può cambiare a un aggiornamento del CLI.
-- La parentela tra sessioni forkate vive nei campi `forkParentSessionId` scritti dal CLI;
-  `cb` non li aggrega ancora in una vista cross-sessione.
-- L'albero orizzontale fa partire ogni ramo dalla colonna in cui si è diramato: con
-  biforcazioni molto avanti nella conversazione il ramo comincia a destra e va a capo
-  presto. Si vede da dove nasce, si perde un po' di larghezza.
-- I comandi da fuori (`tree`, `pick`, `open`) mostrano ancora l'elenco verticale numerato,
-  non l'albero orizzontale.
-- `node-pty` richiede il binario nativo di Claude, non lo shim npm. `cb` lo cerca da sé;
-  se l'installazione non è standard, imposta `CB_CLAUDE_EXE`.
+- Every branch switch **restarts the Claude process**: a conversation cannot be reloaded
+  into a running process. The wrapper makes that invisible, it does not avoid it — you see
+  the TUI startup time at every jump. "Code only" is the exception: it does not touch the
+  conversation, so nothing is restarted.
+- **Restoring only covers the files Claude touched.** Changes made by hand, from another
+  terminal or by a build are not in the archive: restoring a point gives you a mixed tree.
+  Automatic commits cover everything, but today they only serve as a fallback for expired
+  copies.
+- **No cleanup**: cb's archive of copies, the `refs/cb/*` refs and the truncated sessions
+  created at every branch switch pile up with no expiry.
+- **No way to look inside the archives**: no preview of what will change, no undo. The
+  restore is not atomic: if a write fails halfway, the tree stays mixed.
+- Stealing `Esc Esc` costs 300 ms of delay on a single Esc (the interrupt), and replaces the
+  native restore menu. With a single-key shortcut (`--tasto f2`) the delay disappears and
+  the native menu stays available.
+- The jump is only possible after the first turn: before that there is no transcript to read.
+- `--resume-session-at` is undocumented: it may change with a CLI update.
+- The kinship between forked sessions lives in the `forkParentSessionId` fields written by
+  the CLI; `cb` does not aggregate them into a cross-session view yet.
+- The horizontal tree starts each branch at the column where it forked: with forks very far
+  along the conversation, the branch starts on the right and wraps early. You see where it
+  comes from, you lose some width.
+- The commands from outside (`tree`, `pick`, `open`) still show the numbered vertical list,
+  not the horizontal tree.
+- `node-pty` needs Claude's native binary, not the npm shim. `cb` looks for it on its own
+  (explicit paths first, then your `PATH`); if your install is unusual, set `CB_CLAUDE_EXE`.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

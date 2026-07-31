@@ -1,15 +1,53 @@
 {
-  "name": "cb",
-  "version": "0.1.0",
-  "description": "Branching per conversazioni Claude Code: albero dei rami, catalogo globale, fork da qualsiasi messaggio",
+  "name": "claude-code-branching",
+  "version": "1.0.0",
+  "description": "Branching for Claude Code conversations: branch tree, global catalogue, restart from any message",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "cli",
+    "branching",
+    "conversation",
+    "transcript",
+    "fork",
+    "checkpoint"
+  ],
   "type": "module",
   "bin": {
     "cb": "./bin/cb.js"
   },
   "scripts": {
-    "test": "node src/transcript.test.js && node src/tasti.test.js && node src/titolo.test.js && node src/vista.test.js && node src/wrapper.test.js && node src/overlay.test.js && node src/cartelle.test.js && node src/conversazioni.test.js && node src/codice.test.js && node src/commit.test.js"
+    "test": "node src/prove.js"
   },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
+  "files": [
+    "bin",
+    "src",
+    "!src/*.test.js",
+    "!src/prove.js",
+    "!src/verifica-reale.js",
+    "hooks",
+    "README.md",
+    "README.it.md",
+    "LICENSE"
+  ],
+  "author": "Sasha Bolea",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sasha-bolea/claude-code-branching.git"
+  },
+  "homepage": "https://github.com/sasha-bolea/claude-code-branching#readme",
+  "bugs": {
+    "url": "https://github.com/sasha-bolea/claude-code-branching/issues"
+  },
   "dependencies": {
     "node-pty": "^1.1.0"
   }

@@ -3,6 +3,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { leggiTranscript, catenaFinoA } from './transcript.js';
+import { T } from './lingua.js';
 
 // Crea un nuovo file di sessione contenente solo la conversazione fino a un dato
 // punto, e restituisce l'id della sessione creata.
@@ -22,7 +23,7 @@ import { leggiTranscript, catenaFinoA } from './transcript.js';
 export async function creaSessioneTroncata(percorsoOrigine, uuidFine) {
   const albero = await leggiTranscript(percorsoOrigine);
   if (!albero.nodi.has(uuidFine)) {
-    throw new Error(`punto di taglio non trovato nel transcript: ${uuidFine}`);
+    throw new Error(T.wrapper.tagioNonTrovato(uuidFine));
   }
 
   const catena = new Set(catenaFinoA(albero, uuidFine).map((n) => n.uuid));

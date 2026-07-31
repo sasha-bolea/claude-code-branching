@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { catenaFinoA } from './transcript.js';
+import { T } from './lingua.js';
 
 // Ultimo record del turno che comincia con un dato prompt: si scende tra i
 // discendenti fermandosi prima del prompt utente successivo.
@@ -77,7 +78,7 @@ export function nelRamoAttivo(albero, uuid) {
 // ritorna: uuid della foglia attivata, o null se la catena finiva gia' li'
 export function attivaRamoDi(percorso, albero, uuid) {
   const nodo = albero.nodi.get(uuid);
-  if (!nodo) throw new Error(`nodo non trovato nel transcript: ${uuid}`);
+  if (!nodo) throw new Error(T.wrapper.nodoNonTrovato(uuid));
 
   const foglia = fineDelTurno(nodo);
   // Non basta che il nodo sia raggiungibile: la catena deve finire esattamente

@@ -25,6 +25,7 @@ import {
 import { azioniNavigazione, azioniTastiera } from './tasti.js';
 import { arancioneForte, grigio, normale } from './stile.js';
 import { testoLeggibile } from './albero.js';
+import { T } from './lingua.js';
 
 // Righe della pagina che non sono ne' albero ne' elenco: intestazione, righe
 // vuote, separatore, stacco e barra dei tasti.
@@ -33,10 +34,8 @@ const RIGHE_FISSE = 7;
 // Quota dello spazio libero che va all'albero: il resto e' dell'elenco.
 const QUOTA_ALBERO = 0.6;
 
-const LEGENDE = [
-  ['↑↓ scegli la conversazione   invio entra nell\'albero   esc annulla', '↑↓ conversazione   invio albero   esc esci'],
-  ['←→ avanti e indietro   ↑↓ cambia ramo   invio riparti da qui   esc torna all\'elenco', '←→↑↓ muovi   invio riparti   esc elenco'],
-];
+// Due coppie lunga/corta: la prima per l'elenco, la seconda per l'albero.
+const LEGENDE = T.conversazioni.legende;
 
 // Raggruppa le schede di sessione per conversazione.
 // Due sessioni sono la stessa conversazione se condividono l'uuid di radice: e'
@@ -146,7 +145,7 @@ function finestraAttorno(posizione, quante, totale) {
 // scelta: se e' la conversazione selezionata
 function rigaConversazione(famiglia, larghezza, scelta) {
   const marchio = famiglia.ripristini > 0 ? `⑂${famiglia.ripristini}` : '  ';
-  const coda = `  ${marchio.padEnd(4)} ${String(famiglia.messaggi).padStart(4)} msg`;
+  const coda = `  ${marchio.padEnd(4)} ${String(famiglia.messaggi).padStart(4)} ${T.conversazioni.messaggi}`;
   const data = quando(famiglia.ultimoTimestamp);
   // Quel che resta dopo cursore, data e coda e' per il titolo.
   const perTitolo = Math.max(10, larghezza - 4 - data.length - coda.length);
@@ -191,7 +190,7 @@ export function disegnaConversazioni(
       altezza,
       ripristinaCodice,
       titolo: testoLeggibile(famiglie[indice]?.titolo ?? '').slice(0, 60) || 'conversazione',
-      esc: { lunga: "torna all'elenco", corta: 'elenco' },
+      esc: { lunga: T.albero.escElencoLunga, corta: T.albero.escElencoCorta },
       menu: modo === 'menu' ? menu : null,
     });
   }
@@ -208,9 +207,11 @@ export function disegnaConversazioni(
 
   // La legenda sta solo in fondo: ripeterla anche in cima toglierebbe una riga
   // all'albero per dire due volte la stessa cosa.
-  const quante = famiglie.length === 1 ? '1 conversazione' : `${famiglie.length} conversazioni`;
+  const quante = T.conversazioni.quante(famiglie.length);
   const righe = [
-    `  ${arancioneForte('cb')}  ${normale(taglia(`${quante} in ${path.basename(cartella)}`, larghezza - 4))}`,
+    `  ${arancioneForte('cb')}  ${normale(
+      taglia(T.conversazioni.inCartella(quante, path.basename(cartella)), larghezza - 4),
+    )}`,
     '',
   ];
 
@@ -227,7 +228,7 @@ export function disegnaConversazioni(
   righe.push('', `  ${normale('─'.repeat(larghezza))}`);
 
   if (famiglie.length === 0) {
-    righe.push(`  ${normale('Nessuna conversazione in questa cartella.')}`);
+    righe.push(`  ${normale(T.conversazioni.nessuna)}`);
   } else {
     const da = finestraAttorno(indice, spazioLista, famiglie.length);
     for (let i = da; i < Math.min(famiglie.length, da + spazioLista); i += 1) {
@@ -236,8 +237,8 @@ export function disegnaConversazioni(
     }
     const restano = famiglie.length - (da + spazioLista);
     if (da > 0 || restano > 0) {
-      const sopra = da > 0 ? `↑ ${da} sopra` : '';
-      const sotto = restano > 0 ? `↓ ${restano} sotto` : '';
+      const sopra = da > 0 ? T.conversazioni.sopra(da) : '';
+      const sotto = restano > 0 ? T.conversazioni.sotto(restano) : '';
       righe.push(`  ${grigio(`${sopra}${sopra && sotto ? '   ' : ''}${sotto}`)}`);
     }
   }
@@ -253,9 +254,7 @@ export function disegnaConversazioni(
   righe.push(
     `  ${grigio(
       primaCheEntra(
-        famiglie.length === 0
-          ? ['invio o esc: parti da una conversazione nuova', 'invio/esc: nuova']
-          : LEGENDE[modo === 'albero' ? 1 : 0],
+        famiglie.length === 0 ? T.conversazioni.legendaVuota : LEGENDE[modo === 'albero' ? 1 : 0],
         larghezza,
       ),
     )}`,
@@ -289,10 +288,10 @@ function pannelloAlbero(caricata, selezione, modo, spazio, larghezza) {
   // `caricata: false` distingue "non c'e' niente da caricare" da "sto caricando":
   // in una cartella senza conversazioni l'attesa non finirebbe mai.
   if (caricata === false) return alta([]);
-  if (!caricata) return alta([`  ${normale('carico la conversazione…')}`]);
+  if (!caricata) return alta([`  ${normale(T.conversazioni.carico)}`]);
   const { vista, albero } = caricata;
   if (vista.nodi.length === 0) {
-    return alta([`  ${normale('nessun messaggio in questa conversazione')}`]);
+    return alta([`  ${normale(T.conversazioni.nessunMessaggio)}`]);
   }
 
   const posizione = vista.posizioni.get(selezione) ?? { riga: 0, colonna: 0 };

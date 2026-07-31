@@ -17,6 +17,7 @@ import { attivaRamoDi, fineDelTurno } from './attiva.js';
 import { ripristinaA, riassumiRipristino } from './codice.js';
 import { ripiegoDaiCommit } from './commit.js';
 import { senzaTitolo, sequenzaTitolo } from './titolo.js';
+import { T } from './lingua.js';
 import { creaSessioneTroncata } from './ramo.js';
 import {
   tokenizza,
@@ -305,7 +306,7 @@ export class Wrapper {
       this.scrivi(MOSTRA_CURSORE + PULISCI_SCHERMO);
       this.scrivi(`  cb\r\n\r\n`);
       for (const riga of righe) this.scrivi(`  ${riga}\r\n`);
-      this.scrivi(`\r\n  invio per tornare a Claude\r\n  > `);
+      this.scrivi(`\r\n  ${T.wrapper.invioPerTornare}\r\n  > `);
     };
 
     this.ridisegnaOverlay();
@@ -348,14 +349,9 @@ export class Wrapper {
     const percorso = this.trovaTranscript();
     this.registra(`overlay sessione=${this.sessionId} transcript=${percorso ?? 'ASSENTE'}`);
     if (!percorso) {
-      await this.mostraAvviso([
-        'Questa conversazione non ha ancora un transcript su disco.',
-        '',
-        'Claude lo scrive al primo scambio: manda un prompt, attendi la',
-        `risposta, poi ripremi ${this.descrizioneScorciatoia}.`,
-        '',
-        `sessione: ${this.sessionId}`,
-      ]);
+      await this.mostraAvviso(
+        T.wrapper.senzaTranscript(this.descrizioneScorciatoia, this.sessionId),
+      );
       return;
     }
 
@@ -512,7 +508,7 @@ export class Wrapper {
       colonne: process.stdout.columns || 120,
       altezza: process.stdout.rows || 30,
       ripristinaCodice: this.ripristinaCodice,
-      extra: { lunga: 'c = altra conversazione   p = altra cartella', corta: 'c/p altra conv.' },
+      extra: { lunga: T.albero.extraLunga, corta: T.albero.extraCorta },
       menu,
     });
 
@@ -668,9 +664,9 @@ export class Wrapper {
       return true;
     }
 
-    this.scrivi(`\r\n  riparto da: ${voce.testo.replace(/\s+/g, ' ').slice(0, 60)}\r\n`);
+    this.scrivi(`\r\n  ${T.wrapper.ripartoDa(voce.testo.replace(/\s+/g, ' ').slice(0, 60))}\r\n`);
     if (origine.sessionId !== this.sessionId) {
-      this.scrivi(`  (ramo della sessione ${String(sessionePartenza).slice(0, 8)})\r\n`);
+      this.scrivi(`  ${T.wrapper.ramoDiSessione(String(sessionePartenza).slice(0, 8))}\r\n`);
     }
     this.registra(`cambioRamo uuid=${voce.uuid} da sessione=${sessionePartenza}`);
 
@@ -685,7 +681,7 @@ export class Wrapper {
     const nodoOrigine = alberoOrigine.nodi.get(voce.uuid);
     if (!nodoOrigine) {
       this.inOverlay = false;
-      this.lampeggia(`cb: il messaggio non e' in questa sessione`);
+      this.lampeggia(`cb: ${T.wrapper.messaggioAltrove}`);
       return false;
     }
     this.fineTurno = fineDelTurno(nodoOrigine).uuid;
@@ -704,11 +700,13 @@ export class Wrapper {
     // conversazione torna indietro ma il codice resta quello di adesso, e Claude
     // si limita a suggerire il comando da lanciare a mano.
     if (modo !== 'conversazione') {
-      this.scrivi('  ripristino i file a quel punto…\r\n');
+      this.scrivi(`  ${T.wrapper.ripristinoFile}\r\n`);
       const esito = await this.ripristinaFile(alberoOrigine, voce.uuid, origine.percorso);
       this.registra(`ripristino file ok=${esito.ok} esito=${esito.riassunto}`);
 
-      const messaggio = esito.ok ? esito.riassunto : `file NON ripristinati: ${esito.riassunto}`;
+      const messaggio = esito.ok
+        ? esito.riassunto
+        : T.wrapper.fileNonRipristinati(esito.riassunto);
       this.scrivi(`  ${messaggio}\r\n`);
       await new Promise((r) => setTimeout(r, esito.ok ? 800 : 3000));
     }
@@ -721,7 +719,7 @@ export class Wrapper {
       this.registra(`sessione troncata creata: ${ramo.sessionId} fino a ${this.fineTurno}`);
     } catch (errore) {
       this.inOverlay = false;
-      this.lampeggia(`cb: non riesco a creare il ramo (${errore.message})`);
+      this.lampeggia(`cb: ${T.wrapper.ramoNonCreato(errore.message)}`);
       return false;
     }
 
@@ -781,7 +779,7 @@ export class Wrapper {
       }
       this.registra(`riattivazione sovrascritta (atteso ${foglia}, trovato ${dopo.leafAttivo})`);
     }
-    throw new Error('non riesco a fissare il ramo scelto: riprova');
+    throw new Error(T.wrapper.ramoNonFissato);
   }
 
   // Sceglie da quale sessione ripartire per un nodo dell'albero unito.
@@ -826,7 +824,7 @@ export class Wrapper {
     const fine = nodo ? fineDelTurno(nodo) : null;
     const istante = Date.parse(fine?.timestamp ?? nodo?.timestamp ?? '');
     if (Number.isNaN(istante)) {
-      return { ok: false, riassunto: 'non so a quando riportare i file (turno senza orario)' };
+      return { ok: false, riassunto: T.wrapper.senzaOrario };
     }
 
     // Tutte le sessioni della famiglia: le copie di un ramo vecchio stanno
@@ -1006,7 +1004,7 @@ export class Wrapper {
   //   del cambio ramo, che taglia al turno scelto e riporta indietro i file.
   async avvia({ ripartenza = null } = {}) {
     if (!process.stdin.isTTY) {
-      throw new Error('cb wrap richiede un terminale interattivo');
+      throw new Error(T.wrapper.serveTerminale);
     }
 
     process.stdin.setRawMode(true);

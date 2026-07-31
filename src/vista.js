@@ -1,5 +1,6 @@
 import { alberoPrompt, testoLeggibile, uuidRamoAttivo } from './albero.js';
 import { arancione, arancioneForte, grigio, normale, rosso, verde } from './stile.js';
+import { T } from './lingua.js';
 
 // Vista orizzontale dell'albero dei rami: i prompt scorrono da sinistra a
 // destra come nodi di una linea, e ogni biforcazione fa scendere un ramo sotto.
@@ -30,24 +31,21 @@ const ULTIMO = '┗'; // ultimo ramo della forca
 const PASSO = 4;
 
 // Legenda dei glifi, dalla piu' ricca alla piu' scarna: su un terminale stretto
-// si sceglie la prima che entra. Sta qui perche' i simboli non escano da questo
-// file, e chi disegna l'intestazione non debba riscriverli a mano.
-export const LEGENDA = [
-  `${VUOTO} riparti da qui   ${FORCA} biforcazione   arancione = storia di questo punto`,
-  `${VUOTO} riparti da qui   ${FORCA} biforcazione`,
-  `${VUOTO} riparti da qui`,
-];
+// si sceglie la prima che entra. Il testo sta in lingua.js, i glifi qui: sono
+// due cose che cambiano per motivi diversi.
+export const LEGENDA = T.albero.legenda;
 
 // Cosa si puo' riportare indietro dal punto scelto. Sono le stesse tre voci del
 // menu nativo di Claude (Esc Esc), perche' la scelta e' la stessa: la
 // conversazione e il codice tornano indietro insieme o separatamente.
 //
 // L'ordine mette per primo il caso normale, cosi' invio senza pensarci fa la
-// cosa che l'utente si aspetta.
+// cosa che l'utente si aspetta. Il `modo` non e' testo: e' il valore che il
+// wrapper legge per decidere cosa fare, e non va tradotto.
 export const VOCI_RIPRISTINO = [
-  { modo: 'entrambi', etichetta: 'conversazione e codice' },
-  { modo: 'conversazione', etichetta: 'solo la conversazione (i file restano come sono)' },
-  { modo: 'codice', etichetta: "solo il codice (la conversazione resta dov'è)" },
+  { modo: 'entrambi', etichetta: T.albero.vociRipristino[0] },
+  { modo: 'conversazione', etichetta: T.albero.vociRipristino[1] },
+  { modo: 'codice', etichetta: T.albero.vociRipristino[2] },
 ];
 
 // Mappa figlio -> padre nell'albero collassato dei prompt.
@@ -607,8 +605,8 @@ export function schermata(
     colonne = 120,
     altezza = 30,
     ripristinaCodice = true,
-    titolo = 'rami di questa conversazione',
-    esc = { lunga: 'torna a Claude', corta: 'esci' },
+    titolo = T.albero.titolo,
+    esc = { lunga: T.albero.escLunga, corta: T.albero.escCorta },
     extra = { lunga: '', corta: '' },
     menu = null,
   } = {},
@@ -642,22 +640,22 @@ export function schermata(
   // La legenda e' l'unica riga in grigio: tutto il resto sta al primo piano del
   // terminale, cioe' alla massima luminosita' disponibile.
   const righe = [
-    `  ${arancioneForte('cb')}  ${normale(primaCheEntra([titolo, 'rami'], spazioColonne - 4))}`,
+    `  ${arancioneForte('cb')}  ${normale(primaCheEntra([titolo, T.albero.titoloCorto], spazioColonne - 4))}`,
     `  ${grigio(primaCheEntra(LEGENDA, spazioColonne))}`,
     '',
   ];
 
-  if (inizio > 0) righe.push(`  ${normale(`↑ ${inizio} righe sopra`)}`);
+  if (inizio > 0) righe.push(`  ${normale(T.albero.righeSopra(inizio))}`);
   for (const riga of righeAlbero.slice(inizio, inizio + spazioAlbero)) righe.push(`  ${riga}`);
-  if (sotto > 0) righe.push(`  ${normale(`↓ ${sotto} righe sotto`)}`);
+  if (sotto > 0) righe.push(`  ${normale(T.albero.righeSotto(sotto))}`);
 
   // Quanto albero resta fuori ai lati. Va detto: senza, una conversazione lunga
   // sembrerebbe cominciare a meta'. Ogni avviso sta dalla parte dell'albero che
   // annuncia — quello di destra in fondo alla riga — cosi' il verso si legge
   // dalla posizione, non solo dalla freccia.
   if (daColonna > 0 || aDestra > 0) {
-    const prima = daColonna > 0 ? `← ${Math.ceil(daColonna / PASSO)} prompt prima` : '';
-    const dopo = aDestra > 0 ? `${Math.ceil(aDestra / PASSO)} prompt dopo →` : '';
+    const prima = daColonna > 0 ? T.albero.promptPrima(Math.ceil(daColonna / PASSO)) : '';
+    const dopo = aDestra > 0 ? T.albero.promptDopo(Math.ceil(aDestra / PASSO)) : '';
     const stacco = Math.max(1, spazioColonne - prima.length - dopo.length);
     righe.push(`  ${normale(`${prima}${' '.repeat(stacco)}${dopo}`.replace(/\s+$/, ''))}`);
   }
@@ -667,13 +665,13 @@ export function schermata(
   // turno: dice quanto pesa il punto su cui sta il cursore prima di sceglierlo.
   const cambiate = cambiamenti(scelto);
   righe.push(
-    `  ${arancione(quando(scelto))}  ${cambiate ? `${cambiate}  ` : ''}${normale('riparti da qui')}`,
+    `  ${arancione(quando(scelto))}  ${cambiate ? `${cambiate}  ` : ''}${normale(T.albero.ripartiDaQui)}`,
   );
   for (const riga of testoScelto) righe.push(`  ${arancioneForte(riga)}`);
 
   if (spazioStoria > 0) {
     const storia = antenati(vista, selezione);
-    righe.push('', `  ${normale(`precedenti: ${storia.length}`)}`);
+    righe.push('', `  ${normale(T.albero.precedenti(storia.length))}`);
     // 4 di rientro, l'orario, 2 di stacco: quel che resta e' per il testo.
     const larghezzaTesto = spazioColonne - 4 - quando(null).length;
     for (const voce of storia.slice(0, spazioStoria)) {
@@ -685,41 +683,28 @@ export function schermata(
   // Scelta di cosa riportare indietro: prende il posto della barra dei tasti, con
   // l'albero ancora a schermo perche' la scelta riguarda il punto selezionato.
   if (menu !== null) {
-    righe.push('', `  ${normale('riporta indietro:')}`);
+    righe.push('', `  ${normale(T.albero.riportaIndietro)}`);
     VOCI_RIPRISTINO.forEach((voce, indice) => {
       const riga = `  ${indice === menu ? '▸' : ' '} ${indice + 1}. ${voce.etichetta}`;
       righe.push(indice === menu ? arancioneForte(riga) : normale(riga));
     });
-    righe.push(
-      `  ${grigio(
-        primaCheEntra(
-          [
-            '↑↓ scegli   1-3 scelta diretta   invio conferma   esc torna all albero',
-            '↑↓ scegli   invio conferma   esc albero',
-            '↑↓ invio esc',
-          ],
-          spazioColonne,
-        ),
-      )}`,
-    );
+    righe.push(`  ${grigio(primaCheEntra(T.albero.legendaMenu, spazioColonne))}`);
     return righe.map((riga) => tagliaVisibile(riga, colonne));
   }
 
   // Barra dei tasti, in tre lunghezze: su un terminale stretto si accorcia invece
   // di andare a capo, che sfaserebbe il disegno.
-  const cosaFaInvio = ripristinaCodice
-    ? 'invio = riparti (ripristina anche i file)'
-    : 'invio = riparti (i file restano come sono)';
+  const cosaFaInvio = ripristinaCodice ? T.albero.invioConFile : T.albero.invioSenzaFile;
   // Le varianti stanno in ordine di preferenza, non solo di lunghezza: i tasti
   // in piu' valgono piu' della forma distesa delle spiegazioni, quindi la
   // variante che li nomina viene prima di quella piu' lunga che li tace.
   const pezzi = (...voci) => voci.filter(Boolean).join('   ');
   const conExtra = extra.corta
     ? [
-        pezzi('←→ ad avanti e indietro', '↑↓ ws cambia ramo', cosaFaInvio, extra.lunga, `esc = ${esc.lunga}`),
-        pezzi('←→ ad avanti e indietro', '↑↓ ws ramo', cosaFaInvio, extra.corta, `esc = ${esc.corta}`),
-        pezzi('←→ ad', '↑↓ ws ramo', cosaFaInvio, extra.corta, `esc = ${esc.corta}`),
-        pezzi('←→ ad', '↑↓ ws ramo', 'invio = riparti', extra.corta, `esc = ${esc.corta}`),
+        pezzi(T.albero.avantiIndietro, T.albero.cambiaRamo, cosaFaInvio, extra.lunga, `esc = ${esc.lunga}`),
+        pezzi(T.albero.avantiIndietro, T.albero.ramo, cosaFaInvio, extra.corta, `esc = ${esc.corta}`),
+        pezzi(T.albero.frecce, T.albero.ramo, cosaFaInvio, extra.corta, `esc = ${esc.corta}`),
+        pezzi(T.albero.frecce, T.albero.ramo, T.albero.invioRiparti, extra.corta, `esc = ${esc.corta}`),
       ]
     : [];
 
@@ -729,10 +714,10 @@ export function schermata(
       primaCheEntra(
         [
           ...conExtra,
-          pezzi('←→ ad avanti e indietro', '↑↓ ws cambia ramo', cosaFaInvio, `esc = ${esc.lunga}`),
-          pezzi('←→ ad indietro/avanti', '↑↓ ws ramo', cosaFaInvio, `esc = ${esc.corta}`),
-          pezzi('←→ ad', '↑↓ ws', 'invio = riparti', `esc = ${esc.corta}`),
-          `←→↑↓ muovi  invio riparti  esc ${esc.corta}`,
+          pezzi(T.albero.avantiIndietro, T.albero.cambiaRamo, cosaFaInvio, `esc = ${esc.lunga}`),
+          pezzi(T.albero.avantiIndietroCorto, T.albero.ramo, cosaFaInvio, `esc = ${esc.corta}`),
+          pezzi(T.albero.frecce, T.albero.frecceCorte, T.albero.invioRiparti, `esc = ${esc.corta}`),
+          T.albero.barraMinima(esc.corta),
         ],
         spazioColonne,
       ),

@@ -7,7 +7,7 @@ const BEL = String.fromCharCode(7);
 function testRimuoveIlTitoloDiConPty() {
   // La sequenza reale osservata: ConPTY annuncia il percorso dell'eseguibile e
   // il titolo della tab diventa "...\claude.exe".
-  const dati = `${ESC}]0;C:\\Users\\sasha\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe${BEL}`;
+  const dati = `${ESC}]0;C:\\Users\\utente\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe${BEL}`;
   assert.equal(senzaTitolo(dati), '', 'la richiesta di titolo viene rimossa');
 }
 

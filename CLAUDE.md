@@ -32,6 +32,8 @@ Sasha, singolo sviluppatore.
 | `src/conversazioni.js` | Selettore delle conversazioni passate: albero in cima, elenco sotto |
 | `src/vista.js` | Albero orizzontale: griglia, colore, navigazione, composizione della pagina |
 | `src/stile.js` | Tavolozza dei colori, in un posto solo |
+| `src/lingua.js` | Tutti i testi a schermo, inglese e italiano; scelta con `CB_LINGUA` |
+| `src/prove.js` | Esecutore delle prove: un processo per file, lingua fissata a `it` |
 | `src/albero.js` | Collasso ai soli prompt utente; elenco verticale numerato per i comandi da fuori |
 | `src/anteprima.js` | Mostra l'overlay su una sessione vera, senza lanciare Claude |
 | `src/indice.js` | Scansione globale di `~/.claude/projects` con cache su mtime+size |
@@ -58,7 +60,8 @@ Regole del contratto con il chiamante:
 ## 6. Comandi
 
 ```
-npm test                          esegue le prove (assert, nessun framework)
+npm test                          esegue le prove (src/prove.js: un processo per file)
+node bin/cb.js --version          numero di versione
 node src/anteprima.js [file]      l'overlay su una sessione vera, senza lanciare Claude
 node src/anteprima.js --menu[=n]  la stessa schermata con il menu del ripristino aperto
 node src/cartelle.js              il selettore delle cartelle, da solo
@@ -236,6 +239,28 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
 - **Nel selettore delle conversazioni il pannello dell'albero ha altezza fissa**: gli alberi
   hanno altezze diverse, e un pannello che si adatta fa saltare separatore ed elenco a ogni
   freccia. Il riempimento è invisibile, il salto no.
+- **Nessuna stringa visibile all'utente sta nel codice**: stanno tutte in `src/lingua.js`,
+  che ne tiene due tabelle (`EN`, `IT`) e ne esporta una sola, `T`, scelta da `CB_LINGUA` o
+  dal locale di sistema. Una stringa scritta altrove è una stringa non tradotta, che per
+  metà degli utenti diventa la lingua sbagliata. `src/lingua.test.js` confronta le due
+  tabelle fra loro: stesse voci, e varianti di legenda in ordine di lunghezza decrescente
+  **dentro ogni lingua** — è quell'ordine, non il confronto fra le lingue, che rende
+  corretto `primaCheEntra`.
+- **Le prove girano con la lingua fissata** (`src/prove.js` impone `CB_LINGUA=it`): senza,
+  confrontando stringhe a schermo passerebbero o fallirebbero a seconda del locale della
+  macchina, cioè verdi qui e rosse in CI. Che l'inglese sia completo lo dice `lingua.test.js`,
+  che non guarda lo schermo.
+- **Un processo per file di prova.** `overlay.test.js` finisce con `process.exit(0)` — gli
+  servono handle che restano aperti — e caricando tutto in un processo solo quella riga si
+  porta via le prove che vengono dopo, uscendo 0: verde, con metà delle prove mai eseguite.
+- **Gli import dinamici del wrapper stanno dentro il `try` che esce 78.** `wrapper.js`
+  importa `node-pty` in cima: su una macchina dove il modulo nativo non è compilato è
+  l'import stesso a lanciare, e fuori dal try quell'errore usciva 1 — cioè il ripiego su
+  Claude mancava esattamente nel caso per cui esiste.
+- L'eseguibile di Claude si cerca prima nei percorsi noti e poi nel `PATH`
+  (`src/eseguibile.js`): i percorsi noti sono Windows, il `PATH` copre npm, homebrew e nvm
+  altrove. Su Windows si cerca solo `claude.exe`, mai `claude`: quello è lo shim, che
+  node-pty non lancia.
 - Le prove stanno in `src/transcript.test.js`, `src/tasti.test.js`, `src/titolo.test.js`,
   `src/vista.test.js`, `src/wrapper.test.js`, `src/overlay.test.js`, `src/cartelle.test.js` e
   `src/conversazioni.test.js`, con `assert`. I cicli interattivi dei selettori si provano con
@@ -246,10 +271,14 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
 
 ## 8. Riferimenti docs
 
+`docs/` **non è nel repo pubblico** (è in `.gitignore` dalla pubblicazione su GitHub): è il
+quaderno di lavoro, resta solo sul disco. Quello che serve a un utente sta nei due README.
+
 - `docs/STATO.md` — stato corrente, problemi aperti, decisioni, backlog
 - `docs/brief.md` — spec, vincoli scoperti e loro riscontro
 - `docs/architettura.md` — stack, componenti, flussi, modello dei dati
 - `docs/bug-risolti.md` — registro dei bug con causa e fix (grep-abile)
 - `docs/procedure.md` — runbook delle procedure multi-passo
 - `docs/storico-sessioni.md` — archivio delle sessioni
-- `README.md` — uso e installazione
+- `README.md` — uso e installazione, in inglese (è la vetrina del repo)
+- `README.it.md` — la stessa cosa in italiano; le due vanno tenute allineate

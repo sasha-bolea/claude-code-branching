@@ -1,3 +1,5 @@
+import { T } from './lingua.js';
+
 const ESC = 0x1b;
 
 // Esc in codifica kitty, con eventuali modificatori: ESC[27u, ESC[27;1u, …
@@ -201,7 +203,7 @@ export function analizzaScorciatoia(testo) {
     scorciatoia.carattere = tasto;
     scorciatoia.vk = tasto.toUpperCase().charCodeAt(0);
   } else {
-    throw new Error(`scorciatoia non riconosciuta: ${testo}`);
+    throw new Error(T.wrapper.scorciatoiaIgnota(testo));
   }
 
   return scorciatoia;

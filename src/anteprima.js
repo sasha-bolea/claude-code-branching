@@ -16,6 +16,7 @@ import { leggiTranscript, unisciAlberi } from './transcript.js';
 import { sessioniDellaFamiglia } from './percorsi.js';
 import { componiVista, schermata, puntaRamoAttivo } from './vista.js';
 import { grigio } from './stile.js';
+import { T } from './lingua.js';
 
 const argomenti = process.argv.slice(2);
 const richiestaMenu = argomenti.find((a) => a.startsWith('--menu'));
@@ -48,7 +49,7 @@ const selezione = puntaRamoAttivo(vista);
 const righe = schermata(vista, selezione, {
   colonne,
   altezza,
-  extra: { lunga: 'c = altra conversazione   p = altra cartella', corta: 'c/p altra conv.' },
+  extra: { lunga: T.albero.extraLunga, corta: T.albero.extraCorta },
   menu,
 });
 for (const riga of righe) console.log(riga);

@@ -17,6 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { azioniNavigazione } from './tasti.js';
 import { arancione, arancioneForte, grigio, normale } from './stile.js';
+import { T } from './lingua.js';
 
 // Caratteri dell'albero: gli stessi giunti del disegno dei rami.
 const GIUNZIONE = '├';
@@ -32,12 +33,7 @@ const RIGHE_FISSE = 4;
 
 // Legende in ordine di lunghezza: nessuna riga puo' eccedere la larghezza del
 // terminale, o il capo automatico sfaserebbe il disegno sotto.
-const LEGENDE = [
-  '↑↓ scorri   →← apri/chiudi   spazio apri/chiudi   r cambia modo   invio conferma   esc annulla',
-  '↑↓ scorri   →← apri/chiudi   r modo   invio ok   esc annulla',
-  '↑↓ →←   r modo   invio ok   esc annulla',
-  '↑↓ →← r invio esc',
-];
+const LEGENDE = T.cartelle.legende;
 
 // Cartella dei progetti, mostrata come unico figlio della home.
 // Configurabile perche' il percorso e' una scelta personale: senza CB_RADICE si
@@ -129,14 +125,14 @@ export function disegna({ righe, indice, ripresa }, altezza, larghezza) {
   let inizio = Math.max(0, indice - Math.floor(visibili / 2));
   inizio = Math.min(inizio, Math.max(0, righe.length - visibili));
 
-  const modo = ripresa ? 'ripresa della conversazione (-r)' : 'avvio normale';
+  const modo = ripresa ? T.cartelle.modoRipresa : T.cartelle.modoNormale;
   // Varianti della legenda dalla piu' distesa alla piu' stretta: si prende la
   // prima che ci sta. Tagliarla e basta perderebbe proprio l'ultimo tasto.
   const legenda =
     LEGENDE.find((testo) => testo.length + 2 <= larghezza) ?? LEGENDE[LEGENDE.length - 1];
 
   const pagina = [
-    arancioneForte(taglia('  Cartella di lavoro per Claude', larghezza)),
+    arancioneForte(taglia(T.cartelle.titolo, larghezza)),
     arancione(taglia(`  ${modo}`, larghezza)),
     '',
   ];

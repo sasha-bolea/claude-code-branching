@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
+import { T } from './lingua.js';
 
 // Ripristino del codice leggendo l'archivio di copie di Claude Code.
 //
@@ -325,10 +326,10 @@ export async function ripristinaA({
 // ritorna: stringa
 export function riassumiRipristino(esito) {
   const pezzi = [];
-  if (esito.ripristinati.length) pezzi.push(`${esito.ripristinati.length} file ripristinati`);
-  if (esito.cancellati.length) pezzi.push(`${esito.cancellati.length} rimossi`);
-  if (esito.mancanti.length) pezzi.push(`${esito.mancanti.length} non ripristinabili (copie scadute)`);
-  if (esito.fuori.length) pezzi.push(`${esito.fuori.length} fuori dalla cartella, non toccati`);
-  if (pezzi.length === 0) return "i file erano gia' in quello stato";
+  if (esito.ripristinati.length) pezzi.push(T.codice.ripristinati(esito.ripristinati.length));
+  if (esito.cancellati.length) pezzi.push(T.codice.cancellati(esito.cancellati.length));
+  if (esito.mancanti.length) pezzi.push(T.codice.mancanti(esito.mancanti.length));
+  if (esito.fuori.length) pezzi.push(T.codice.fuori(esito.fuori.length));
+  if (pezzi.length === 0) return T.codice.giaCosi;
   return pezzi.join(', ');
 }
