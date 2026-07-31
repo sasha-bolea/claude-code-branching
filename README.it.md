@@ -62,6 +62,30 @@ npm install
 npm link          # rende `cb` disponibile da qualsiasi cartella
 ```
 
+## Primo avvio
+
+La prima volta che lanci `cb` ti fa tre domande, una volta sola:
+
+```
+  cb  impostazioni
+  si scelgono una volta — cb --impostazioni per tornarci
+
+  ▸ lingua              italiano
+    cartella di lavoro  ~\Documents\REPOSITORY
+    scorciatoia         f2
+
+    fatto
+
+  ↑↓ scegli l'impostazione   ←→ cambia   invio agisce sulla riga   esc tieni queste
+```
+
+`↑↓` passano da un'impostazione all'altra, `←→` cambiano il valore, invio agisce sulla riga
+dove sei — sulla cartella di lavoro apre l'albero delle cartelle. Esc tiene quello che vedi:
+la schermata non torna più da sola, si riapre con `cb --impostazioni`.
+
+Le impostazioni stanno in `~/.claude/cb/impostazioni.json`. Le variabili d'ambiente
+continuano a vincere su di esse, quindi niente di quanto scritto sotto cambia.
+
 ## Uso
 
 `cb` si lancia al posto di `claude`. Lavori normalmente; quando premi la scorciatoia
@@ -92,6 +116,7 @@ cb ls [filtro]          elenca le sessioni di tutti i progetti
 cb tree <sessione>      albero dei rami di una sessione
 cb open <sessione> [n]  riprendi da fuori, opzionalmente dal punto n
 cb pick                 catalogo interattivo da fuori
+cb --impostazioni       schermata delle impostazioni (la prima volta si apre da sola)
 cb --version            numero di versione
 ```
 
@@ -104,6 +129,9 @@ cb --version            numero di versione
 | `CB_RADICE` | radice dell'albero delle cartelle (default `~/Documents/REPOSITORY`, altrimenti la home) |
 | `CB_CLAUDE_EXE` | percorso completo dell'eseguibile di Claude Code, per installazioni non standard |
 | `CB_CARTELLA_SCELTA` | file in cui cb scrive la cartella scelta, per la shell chiamante |
+| `CB_IMPOSTAZIONI` | percorso del file delle impostazioni, se lo vuoi altrove |
+
+Ordine di precedenza, per tutte: **variabile d'ambiente → file delle impostazioni → predefinito.**
 
 Per fissare la scorciatoia una volta per tutte: `setx CB_TASTO "f2"` su Windows, oppure
 `export CB_TASTO=f2` nel `.bashrc` / `.zshrc`.

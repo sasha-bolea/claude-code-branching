@@ -63,6 +63,30 @@ npm install
 npm link          # makes `cb` available from any folder
 ```
 
+## First run
+
+The first time you start `cb` it asks three things, once:
+
+```
+  cb  settings
+  chosen once, remembered — cb --impostazioni to come back
+
+  ▸ language            English
+    work folder         ~/projects
+    shortcut            f2
+
+    fatto
+
+  ↑↓ pick the setting   ←→ change   enter acts on the row   esc keep these
+```
+
+`↑↓` move between settings, `←→` change the value, enter acts on the row you are on — on the
+work folder it opens the folder tree. Esc keeps what is on screen: the screen never comes
+back on its own, `cb --impostazioni` reopens it.
+
+Settings live in `~/.claude/cb/impostazioni.json`. Environment variables still win over them,
+so nothing documented below changes.
+
 ## Use
 
 Run `cb` where you would run `claude`. You work as usual; when you press the shortcut the
@@ -92,6 +116,7 @@ cb ls [filter]          list the sessions of every project
 cb tree <session>       branch tree of a session
 cb open <session> [n]   resume from outside, optionally from point n
 cb pick                 interactive catalogue from outside
+cb --impostazioni       settings screen (opens by itself the first time)
 cb --version            version number
 ```
 
@@ -104,6 +129,9 @@ cb --version            version number
 | `CB_RADICE` | root of the folder picker tree (default `~/Documents/REPOSITORY`, else your home) |
 | `CB_CLAUDE_EXE` | full path of the Claude Code executable, for non-standard installs |
 | `CB_CARTELLA_SCELTA` | file where cb writes the folder you picked, for the calling shell |
+| `CB_IMPOSTAZIONI` | path of the settings file, if you want it somewhere else |
+
+Order of precedence, for all of them: **environment variable → settings file → default.**
 
 To set the shortcut once and for all: `setx CB_TASTO "f2"` on Windows, or
 `export CB_TASTO=f2` in your `.bashrc` / `.zshrc`.

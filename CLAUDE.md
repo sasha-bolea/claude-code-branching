@@ -33,6 +33,8 @@ Sasha, singolo sviluppatore.
 | `src/vista.js` | Albero orizzontale: griglia, colore, navigazione, composizione della pagina |
 | `src/stile.js` | Tavolozza dei colori, in un posto solo |
 | `src/lingua.js` | Tutti i testi a schermo, inglese e italiano; scelta con `CB_LINGUA` |
+| `src/impostazioni.js` | Lettura/scrittura di `~/.claude/cb/impostazioni.json`, precedenza dei valori |
+| `src/configura.js` | Schermata del primo avvio: lingua, cartella di lavoro, scorciatoia |
 | `src/prove.js` | Esecutore delle prove: un processo per file, lingua fissata a `it` |
 | `src/albero.js` | Collasso ai soli prompt utente; elenco verticale numerato per i comandi da fuori |
 | `src/anteprima.js` | Mostra l'overlay su una sessione vera, senza lanciare Claude |
@@ -65,6 +67,7 @@ node bin/cb.js --version          numero di versione
 node src/anteprima.js [file]      l'overlay su una sessione vera, senza lanciare Claude
 node src/anteprima.js --menu[=n]  la stessa schermata con il menu del ripristino aperto
 node src/cartelle.js              il selettore delle cartelle, da solo
+node src/configura.js             la schermata delle impostazioni (scrive su un file di prova)
 node src/conversazioni.js [dir]   il selettore delle conversazioni, da solo
 node src/verifica-reale.js [file] verifica il parser su una sessione vera
 node bin/cb.js ls                 catalogo globale
@@ -255,6 +258,22 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   tabelle fra loro: stesse voci, e varianti di legenda in ordine di lunghezza decrescente
   **dentro ogni lingua** — è quell'ordine, non il confronto fra le lingue, che rende
   corretto `primaCheEntra`.
+- **La precedenza delle impostazioni è ambiente → file → predefinito** (`impostazione` in
+  `src/impostazioni.js`). L'ambiente per primo perché è la scelta più esplicita: chi scrive
+  `CB_TASTO=f5 cb` per una volta non vuole che il file glielo ignori, e tutto ciò che il
+  README documenta sulle variabili continua a valere. `impostazioni.js` **non importa
+  `lingua.js`**: è `lingua.js` a leggere di lì quale lingua è stata scelta, e importarsi a
+  vicenda sarebbe un ciclo.
+- **Cambiare lingua a processo avviato non basta.** `T` si risolve all'import, e `vista.js`
+  ne cattura `LEGENDA` e `VOCI_RIPRISTINO` in costanti: dopo la schermata del primo avvio,
+  se la lingua scelta è diversa da `LINGUA`, `bin/cb.js` si rilancia con `spawnSync` — una
+  volta sola nella vita, ed è l'unico modo perché la prima sessione non esca metà in una
+  lingua e metà nell'altra.
+- **Le azioni della tastiera sono stringhe, non oggetti**: `azioniNavigazione` produce
+  `'giu'`, `'conferma'`, e ogni `applicaAzione` fa `switch (azione)`. Scrivendo
+  `switch (azione.tipo)` la schermata non risponde a niente, e le prove unitarie che passano
+  `{tipo:'giu'}` a mano non se ne accorgono: se ne accorge solo la prova col terminale finto.
+  È già successo scrivendo `configura.js`.
 - **Le prove girano con la lingua fissata** (`src/prove.js` impone `CB_LINGUA=it`): senza,
   confrontando stringhe a schermo passerebbero o fallirebbero a seconda del locale della
   macchina, cioè verdi qui e rosse in CI. Che l'inglese sia completo lo dice `lingua.test.js`,

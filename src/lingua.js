@@ -10,6 +10,8 @@
 // larghezza del terminale (`primaCheEntra` in vista.js): una traduzione piu'
 // lunga farebbe perdere una variante sui terminali stretti.
 
+import { impostazione } from './impostazioni.js';
+
 // Glifi dell'albero, ripetuti nelle legende. Restano in vista.js, che li disegna:
 // qui servono solo per comporre il testo della legenda.
 const VUOTO = '◯';
@@ -33,6 +35,8 @@ cb — branching for Claude Code conversations
   cb tree <session>     show the branch tree of a session
   cb open <session> [n]   resume a session from outside, optionally from branch n
   cb pick               interactive catalogue: pick a session, then a branch
+  cb --impostazioni     settings screen: language, work folder, shortcut
+                        (it opens by itself the first time)
   cb --version          version number
   cb --help             this text
 
@@ -104,6 +108,26 @@ with CB_LINGUA (en, it).
     extraCorta: 'c/p other conv.',
     escElencoLunga: 'back to the list',
     escElencoCorta: 'list',
+  },
+
+  // src/configura.js — schermata delle impostazioni, al primo avvio
+  configura: {
+    titolo: 'settings',
+    sottotitolo: 'chosen once, remembered — cb --impostazioni to come back',
+    voci: {
+      lingua: 'language',
+      radice: 'work folder',
+      scorciatoia: 'shortcut',
+      fatto: 'done',
+    },
+    nomiLingua: { it: 'italiano', en: 'English' },
+    scegliCartella: 'enter to pick',
+    consigliata: 'recommended',
+    legende: [
+      '↑↓ pick the setting   ←→ change   enter acts on the row   esc keep these',
+      '↑↓ setting   ←→ change   enter acts   esc keep',
+      '↑↓ ←→ enter esc',
+    ],
   },
 
   // src/cartelle.js — selettore della cartella di lavoro
@@ -202,6 +226,8 @@ cb — branching per conversazioni Claude Code
   cb tree <sessione>    mostra l'albero dei rami di una sessione
   cb open <sessione> [n]  riprendi una sessione da fuori, opzionalmente dal ramo n
   cb pick               catalogo interattivo: scegli sessione, poi ramo
+  cb --impostazioni     schermata delle impostazioni: lingua, cartella, scorciatoia
+                        (la prima volta si apre da sola)
   cb --version          numero di versione
   cb --aiuto            questo testo
 
@@ -269,6 +295,25 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     extraCorta: 'c/p altra conv.',
     escElencoLunga: "torna all'elenco",
     escElencoCorta: 'elenco',
+  },
+
+  configura: {
+    titolo: 'impostazioni',
+    sottotitolo: 'si scelgono una volta — cb --impostazioni per tornarci',
+    voci: {
+      lingua: 'lingua',
+      radice: 'cartella di lavoro',
+      scorciatoia: 'scorciatoia',
+      fatto: 'fatto',
+    },
+    nomiLingua: { it: 'italiano', en: 'English' },
+    scegliCartella: 'invio per sceglierla',
+    consigliata: 'consigliata',
+    legende: [
+      "↑↓ scegli l'impostazione   ←→ cambia   invio agisce sulla riga   esc tieni queste",
+      '↑↓ impostazione   ←→ cambia   invio agisce   esc tieni',
+      '↑↓ ←→ invio esc',
+    ],
   },
 
   cartelle: {
@@ -344,9 +389,19 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
   },
 };
 
-// Lingua in uso. CB_LINGUA ha la precedenza; senza, si guarda il locale di
-// sistema, cosi' chi ha il computer in italiano non deve configurare niente.
-// Qualsiasi valore che non cominci per "it" vale inglese.
-const scelta = process.env.CB_LINGUA || Intl.DateTimeFormat().resolvedOptions().locale || 'en';
+// Lingua in uso: CB_LINGUA, poi quella scelta nelle impostazioni, poi il locale
+// di sistema — cosi' chi ha il computer in italiano non deve configurare niente
+// nemmeno prima di aver visto la schermata. Qualsiasi valore che non cominci per
+// "it" vale inglese.
+//
+// L'import va in fondo e non in cima solo per leggibilita': impostazioni.js non
+// importa nulla da qui, quindi non c'e' ciclo.
+const scelta = impostazione('lingua', Intl.DateTimeFormat().resolvedOptions().locale || 'en');
 
-export const T = scelta.toLowerCase().startsWith('it') ? IT : EN;
+// Lingua effettivamente in uso, normalizzata. Serve a chi deve accorgersi che la
+// scelta dell'utente e' diversa da quella con cui il processo e' partito: `T` si
+// risolve all'import, e vista.js ne cattura legenda e voci del menu in costanti,
+// quindi cambiarla a processo avviato non basterebbe.
+export const LINGUA = scelta.toLowerCase().startsWith('it') ? 'it' : 'en';
+
+export const T = LINGUA === 'it' ? IT : EN;

@@ -17,6 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { azioniNavigazione } from './tasti.js';
 import { arancione, arancioneForte, grigio, normale } from './stile.js';
+import { impostazione } from './impostazioni.js';
 import { T } from './lingua.js';
 
 // Caratteri dell'albero: gli stessi giunti del disegno dei rami.
@@ -40,9 +41,10 @@ const LEGENDE = T.cartelle.legende;
 // prova ~/Documents/REPOSITORY e, se non c'e', si mostra la home per intero.
 // ritorna: percorso della radice
 export function radicePredefinita() {
-  if (process.env.CB_RADICE) return process.env.CB_RADICE;
   const candidato = path.join(os.homedir(), 'Documents', 'REPOSITORY');
-  return fs.existsSync(candidato) ? candidato : os.homedir();
+  const ripiego = fs.existsSync(candidato) ? candidato : os.homedir();
+  // CB_RADICE prima, poi la cartella scelta nelle impostazioni, poi il ripiego.
+  return impostazione('radice', ripiego);
 }
 
 // Figli di una cartella nell'albero.

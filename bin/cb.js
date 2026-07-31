@@ -2,16 +2,19 @@
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 import { stdin, stdout } from 'node:process';
 import { leggiTranscript } from '../src/transcript.js';
 import { scansiona, risolviSessione } from '../src/indice.js';
 import { disegnaAlbero } from '../src/albero.js';
 import { lanciaClaude, lanciaClaudeDiretto, argomentiRipresa } from '../src/lancia.js';
 import { attivaRamoDi } from '../src/attiva.js';
-import { T } from '../src/lingua.js';
+import { impostazione, impostazioniPresenti } from '../src/impostazioni.js';
+import { LINGUA, T } from '../src/lingua.js';
 
-// Scorciatoia che apre l'albero. Modificabile con CB_TASTO o con --tasto.
-const SCORCIATOIA_PREDEFINITA = process.env.CB_TASTO || 'esc esc';
+// Scorciatoia che apre l'albero: CB_TASTO, poi quella scelta nelle impostazioni,
+// poi il predefinito. --tasto sulla riga di comando vince su tutti.
+const SCORCIATOIA_PREDEFINITA = impostazione('scorciatoia', 'esc esc');
 
 // Codice di uscita usato quando cb non riesce ad avviarsi (pty non disponibile,
 // eseguibile di Claude non trovato, scorciatoia non valida). Chi lancia cb lo
@@ -133,6 +136,19 @@ async function main() {
     return;
   }
 
+  // La schermata delle impostazioni, richiesta a mano. Serve un terminale: senza,
+  // non c'e' niente da mostrare e niente da premere.
+  if (comando === '--impostazioni') {
+    if (!process.stdin.isTTY) {
+      console.error(`cb: ${T.wrapper.serveTerminale}`);
+      process.exitCode = 1;
+      return;
+    }
+    const { configura } = await import('../src/configura.js');
+    await configura();
+    return;
+  }
+
   // Modalita' predefinita: Claude avvolto, con l'albero a portata di tasto.
   // --tasto e --tasti sono opzioni combinabili, non comandi alternativi.
   const argomenti = [comando, ...resto].filter(Boolean);
@@ -143,6 +159,27 @@ async function main() {
     if (stampa || !process.stdin.isTTY) {
       const codice = await lanciaClaudeDiretto(argomentiClaude);
       process.exit(codice ?? 0);
+    }
+
+    // Primo avvio: le tre domande che hanno senso solo all'inizio. Sta dopo il
+    // ramo non interattivo apposta — con -p o senza terminale non c'e' niente da
+    // mostrare, e chiedere bloccherebbe uno script.
+    let predefinita = SCORCIATOIA_PREDEFINITA;
+    if (!impostazioniPresenti()) {
+      const { configura } = await import('../src/configura.js');
+      const scelte = await configura();
+      predefinita = scelte.scorciatoia;
+
+      // La lingua era gia' stata risolta all'import, e vista.js ne ha catturato
+      // legenda e voci del menu: cambiarla adesso lascerebbe la prima sessione
+      // mezza in una lingua e mezza nell'altra. Rilanciarsi e' l'unico modo di
+      // essere coerenti da subito, e succede una volta sola nella vita.
+      if (scelte.lingua !== LINGUA) {
+        const esito = spawnSync(process.execPath, [process.argv[1], ...process.argv.slice(2)], {
+          stdio: 'inherit',
+        });
+        process.exit(esito.status ?? 0);
+      }
     }
 
     // Dentro il try ci stanno anche gli import dinamici, non solo l'avvio: il
@@ -195,14 +232,14 @@ async function main() {
               .slice(posizioneTasto + 1)
               .filter((a) => !a.startsWith('--'))
               .join(' ')
-          : SCORCIATOIA_PREDEFINITA;
+          : predefinita;
 
       // Va atteso: avvia() e' asincrona (puo' passare dal ripristino di un ramo),
       // e senza await il suo errore non arriverebbe a questo catch.
       await new Wrapper({
         cwd: cartella,
         argomentiExtra: perClaude,
-        scorciatoia: scorciatoia || SCORCIATOIA_PREDEFINITA,
+        scorciatoia: scorciatoia || predefinita,
         ripristinaCodice: !argomenti.includes('--senza-file'),
         diagnostica,
       }).avvia({ ripartenza });
