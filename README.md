@@ -19,8 +19,11 @@ di Claude Code che possono cambiare a ogni aggiornamento:
 
 - **legge e scrive** i transcript in `~/.claude/projects/` (solo in append, mai cancellando,
   più i file delle nuove sessioni che crea);
-- usa flag **non documentati** del CLI (`--resume-session-at`, `--rewind-files`);
-- il ripristino dei file **sovrascrive** il lavoro non salvato successivo al punto scelto.
+- **legge l'archivio di copie** con cui Claude Code ripristina i file
+  (`~/.claude/file-history/`), che è un dettaglio interno e può cambiare;
+- il ripristino dei file **sovrascrive** il lavoro non salvato successivo al punto scelto
+  (cb ne tiene una copia in `~/.claude/cb/file-history/`, ma non c'è ancora un comando per
+  ripescarla).
 
 Verificato su Claude Code **v2.1.220**, Windows 11, PowerShell 7. Su Linux e macOS il
 parsing dei transcript funziona, l'intercettazione dei tasti non è stata provata.
@@ -40,11 +43,22 @@ npm link          # rende `cb` disponibile da qualsiasi cartella
 ## Uso
 
 `cb` si lancia al posto di `claude`. Lavori normalmente; quando premi la scorciatoia
-compare l'albero dei rami. Ti muovi con le frecce, premi invio e **conversazione e file**
-tornano a quel punto, in un ramo nuovo, senza uscire dalla sessione.
+compare l'albero dei rami. Ti muovi con le frecce, premi invio e scegli **cosa riportare
+indietro**:
+
+```
+riporta indietro:
+▸ 1. conversazione e codice
+  2. solo la conversazione (i file restano come sono)
+  3. solo il codice (la conversazione resta dov'è)
+```
+
+Le prime due ripartono in un ramo nuovo senza uscire dalla sessione; la terza non riavvia
+nemmeno Claude, riporta solo i file. Accanto all'ora del prompt vedi quanto codice quel
+turno ha cambiato (`+42 -7`).
 
 ⚠️ Il ripristino dei file sovrascrive il lavoro non salvato successivo a quel messaggio.
-Con `--senza-file` torna indietro solo la conversazione.
+Con `--senza-file` la voce preselezionata diventa «solo la conversazione».
 
 ```
 cb                      Claude avvolto: Esc Esc apre l'albero
@@ -164,18 +178,21 @@ Quattro meccanismi. I tre che toccano i dati sono tutti additivi: niente viene c
    scelto** (il prompt e la sua risposta), e lo riprende con `--resume`. Il file di partenza
    non viene toccato: i turni successivi restano nell'albero come ramo in disparte.
 
-3. **Cambiando ramo i file tornano allo stato di quel messaggio**, automaticamente.
-   Claude ha il ripristino (`--rewind-files <uuid-messaggio-utente>`) ma da solo si limita
-   a suggerire il comando: cb lo esegue. Due dettagli scoperti sul campo:
-   - `--rewind-files` gira in modalità non interattiva, e su quel percorso Claude abilita
-     lo storico dei file **solo** se trova `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=1`
-     nell'ambiente. Senza, risponde `File rewinding is not enabled`. cb la imposta.
-   - vale lo stesso vincolo di `--resume-session-at`: il messaggio deve stare nella catena
-     attiva, quindi il ripristino va fatto **dopo** la riattivazione del ramo (punto 4).
+3. **Cambiando ramo i file tornano allo stato di quel turno**, automaticamente.
 
-   `No file checkpoint found` non è un guasto: significa che da quel messaggio i file non
-   sono stati toccati, o che il checkpoint è scaduto. Con `--senza-file` il ripristino non
-   viene fatto e torna indietro solo la conversazione.
+   Claude Code non usa git per i suoi checkpoint: salva copie **integrali** dei file in
+   `~/.claude/file-history/<sessione>/`, annotandole nel transcript accanto ai messaggi.
+   Ogni copia è il contenuto *precedente* alla modifica che l'ha generata, quindi lo stato
+   di un file a un dato istante è la **prima copia successiva** a quell'istante.
+
+   cb legge quell'archivio invece di chiamare il ripristino nativo: niente processo da
+   lanciare, e soprattutto si guardano le copie di **tutta la famiglia** di sessioni —
+   il comando nativo ne conosce una sola, mentre i rami di una conversazione stanno in file
+   diversi. Riscontro: ricostruito lo stato all'inizio di una sessione vera, 20 file su 20
+   identici byte per byte al commit che era HEAD in quel momento.
+
+   Due limiti da conoscere: l'archivio copre **solo i file che Claude ha toccato**, e ha una
+   scadenza di qualche settimana. Per il resto c'è l'hook dei commit (sotto).
 
 4. **L'albero unisce tutta la famiglia di sessioni.** `--fork-session` crea un file nuovo
    che copia la storia **solo fino al punto di fork**: i rami abbandonati restano nel file
@@ -253,18 +270,30 @@ Nota: il titolo della tab viene mantenuto (ConPTY lo sovrascriverebbe col percor
 ## Commit automatici (opzionale)
 
 `hooks/cb-commit.ps1` è un hook `Stop`: a ogni fine turno che ha modificato file, salva
-lo stato del codice su un ref nascosto `refs/cb/<sessione>/auto`.
+**tutto il working tree** su un ref nascosto `refs/cb/<sessione>/auto`.
 
 - Non compare in `git log`, `git branch`, `git tag`, `git status`
 - Non tocca il branch su cui lavori né l'area di staging (usa un index temporaneo)
-- Recupero: `git show refs/cb/<sessione>/auto~2:percorso/file.js`
+- Recupero a mano: `git show refs/cb/<sessione>/auto~2:percorso/file.js`
+
+Nel corpo del commit finisce l'**uuid dell'ultimo messaggio del turno**: è l'aggancio fra
+l'albero e lo storico del codice. Quando la copia nativa di un file è scaduta, cb risale da
+quel punto al commit e ripesca il file da lì — un file per volta, non l'albero intero.
 
 Installazione: aggiungi in `~/.claude/settings.json` sotto `hooks.Stop` (in coda agli
 hook esistenti, senza sostituirli):
 
 ```json
-{ "type": "command", "command": "pwsh -NoProfile -File C:/percorso/di/cb/hooks/cb-commit.ps1" }
+{
+  "type": "command",
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"C:/percorso/di/cb/hooks/cb-commit.ps1\"",
+  "timeout": 60
+}
 ```
+
+⚠️ L'hook gira su **ogni** sessione Claude in **ogni** repo git, non solo su questo progetto.
+Non metterlo `async`: girando in parallelo potrebbe leggere il working tree mentre un cambio
+ramo lo sta riscrivendo.
 
 ## Test
 
@@ -276,10 +305,16 @@ npm test
 
 - Ogni cambio di ramo **riavvia il processo Claude**: non si può ricaricare una
   conversazione in un processo già avviato. Il wrapper lo rende invisibile, non lo evita —
-  vedi il tempo di avvio della TUI a ogni salto.
-- Il ripristino dei file usa i checkpoint nativi, che sono legati al session-id e hanno una
-  retention: su rami vecchi può rispondere `No file checkpoint found`. Per uno storico che
-  non scade servono i commit automatici (sotto).
+  vedi il tempo di avvio della TUI a ogni salto. Fa eccezione «solo il codice», che non
+  tocca la conversazione e quindi non riavvia niente.
+- **Il ripristino copre solo i file che Claude ha toccato.** Le modifiche fatte a mano, da un
+  altro terminale o da una build non sono nell'archivio: ripristinando un punto ottieni un
+  albero misto. I commit automatici coprono tutto, ma oggi servono solo da ripiego per le
+  copie scadute.
+- **Nessuna pulizia**: l'archivio delle copie di cb, i ref `refs/cb/*` e le sessioni troncate
+  create a ogni cambio ramo si accumulano senza scadenza.
+- **Nessun modo di guardare dentro agli archivi**: niente anteprima di cosa cambierà, niente
+  annulla. Il ripristino non è atomico: se una scrittura fallisce a metà, l'albero resta misto.
 - Rubare `Esc Esc` costa 300 ms di ritardo su un Esc singolo (l'interruzione), e sostituisce
   il menu di ripristino nativo. Con una scorciatoia a tasto singolo (`--tasto f2`) il
   ritardo sparisce e il menu nativo resta disponibile.

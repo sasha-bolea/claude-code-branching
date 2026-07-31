@@ -102,29 +102,51 @@ Il profilo si ricarica solo in un **terminale nuovo**.
 
 ---
 
-## Installare i commit automatici del codice (opzionale)
+## Installare i commit automatici del codice
 
-**Quando serve.** Per avere uno storico del codice che non scade (i checkpoint nativi di
-Claude sono legati al session-id e hanno una retention).
+**Quando serve.** Per avere uno storico del codice che non scade e che copre **tutto** il
+working tree: l'archivio di copie di Claude dura qualche settimana e contiene solo i file che
+Claude ha toccato. È anche la sorgente da cui cb ripesca un file quando la copia è scaduta
+(`src/commit.js`).
 
-Aggiungi in `~/.claude/settings.json`, sotto `hooks.Stop`, **in coda** agli hook esistenti
-senza sostituirli:
+**Stato: installato** su questa macchina il 2026-07-31, in `~/.claude/settings.json`, in coda
+agli hook `Stop` esistenti (backup del file prima della modifica in
+`~/.claude/settings.json.backup-2026-07-31`):
 
 ```json
-{ "type": "command", "command": "pwsh -NoProfile -File C:/Users/sasha/Documents/REPOSITORY/personale/cb/hooks/cb-commit.ps1" }
+{
+  "type": "command",
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"C:/Users/sasha/Documents/REPOSITORY/personale/cb/hooks/cb-commit.ps1\"",
+  "timeout": 60,
+  "statusMessage": "cb: salvo lo stato del codice"
+}
 ```
+
+Sincrono di proposito, **non** `async`: girando in parallelo potrebbe leggere il working tree
+mentre un cambio ramo lo sta riscrivendo.
 
 ⚠️ L'hook gira su **ogni** sessione Claude in **ogni** repo git, non solo su questo progetto.
+In un repo con file grossi non ignorati, l'`add -A` a ogni turno si sente.
 
-Verifica su un repo di prova: tocca un file, fai finire un turno, poi
+**Verifica senza aspettare un turno vero** — si lancia l'hook a mano con il payload che
+riceverebbe, in un repo di prova:
 
 ```powershell
-git log --oneline refs/cb/<sessione>/auto   # deve mostrare il commit
-git log --oneline                            # NON deve mostrarlo
-git status                                   # identico a prima
+$payload = '{"session_id":"prova-1111","cwd":"C:/percorso/del/repo","transcript_path":"C:/percorso/t.jsonl"}'
+$payload | pwsh -NoProfile -File .../hooks/cb-commit.ps1
+git log --format='%H%n%B' refs/cb/prova-1111/auto   # commit, con "messaggio: <uuid>" nel corpo
+git log --oneline                                    # NON deve mostrarlo
+git status                                           # identico a prima
 ```
 
-Recupero di un file: `git show refs/cb/<sessione>/auto~2:percorso/file.js`
+Il `transcript_path` serve all'aggancio: l'hook legge le ultime righe del transcript e scrive
+nel messaggio l'uuid dell'ultimo messaggio del turno. Senza quel campo il commit si fa lo
+stesso, ma cb potrà ritrovarlo solo per istante.
+
+Recupero di un file a mano: `git show refs/cb/<sessione>/auto~2:percorso/file.js`
+
+**Disinstallazione**: togliere la voce da `hooks.Stop`. I ref restano; si cancellano con
+`git for-each-ref --format='%(refname)' refs/cb | ForEach-Object { git update-ref -d $_ }`.
 
 ---
 

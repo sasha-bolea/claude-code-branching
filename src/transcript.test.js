@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { leggiTranscript, biforcazioni, foglie, catenaFinoA, unisciAlberi } from './transcript.js';
 import { attivaRamoDi, nelRamoAttivo } from './attiva.js';
+import { alberoPrompt } from './albero.js';
 
 // Scrive un .jsonl temporaneo da un array di record.
 // record: array di oggetti da serializzare una riga ciascuno
@@ -217,8 +218,56 @@ async function testTroncaAlTurnoScelto() {
   fs.unlinkSync(file);
 }
 
+async function testRigheCambiateDaiRisultatiTool() {
+  // Il conteggio viene dal diff che Claude scrive gia' nel transcript
+  // (`toolUseResult.structuredPatch`): non serve confrontare niente a mano.
+  // Un file creato da zero non ha diff, e le sue righe contano come aggiunte.
+  const patch = {
+    structuredPatch: [
+      {
+        oldStart: 1,
+        oldLines: 3,
+        newStart: 1,
+        newLines: 4,
+        lines: [' invariata', '-tolta', '+aggiunta', '+aggiunta anche questa', ' invariata'],
+      },
+    ],
+  };
+
+  const file = scriviTemporaneo([
+    msg('a', null, 'user', 'cambia il codice'),
+    msg('b', 'a', 'assistant', 'ecco'),
+    { ...msg('c', 'b', 'user', '[risultato tool]'), toolUseResult: patch },
+    {
+      ...msg('d', 'c', 'user', '[risultato tool]'),
+      toolUseResult: { type: 'create', content: 'riga uno\nriga due\nriga tre\n' },
+    },
+    msg('e', 'd', 'user', 'altro prompt'), // apre il turno successivo
+    {
+      ...msg('f', 'e', 'user', '[risultato tool]'),
+      toolUseResult: { structuredPatch: [{ lines: ['-una sola tolta'] }] },
+    },
+  ]);
+
+  const albero = await leggiTranscript(file);
+  assert.equal(albero.nodi.get('c').aggiunte, 2, 'le righe + del diff');
+  assert.equal(albero.nodi.get('c').rimozioni, 1, 'e le righe -');
+  assert.equal(albero.nodi.get('d').aggiunte, 3, 'un file creato conta tutte le sue righe');
+  assert.equal(albero.nodi.get('a').aggiunte, 0, 'un prompt di suo non cambia niente');
+
+  // Sul prompt il conteggio e' quello di tutto il turno, fino al prompt dopo.
+  const { perUuid } = alberoPrompt(albero);
+  assert.equal(perUuid.get('a').aggiunte, 5, 'il turno somma i suoi risultati');
+  assert.equal(perUuid.get('a').rimozioni, 1);
+  assert.equal(perUuid.get('e').rimozioni, 1, 'il turno successivo conta per se');
+  assert.equal(perUuid.get('e').aggiunte, 0);
+
+  fs.unlinkSync(file);
+}
+
 const prove = [
   testAlberoConBiforcazione,
+  testRigheCambiateDaiRisultatiTool,
   testUnioneRitrovaIlRamoDelPadre,
   testTroncaAlTurnoScelto,
   testSidechainEsclusi,

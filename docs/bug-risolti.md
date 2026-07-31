@@ -6,6 +6,107 @@ un comportamento del CLI di Claude Code invece di misurarlo.
 
 ---
 
+## 2026-07-31 — Un file cancellato da un ripristino non tornava più indietro
+
+**Sintomo.** Creato un file di test in un turno, ripristinata la conversazione a prima: il file
+spariva, giusto. Ripristinando poi a **dopo** la sua creazione, il file non ricompariva.
+
+**Causa.** Nell'archivio di Claude ogni copia è il contenuto *precedente* a una modifica.
+Un file creato e mai più toccato ha quindi una sola voce — `null`, «non esisteva» — e il suo
+contenuto vero vive **solo sul disco**. La regola «nessuna copia dopo T ⇒ il file è già in
+quello stato» vale finché il working tree è la punta della storia; dopo un ripristino non lo è
+più, e tornando avanti non c'era niente da riscrivere. Il contenuto era stato perso nel momento
+in cui cb l'aveva cancellato senza copiarlo.
+
+**Fix.** `annotaCopia`: prima di sovrascrivere o cancellare, cb salva il contenuto corrente nel
+proprio archivio (`~/.claude/cb/file-history/` + `indice.jsonl`) con `backupTime = adesso`,
+cioè con la stessa semantica delle copie di Claude. Annota anche l'assenza, così ricreare un
+file resta reversibile. Le copie di cb si limitano ai percorsi che la conversazione conosce:
+l'archivio è unico per tutta la macchina.
+
+**Costo del bug.** Il file `test-cb.js` dell'utente non è recuperabile: esisteva solo su disco.
+
+**File.** `src/codice.js`
+
+---
+
+## 2026-07-31 — «Copie scadute» su una conversazione con molte sessioni troncate
+
+**Sintomo.** Dopo una decina di cambi ramo di fila, il ripristino smetteva di funzionare: la
+conversazione cambiava ramo ma il codice restava fermo, e il log diceva
+`ripristino file ok=true esito=1 non ripristinabili (copie scadute)` su copie fatte da pochi
+minuti.
+
+**Causa.** Ogni cambio ramo crea una sessione troncata, che **copia i record `file-history`
+dell'origine ma non le copie dei file**: quelle restano nell'archivio della sessione di
+provenienza. La stessa voce compariva quindi più volte, identica in tutto tranne la cartella
+dei blob, e quella delle sessioni troncate puntava a una cartella inesistente. Finché la
+famiglia era piccola vinceva per caso quella buona; a 19 sessioni ha cominciato a vincere
+sistematicamente quella rotta (le troncate sono le più recenti, quindi lette per prime).
+
+**Fix.** `preferisciCopiePresenti`: fra voci con stesso percorso, stesso istante e stesso nome
+di copia, tiene quella la cui copia esiste davvero sul disco. La chiave include l'istante
+perché due copie omonime di sessioni diverse sono contenuti diversi — le versioni ripartono da
+`v1` in ogni sessione. Verificato sui dati veri: ai tre punti di ripristino dell'utente la
+scelta passava da una copia rotta a quella buona.
+
+**File.** `src/codice.js`
+
+---
+
+## 2026-07-31 — Un ramo passava «sotto» le linee degli altri
+
+**Sintomo.** Nel disegno dell'albero, un ramo finiva in fondo e la sua discesa attraversava le
+righe dei rami disegnati prima, incrociandone le linee.
+
+**Causa.** Due, scoperte una dopo l'altra. (1) La coda dei rami si consumava **in ampiezza**:
+un ramo nato da una catena laterale veniva accodato dopo tutti quelli della linea principale, e
+finiva staccato dal ramo da cui nasceva. (2) Corretto quello, restava il caso vero: i rami di
+una stessa catena si disegnavano da **sinistra a destra**, e un ramo scende dritto lungo la
+colonna della sua forca — quelli nati più a destra dovevano quindi attraversare le fasce già
+disegnate, che partono da colonne minori e si estendono verso destra.
+
+**Fix.** Coda in profondità (`coda.unshift`), e rami di una stessa catena ordinati per colonna
+**decrescente**: ogni discesa passa a sinistra di tutto ciò che è già disegnato, dove non c'è
+niente da attraversare. Con quest'ordine nessuna discesa può incrociare un altro ramo. Effetto
+collaterale: la scelta fra `┣` e `┗` era approssimata (c'era un `ponytail:` che lo ammetteva) e
+ora è corretta, perché l'ultimo ramo di una forca è davvero il più in basso.
+
+**File.** `src/vista.js`
+
+---
+
+## 2026-07-31 — Invio doppio: il menu del ripristino restava aperto
+
+**Sintomo.** Premendo invio due volte in rapida successione, il menu «cosa riportare indietro»
+restava fermo ad aspettare un tasto che era già stato premuto.
+
+**Causa.** I tasti premuti in fretta arrivano in **un'unica lettura di stdin**. La navigazione
+dell'albero tokenizza il buffer e mette in coda le azioni in eccesso (`azioniInAttesa`); il
+menu, aprendosi, attaccava un ascoltatore nuovo e quella coda restava lì.
+
+**Fix.** All'apertura il menu consuma la coda: se conteneva già una conferma, vale come scelta
+della voce preselezionata.
+
+**File.** `src/wrapper.js`
+
+---
+
+## 2026-07-31 — Il conteggio delle righe cambiate restava a zero (colto da una prova)
+
+**Sintomo.** Non arrivato all'utente: la prova nuova falliva con `0 !== 15`.
+
+**Causa.** La somma delle righe cambiate scendeva fra i discendenti usando `nodo.figli`, che
+`leggiTranscript` popola ma che chi costruisce un albero a mano no — e `alberoPrompt` non ci si
+appoggia mai, lavora solo su `parentUuid`. Il conteggio sarebbe rimasto muto, senza dirlo.
+
+**Fix.** `alberoPrompt` costruisce il proprio indice dei figli da `parentUuid`, come fa il
+resto della funzione.
+
+**File.** `src/albero.js`
+
+---
+
 ## 2026-07-31 — Le giunzioni attraversate dal percorso restavano grigie
 
 **Sintomo.** Con tre o più rami dalla stessa forca, scegliendo l'ultimo il percorso arancione

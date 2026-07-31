@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,8 +12,10 @@ import {
 } from './percorsi.js';
 import { leggiTranscript, unisciAlberi } from './transcript.js';
 import { testoLeggibile } from './albero.js';
-import { componiVista, schermata, muovi, puntaRamoAttivo } from './vista.js';
+import { componiVista, schermata, muovi, puntaRamoAttivo, VOCI_RIPRISTINO } from './vista.js';
 import { attivaRamoDi, fineDelTurno } from './attiva.js';
+import { ripristinaA, riassumiRipristino } from './codice.js';
+import { ripiegoDaiCommit } from './commit.js';
 import { senzaTitolo, sequenzaTitolo } from './titolo.js';
 import { creaSessioneTroncata } from './ramo.js';
 import {
@@ -405,6 +406,7 @@ export class Wrapper {
 
     let selezione = puntaRamoAttivo(vista);
     let voce = null;
+    let modo = null;
 
     // Ciclo di navigazione: disegna, aspetta un tasto, ridisegna.
     for (;;) {
@@ -420,6 +422,10 @@ export class Wrapper {
         return;
       }
       if (azione.tipo === 'conferma') {
+        // Invio non riparte piu' subito: prima si sceglie cosa riportare
+        // indietro. Esc nel menu torna all'albero, non chiude l'overlay.
+        modo = await this.scegliModoRipristino(vista, selezione);
+        if (!modo) continue;
         voce = vista.perUuid.get(selezione);
         break;
       }
@@ -432,20 +438,82 @@ export class Wrapper {
       selezione = muovi(vista, selezione, azione.valore);
     }
 
-    this.registra(`scelta uuid=${voce.uuid} testo="${testoLeggibile(voce.testo).slice(0, 40)}"`);
-    await this.cambiaRamo(percorso, albero, voce);
+    this.registra(
+      `scelta uuid=${voce.uuid} modo=${modo} testo="${testoLeggibile(voce.testo).slice(0, 40)}"`,
+    );
+    await this.cambiaRamo(percorso, albero, voce, modo);
+  }
+
+  // Chiede cosa riportare indietro dal punto scelto: la conversazione, il codice
+  // o tutti e due. Sono le stesse tre voci del menu nativo di Claude.
+  //
+  // Si legge con azioniTastiera e non con leggiNavigazione perche' qui servono
+  // anche le cifre, che la navigazione dell'albero scarta.
+  //
+  // vista: risultato di componiVista
+  // selezione: uuid del nodo su cui sta il cursore
+  // ritorna: Promise<'entrambi'|'conversazione'|'codice'|null> — null se si torna
+  //          all'albero con Esc
+  scegliModoRipristino(vista, selezione) {
+    // Preselezione: il caso normale, o "solo la conversazione" se l'utente ha
+    // chiesto di non toccare i file (--senza-file).
+    let indice = this.ripristinaCodice ? 0 : 1;
+
+    // Tasti rimasti in coda dalla navigazione dell'albero: due invii battuti in
+    // fretta arrivano in una lettura sola, e il secondo finisce li'. Senza
+    // consumarlo il menu resterebbe aperto ad aspettare un tasto gia' premuto.
+    const inCoda = this.azioniInAttesa.splice(0);
+    if (inCoda.some((azione) => azione.tipo === 'conferma')) {
+      return Promise.resolve(VOCI_RIPRISTINO[indice].modo);
+    }
+
+    return new Promise((risolvi) => {
+      // Anche il menu va ridisegnato su ridimensionamento: il ridisegno passa
+      // sempre dallo stesso appiglio, che qui punta alla schermata col menu.
+      const ridisegna = () => this.disegnaSchermata(vista, selezione, indice);
+      this.ridisegnaOverlay = ridisegna;
+      ridisegna();
+
+      const concludi = (scelta) => {
+        process.stdin.off('data', ascoltatore);
+        this.ridisegnaOverlay = () => this.disegnaSchermata(vista, selezione);
+        risolvi(scelta);
+      };
+
+      const ascoltatore = (dati) => {
+        for (const azione of azioniTastiera(dati)) {
+          if (azione.tipo === 'annulla') return concludi(null);
+          if (azione.tipo === 'invio') return concludi(VOCI_RIPRISTINO[indice].modo);
+          if (azione.tipo === 'cifra') {
+            const scelto = Number.parseInt(azione.valore, 10) - 1;
+            if (scelto >= 0 && scelto < VOCI_RIPRISTINO.length) return concludi(VOCI_RIPRISTINO[scelto].modo);
+            continue;
+          }
+          if (azione.tipo === 'freccia') {
+            if (azione.valore === 'su') indice = (indice + VOCI_RIPRISTINO.length - 1) % VOCI_RIPRISTINO.length;
+            else if (azione.valore === 'giu') indice = (indice + 1) % VOCI_RIPRISTINO.length;
+            else continue; // destra e sinistra qui non muovono niente
+            ridisegna();
+          }
+        }
+      };
+
+      process.stdin.on('data', ascoltatore);
+    });
   }
 
   // Disegna l'overlay. La composizione sta in vista.js: qui si scrive soltanto,
   // con i ritorni a capo che vuole il terminale in raw mode.
   // vista: risultato di componiVista
   // selezione: uuid del nodo su cui sta il cursore
-  disegnaSchermata(vista, selezione) {
+  // menu: indice della voce del menu di ripristino, o null se si naviga l'albero
+  disegnaSchermata(vista, selezione, menu = null) {
     const righe = schermata(vista, selezione, {
       colonne: process.stdout.columns || 120,
       altezza: process.stdout.rows || 30,
       ripristinaCodice: this.ripristinaCodice,
       extra: { lunga: 'c = altra conversazione   p = altra cartella', corta: 'c/p altra conv.' },
+      menu,
     });
 
     this.scrivi(PULISCI_SCHERMO);
@@ -511,9 +579,13 @@ export class Wrapper {
       if (!conversazione) return this.chiudiOverlay();
 
       this.registra(
-        `cambio conversazione cartella=${cartella} ` +
+        `cambio conversazione cartella=${cartella} modo=${conversazione.modo ?? '-'} ` +
           `scelta=${conversazione.nuova ? 'nuova' : (conversazione.riprendi ?? 'taglio')}`,
       );
+
+      // Serve al ripristino dei file e al cambio ramo: le copie di un ramo vecchio
+      // stanno nell'archivio della sessione che lo ha scritto.
+      if (conversazione.alberi) this.alberiFamiglia = conversazione.alberi;
 
       // La cartella nuova vale per lo spawn di Claude, per la ricerca dei
       // transcript e per il titolo della tab: sono tutti derivati da this.cwd.
@@ -539,15 +611,28 @@ export class Wrapper {
       if (conversazione.riprendi) {
         this.percorsoOrigine = conversazione.percorso;
         this.uuidRipreso = conversazione.voce?.uuid ?? null;
+
+        // "Solo il codice": la conversazione riparte dov'era, i file tornano al
+        // punto scelto nell'albero.
+        if (conversazione.modo === 'codice' && conversazione.voce) {
+          const esito = await this.ripristinaFile(
+            conversazione.albero,
+            conversazione.voce.uuid,
+            conversazione.percorso,
+          );
+          this.registra(`ripristino solo codice da selettore: ${esito.riassunto}`);
+          this.scrivi(`  ${esito.riassunto}\r\n`);
+        }
+
         this.avviaClaude({ riprendi: conversazione.riprendi });
         return;
       }
 
-      this.alberiFamiglia = conversazione.alberi;
       const ripartito = await this.cambiaRamo(
         conversazione.percorso,
         conversazione.albero,
         conversazione.voce,
+        conversazione.modo ?? 'entrambi',
       );
       // Il messaggio d'errore l'ha gia' scritto cambiaRamo: qui resta da non
       // lasciare l'utente senza Claude.
@@ -563,13 +648,25 @@ export class Wrapper {
   // percorso: transcript della sessione corrente
   // albero: risultato di leggiTranscript
   // voce: nodo prompt scelto
+  // modo: 'entrambi' | 'conversazione' | 'codice' — cosa riportare indietro
   // ritorna: true se Claude e' ripartito, false se qualcosa e' andato storto
-  async cambiaRamo(percorso, albero, voce) {
+  async cambiaRamo(percorso, albero, voce, modo = 'entrambi') {
     // Il nodo scelto puo' vivere solo nel file di una sessione antenata: in quel
     // caso si riparte da quella, non da quella corrente.
     const origine = this.scegliOrigine(albero, voce, percorso);
     const sessionePartenza = origine.sessionId;
     const alberoOrigine = this.alberiFamiglia?.get(origine.percorso) ?? albero;
+
+    // Solo il codice: la conversazione resta dov'e', quindi non c'e' niente da
+    // chiudere e niente da tagliare. Claude resta vivo e si limita a rileggere i
+    // file la prossima volta che li apre.
+    if (modo === 'codice') {
+      const esito = await this.ripristinaFile(alberoOrigine, voce.uuid, origine.percorso);
+      this.registra(`ripristino solo codice uuid=${voce.uuid} esito=${esito.riassunto}`);
+      this.chiudiOverlay();
+      this.lampeggia(`cb: ${esito.riassunto}`);
+      return true;
+    }
 
     this.scrivi(`\r\n  riparto da: ${voce.testo.replace(/\s+/g, ' ').slice(0, 60)}\r\n`);
     if (origine.sessionId !== this.sessionId) {
@@ -606,17 +703,12 @@ export class Wrapper {
     // Riporta anche i file allo stato di quel messaggio. Senza questo la
     // conversazione torna indietro ma il codice resta quello di adesso, e Claude
     // si limita a suggerire il comando da lanciare a mano.
-    if (this.ripristinaCodice) {
+    if (modo !== 'conversazione') {
       this.scrivi('  ripristino i file a quel punto…\r\n');
-      const esito = await this.ripristinaFile(sessionePartenza, voce.uuid);
-      this.registra(`rewind-files ok=${esito.ok} uscita=${esito.uscita.slice(0, 300)}`);
+      const esito = await this.ripristinaFile(alberoOrigine, voce.uuid, origine.percorso);
+      this.registra(`ripristino file ok=${esito.ok} esito=${esito.riassunto}`);
 
-      const riassunto = esito.uscita.replace(/\s+/g, ' ').trim().slice(0, 200);
-      let messaggio;
-      if (esito.senzaSnapshot) messaggio = 'nessuna modifica ai file da ripristinare';
-      else if (esito.ok) messaggio = riassunto || 'file ripristinati';
-      else messaggio = `file NON ripristinati: ${riassunto}`;
-
+      const messaggio = esito.ok ? esito.riassunto : `file NON ripristinati: ${esito.riassunto}`;
       this.scrivi(`  ${messaggio}\r\n`);
       await new Promise((r) => setTimeout(r, esito.ok ? 800 : 3000));
     }
@@ -710,48 +802,50 @@ export class Wrapper {
     return origini.find((o) => o.sessionId === this.sessionId) ?? origini[0];
   }
 
-  // Riporta i file di lavoro allo stato che avevano a un dato messaggio utente,
-  // usando il ripristino nativo di Claude (--rewind-files, che esegue e termina).
+  // Riporta i file di lavoro allo stato che avevano alla fine di un turno,
+  // leggendo l'archivio di copie di Claude Code (vedi src/codice.js).
   //
-  // La variabile d'ambiente e' indispensabile: --rewind-files gira in modalita'
-  // non interattiva, e su quel percorso Claude abilita lo storico dei file solo
-  // se la trova (altrimenti risponde "File rewinding is not enabled").
+  // Prima cb chiamava il ripristino nativo (`--resume <id> --rewind-files <uuid>`
+  // con CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=1). Leggere l'archivio invece
+  // di chiamarlo evita di lanciare un processo Claude a ogni cambio ramo, e
+  // soprattutto permette di guardare le copie di TUTTA la famiglia di sessioni:
+  // il flag nativo ne conosce una sola, mentre i rami di una conversazione stanno
+  // in file diversi.
   //
-  // sessione: id della sessione a cui appartiene il messaggio
-  // uuid: uuid di un messaggio utente
-  // ritorna: Promise<{ ok, uscita, senzaSnapshot }>
-  ripristinaFile(sessione, uuid) {
-    return new Promise((risolvi) => {
-      // spawn e non execFile: serve stdin chiuso in modo garantito, altrimenti
-      // Claude resta ad aspettare dati ("no stdin data received in 3s").
-      const processo = spawn(this.eseguibile, ['--resume', sessione, '--rewind-files', uuid], {
-        cwd: this.cwd,
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1' },
-      });
+  // Il punto a cui riportare i file e' la FINE del turno, non il prompt: cb tiene
+  // il prompt scelto insieme alla sua risposta, quindi il codice deve contenere
+  // anche le modifiche fatte in quel turno. Il menu nativo si ferma invece prima
+  // del prompt, perche' lo fa rieseguire.
+  //
+  // albero: albero della sessione che contiene il nodo
+  // uuid: uuid del prompt scelto
+  // percorsoOrigine: transcript di quella sessione, se la famiglia non e' nota
+  // ritorna: Promise<{ ok, riassunto, esito }>
+  async ripristinaFile(albero, uuid, percorsoOrigine = null) {
+    const nodo = albero.nodi.get(uuid);
+    const fine = nodo ? fineDelTurno(nodo) : null;
+    const istante = Date.parse(fine?.timestamp ?? nodo?.timestamp ?? '');
+    if (Number.isNaN(istante)) {
+      return { ok: false, riassunto: 'non so a quando riportare i file (turno senza orario)' };
+    }
 
-      let uscita = '';
-      processo.stdout.on('data', (d) => (uscita += d));
-      processo.stderr.on('data', (d) => (uscita += d));
+    // Tutte le sessioni della famiglia: le copie di un ramo vecchio stanno
+    // nell'archivio della sessione che lo ha scritto, non in quello della
+    // sessione corrente.
+    const famiglia = [...(this.alberiFamiglia?.keys() ?? [])];
+    const percorsiSessione = famiglia.length > 0 ? famiglia : [percorsoOrigine].filter(Boolean);
 
-      const scadenza = setTimeout(() => processo.kill(), 90000);
+    // Ripiego per le copie scadute: lo storico dei commit automatici, se l'hook
+    // e' installato e siamo in un repo. Vale null quando non c'e' niente da
+    // ripiegare, e il ripristino si comporta come prima.
+    const ripiego = ripiegoDaiCommit(this.cwd, uuid, istante);
 
-      const concludi = (codice) => {
-        clearTimeout(scadenza);
-        // Nessuno snapshot per quel messaggio non e' un guasto: significa che da
-        // quel punto i file non sono stati toccati, o che il checkpoint e'
-        // scaduto. Va distinto da un errore vero.
-        const senzaSnapshot = /No file checkpoint found/i.test(uscita);
-        risolvi({ ok: codice === 0 || senzaSnapshot, uscita, senzaSnapshot });
-      };
-
-      processo.on('error', (errore) => {
-        uscita += errore.message;
-        concludi(1);
-      });
-      processo.on('close', concludi);
-    });
+    try {
+      const esito = await ripristinaA({ percorsiSessione, istante, radice: this.cwd, ripiego });
+      return { ok: true, riassunto: riassumiRipristino(esito), esito };
+    } catch (errore) {
+      return { ok: false, riassunto: errore.message };
+    }
   }
 
   // Legge un numero dallo stdin grezzo, con eco e cancellazione.

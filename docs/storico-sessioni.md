@@ -4,6 +4,97 @@ Archivio append-only. Voce più recente in alto.
 
 ---
 
+## 2026-07-31 (18:19) — Il codice segue la conversazione
+
+Sessione dedicata al versionamento del codice, nata da una domanda: *come fa Claude Code a
+ripristinare i file, e possiamo sfruttarlo invece di rifarlo?* La risposta ha cambiato il
+motore del ripristino, e da lì sono venuti tre bug veri, il menu a tre voci, l'hook dei commit
+e due correzioni al disegno dell'albero.
+
+### Cosa è stato scoperto
+
+**Claude Code non usa git.** Ha un archivio di copie integrali in
+`~/.claude/file-history/<sessione>/<hash>@v<N>`, indicizzato da due record dentro il transcript
+(`file-history-snapshot`, uno per prompt utente, e `file-history-delta`). Ogni copia è il
+contenuto **precedente** alla modifica che l'ha generata, quindi lo stato di un file
+all'istante T è la **prima copia con `backupTime ≥ T`**. Verificato sui dati veri: ricostruito
+lo stato all'inizio di una sessione, **20 file su 20 identici byte per byte** al commit che era
+HEAD in quel momento, compresi 4 correttamente riconosciuti come «non esisteva ancora».
+
+Le versioni ripartono da `v1` in ogni sessione; `backupFileName: null` significa che il file non
+esisteva; la retention è di qualche settimana.
+
+### Cosa è stato fatto
+
+**Il ripristino legge l'archivio invece di chiamarlo** (`src/codice.js`). Sparisce lo spawn di
+`claude --rewind-files` a ogni cambio ramo, sparisce `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING`,
+e soprattutto si guardano le copie di **tutta la famiglia** di sessioni: il flag nativo ne
+conosce una sola, mentre i rami di una conversazione stanno in file diversi.
+
+**Fuori dalla cartella di lavoro non si scrive.** La controprova ha mostrato che nell'archivio
+finiscono anche il profilo PowerShell e i file di memoria sotto `~/.claude`: riportarli indietro
+insieme al codice sarebbe stato un danno silenzioso. Si contano e si dicono.
+
+**Menu a tre voci** come Esc Esc: conversazione e codice / solo conversazione / solo codice,
+sull'albero di F2 e nel selettore delle conversazioni, con `1`-`3` per la scelta diretta ed Esc
+che torna all'albero. «Solo codice» è l'unico caso in cui Claude **non** viene riavviato.
+
+**L'archivio di cb**, che è ciò che permette di tornare *avanti*: nell'archivio di Claude non
+c'è mai lo stato finale di un file, quindi cb copia ciò che sta per sovrascrivere prima di
+toccarlo. Nato da un bug segnalato dall'utente (file di test cancellato e mai più tornato).
+
+**L'hook dei commit installato**, con l'aggancio **uuid → commit**: l'hook legge le ultime righe
+del transcript e scrive nel messaggio l'uuid dell'ultimo messaggio del turno; `src/commit.js`
+risolve un punto dell'albero in un commit e ne estrae i file con `git show`. `ripristinaA` lo
+interroga solo per le copie scadute. Catena provata end-to-end lanciando l'hook con il payload
+vero.
+
+**Due correzioni al disegno**, entrambe da screenshot: la coda dei rami si consuma in profondità
+e i rami di una stessa catena si disegnano **da destra a sinistra**, così nessuna discesa
+incrocia più un altro ramo.
+
+**Righe cambiate nell'intestazione**: fra l'ora del prompt e «riparti da qui» compaiono `+42` in
+verde e `-7` in rosso, sommate su tutto il turno. Il dato viene dal diff che Claude scrive già
+nel transcript (`toolUseResult.structuredPatch`): non dipende né dall'archivio né da git, e vale
+anche sulle conversazioni vecchie. Verde e rosso hanno la stessa saturazione e luminosità
+dell'arancione del marchio, cambia solo la tonalità.
+
+### Cambiamenti al codice
+
+**Ripristino del codice (nuovo)**
+- `src/codice.js` (nuovo): `leggiStoricoFile`, `leggiStoricoCb`, `annotaCopia`,
+  `preferisciCopiePresenti`, `statoAllIstante`, `ripristinaA`, `riassumiRipristino`
+- `src/commit.js` (nuovo): `radiceGit`, `commitDiCb`, `commitDelPunto`, `contenutoDaCommit`,
+  `ripiegoDaiCommit`
+- `src/codice.test.js`, `src/commit.test.js` (nuovi): 18 prove, con archivi finti e repo git veri
+- `hooks/cb-commit.ps1`: legge `transcript_path`, scrive `sessione:` e `messaggio: <uuid>` nel
+  corpo del commit
+
+**Wrapper**
+- `ripristinaFile`: da spawn di `--rewind-files` a `ripristinaA` sulla famiglia, con
+  `ripiegoDaiCommit`; il punto è la **fine del turno**, non il prompt
+- `scegliModoRipristino`: menu a tre voci, cifre incluse, con consumo della coda dei tasti
+- `cambiaRamo(percorso, albero, voce, modo)`: `codice` non chiude Claude e non taglia niente;
+  `conversazione` salta il ripristino
+- `cambiaConversazione`: `alberiFamiglia` impostato anche sul ramo di ripresa, modo propagato
+
+**Vista e albero**
+- `src/vista.js`: `VOCI_RIPRISTINO`, opzione `menu` in `schermata`, `cambiamenti` (conteggio
+  colorato); coda in profondità e rami ordinati per colonna decrescente
+- `src/stile.js`: `verde` e `rosso`, stessa saturazione e luminosità dell'arancione
+- `src/transcript.js`: `righeCambiate` (da `structuredPatch`, e `type: 'create'` come aggiunte)
+- `src/albero.js`: `alberoPrompt` somma le righe cambiate sul turno, con indice dei figli
+  ricavato da `parentUuid`
+- `src/conversazioni.js`: modo `menu` nel ciclo, `esitoScelta(caricata, uuid, modo)`
+- `src/anteprima.js`: `--menu[=indice]` per guardare la schermata del menu
+
+**Prove**
+- `package.json`: `codice.test.js` e `commit.test.js` nella suite
+- riscritte tre prove che fissavano il vecchio ordine di disegno; aggiornate quelle
+  dell'overlay per il menu; nuove prove su conteggio righe, colori, ripiego sui commit
+
+---
+
 ## 2026-07-31 (00:57) — cb si prende l'avvio: selettore di cartella e di conversazioni
 
 Sessione che sposta dentro cb tutto quello che stava intorno: la scelta della cartella (prima

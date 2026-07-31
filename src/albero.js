@@ -22,12 +22,44 @@ export function alberoPrompt(albero) {
     return null;
   };
 
+  // Figli per uuid, ricavati da parentUuid come fa tutto il resto di questa
+  // funzione: `nodo.figli` e' popolato da leggiTranscript ma non da chi costruisce
+  // un albero a mano, e dipenderne renderebbe il conteggio muto senza dirlo.
+  const figliDi = new Map();
+  for (const nodo of albero.nodi.values()) {
+    if (!nodo.parentUuid) continue;
+    if (!figliDi.has(nodo.parentUuid)) figliDi.set(nodo.parentUuid, []);
+    figliDi.get(nodo.parentUuid).push(nodo);
+  }
+
+  // Righe di codice cambiate nel turno che comincia con un prompt: si sommano
+  // scendendo fra i discendenti e fermandosi al prompt successivo, che apre il
+  // turno dopo. E' lo stesso confine di fineDelTurno, cioe' quello con cui cb
+  // taglia la conversazione: il numero mostrato descrive esattamente il pezzo di
+  // conversazione da cui si riparte.
+  const cambiamentiDelTurno = (nodo) => {
+    let aggiunte = 0;
+    let rimozioni = 0;
+
+    const scendi = (corrente) => {
+      aggiunte += corrente.aggiunte ?? 0;
+      rimozioni += corrente.rimozioni ?? 0;
+      for (const figlio of figliDi.get(corrente.uuid) ?? []) {
+        if (!figlio.isPromptUtente) scendi(figlio);
+      }
+    };
+
+    scendi(nodo);
+    return { aggiunte, rimozioni };
+  };
+
   for (const nodo of albero.nodi.values()) {
     if (!nodo.isPromptUtente) continue;
     perUuid.set(nodo.uuid, {
       uuid: nodo.uuid,
       testo: nodo.testo,
       timestamp: nodo.timestamp,
+      ...cambiamentiDelTurno(nodo),
       figli: [],
     });
   }

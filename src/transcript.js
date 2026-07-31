@@ -26,6 +26,39 @@ function estraiTesto(record) {
   return pezzi.join(' ').trim();
 }
 
+// Righe di codice aggiunte e tolte da un singolo risultato di tool.
+//
+// I risultati di Edit e Write portano `toolUseResult.structuredPatch`, cioe' il
+// diff a blocchi gia' calcolato da Claude: le righe che cominciano con + e - sono
+// quelle cambiate. Non c'e' quindi da confrontare niente, e il conteggio non
+// dipende dall'archivio delle copie ne' da git.
+//
+// Un file creato da zero fa eccezione: non ha un diff (`type: 'create'`, patch
+// vuota), e le sue righe contano tutte come aggiunte.
+//
+// record: oggetto JSON di una riga del .jsonl
+// ritorna: { aggiunte, rimozioni }
+function righeCambiate(record) {
+  const esito = record.toolUseResult;
+  if (!esito || typeof esito !== 'object') return { aggiunte: 0, rimozioni: 0 };
+
+  let aggiunte = 0;
+  let rimozioni = 0;
+  for (const blocco of esito.structuredPatch ?? []) {
+    for (const riga of blocco.lines ?? []) {
+      if (riga.startsWith('+')) aggiunte += 1;
+      else if (riga.startsWith('-')) rimozioni += 1;
+    }
+  }
+
+  if (aggiunte === 0 && rimozioni === 0 && esito.type === 'create' && typeof esito.content === 'string') {
+    const contenuto = esito.content.replace(/\n$/, '');
+    aggiunte = contenuto === '' ? 0 : contenuto.split('\n').length;
+  }
+
+  return { aggiunte, rimozioni };
+}
+
 // Legge un .jsonl di sessione e ricostruisce l'albero dei messaggi.
 // I record di sidechain (subagent) sono esclusi: hanno parentUuid che punta al
 // messaggio principale e produrrebbero biforcazioni inesistenti.
@@ -89,6 +122,8 @@ export async function leggiTranscript(percorso) {
       testo !== '[risultato tool]';
     if (isPrompt && !primoPrompt) primoPrompt = testo;
 
+    const cambiate = righeCambiate(record);
+
     ultimoNodo = record.uuid;
     nodi.set(record.uuid, {
       uuid: record.uuid,
@@ -96,6 +131,10 @@ export async function leggiTranscript(percorso) {
       tipo: record.type,
       testo,
       timestamp: record.timestamp ?? null,
+      // Righe cambiate da questo record: chi collassa l'albero le somma sul
+      // turno (vedi alberoPrompt).
+      aggiunte: cambiate.aggiunte,
+      rimozioni: cambiate.rimozioni,
       isMeta: record.isMeta === true,
       // Vero prompt digitato dall'utente: distingue un ripristino reale dai
       // record 'user' che trasportano solo il risultato di un tool.

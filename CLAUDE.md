@@ -23,7 +23,9 @@ Sasha, singolo sviluppatore.
 | `src/wrapper.js` | Pseudo-terminale, intercettazione tasti, overlay dell'albero, cambio ramo |
 | `src/tasti.js` | Decodifica dei tasti nelle tre codifiche, scorciatoie configurabili |
 | `src/titolo.js` | Filtra le richieste di cambio titolo dei processi figli |
-| `src/transcript.js` | Parsing dei `.jsonl`, albero da `parentUuid`, filtro biforcazioni tecniche |
+| `src/transcript.js` | Parsing dei `.jsonl`, albero da `parentUuid`, filtro biforcazioni tecniche, righe cambiate per record |
+| `src/codice.js` | Ripristino dei file: archivio delle copie di Claude e di cb, regola temporale |
+| `src/commit.js` | Commit automatici come ripiego: aggancio uuid → commit, lettura con `git show` |
 | `src/attiva.js` | Riattivazione di un ramo abbandonato via append di `last-prompt` |
 | `src/ramo.js` | Crea la sessione del nuovo ramo: copia la catena fino al turno scelto |
 | `src/cartelle.js` | Selettore della cartella di lavoro: albero dei progetti, hand-off alla shell |
@@ -58,6 +60,7 @@ Regole del contratto con il chiamante:
 ```
 npm test                          esegue le prove (assert, nessun framework)
 node src/anteprima.js [file]      l'overlay su una sessione vera, senza lanciare Claude
+node src/anteprima.js --menu[=n]  la stessa schermata con il menu del ripristino aperto
 node src/cartelle.js              il selettore delle cartelle, da solo
 node src/conversazioni.js [dir]   il selettore delle conversazioni, da solo
 node src/verifica-reale.js [file] verifica il parser su una sessione vera
@@ -158,21 +161,51 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   perché il processo è nuovo. L'output del pty va quindi filtrato con `senzaTitolo` e il
   titolo riaffermato a ogni avvio. Filtrare solo gli OSC `0/1/2`: gli altri (es. `8` per i
   link) e tutte le sequenze `ESC[` devono passare intatti, o la TUI si rompe.
-- **`--rewind-files` richiede `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=1` nell'ambiente.**
-  Nel binario il gate è `T1()`: in modalità non interattiva (`yn()`) lo storico dei file è
-  abilitato solo da quella variabile, altrimenti risponde `File rewinding is not enabled`.
-  Verificato per differenza: senza variabile quell'errore, con variabile passa al successivo
-  (`No file checkpoint found`).
+- **Il ripristino del codice non chiede niente a Claude: legge il suo archivio.** Claude non usa
+  git — salva copie **integrali** in `~/.claude/file-history/<sessione>/<hash>@v<N>` e le annota
+  nel transcript (`file-history-snapshot`, uno per prompt, e `file-history-delta`). Ogni copia è
+  il contenuto **precedente** alla modifica che l'ha generata, quindi vale una regola sola:
+  lo stato a T è la **prima copia con `backupTime ≥ T`**; nessuna copia dopo T = il file è già
+  così; copia `null` = a T non esisteva. (Il vecchio `--rewind-files` voleva
+  `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=1`, lanciava un processo e vedeva una sessione
+  sola: è per questo che non lo usiamo più.)
+- **Le versioni delle copie ripartono da `v1` in ogni sessione**: il nome di una copia identifica
+  qualcosa solo insieme alla sua cartella. Le sessioni troncate copiano i record ma non le copie,
+  quindi la stessa voce compare più volte e quella della troncata punta a una cartella che non
+  esiste: `preferisciCopiePresenti` sceglie fra voci identiche quella che c'è davvero sul disco.
+- **Nell'archivio di Claude non c'è mai lo stato finale di un file.** Prima di sovrascrivere o
+  cancellare, cb copia nel proprio archivio (`~/.claude/cb/file-history/`): senza, un file
+  cancellato da un ripristino non torna più indietro andando avanti.
+- **Fuori dalla cartella di lavoro non si scrive.** Nell'archivio finisce ogni file toccato da
+  Claude, profilo PowerShell e file di memoria compresi.
 - L'ordine in `cambiaRamo` non è arbitrario: **chiudere Claude → riattivare il ramo →
-  ripristinare i file → rilanciare**. `--rewind-files` ha lo stesso vincolo di
-  `--resume-session-at` (il messaggio deve stare nella catena attiva), e gli interventi su
-  transcript e file devono essere gli ultimi, senza il processo vecchio che scrive sopra.
+  ripristinare i file → rilanciare**. Gli interventi su transcript e file devono essere gli
+  ultimi, senza il processo vecchio che scrive sopra. Con «solo codice» il flusso si ferma al
+  ripristino: la conversazione non cambia, quindi Claude non va riavviato.
+- **I commit automatici sono un ripiego per file, non un ripristino d'albero.** L'hook scrive
+  `messaggio: <uuid>` nel corpo del commit ed è quello l'aggancio con l'albero; `src/commit.js`
+  risolve il punto (prima per uuid, poi per istante) e prende un file per volta con `git show`.
+  Riportare indietro l'albero intero sovrascriverebbe anche ciò che il ripristino non doveva
+  toccare.
 - **Il ramo attivo è l'ultimo record messaggio del file** (`ultimoNodo`), non
   `last-prompt.leafUuid`: è da lì che il CLI ricostruisce la conversazione riprendendo in
   interattivo, e `last-prompt` resta spesso indietro (misurato: divergevano in 7 sessioni su
   12). `leafAttivo` resta però quello giusto per **scrivere**: la riattivazione di un ramo
-  funziona appendendo un `last-prompt`, e `--rewind-files` gira in modalità non interattiva,
-  dove quel campo conta davvero.
+  funziona appendendo un `last-prompt`, che è il campo che il CLI legge quando riprende in
+  modalità non interattiva.
+- **L'ordine in cui si assegnano le righe dell'albero decide se le linee si incrociano.** Un ramo
+  scende lungo la colonna della sua forca, attraversando le righe che trova: i rami di una catena
+  vanno quindi disegnati **in profondità** (subito sotto la catena da cui nascono) e **da destra
+  a sinistra**, così ogni discesa passa a sinistra di ciò che è già disegnato, dove non c'è
+  niente. È l'unico ordine in cui nessuna discesa incrocia un altro ramo — e rende corretta anche
+  la scelta fra `┣` e `┗`, perché l'ultimo ramo di una forca è davvero il più in basso.
+- **Le righe di codice cambiate non si calcolano**: stanno già nel transcript, in
+  `toolUseResult.structuredPatch`. Un file creato da zero non ha diff (`type: 'create'`) e le sue
+  righe contano tutte come aggiunte. Il totale mostrato è quello del **turno**, fino al prompt
+  successivo: lo stesso confine di `fineDelTurno`.
+- **`alberoPrompt` lavora solo su `parentUuid`**, mai su `nodo.figli`: quel campo lo popola
+  `leggiTranscript` ma non chi costruisce un albero a mano, e dipenderne rende muto il conteggio
+  senza dirlo (già successo, colto da una prova).
 - **Al rilancio dopo un cambio ramo vanno tolti i flag di ripresa dell'utente**
   (`senzaRipresa`): la ripresa la chiede già cb con la sessione che ha creato, e un `-r` in
   coda arriva a Claude come seconda richiesta senza id, che riapre il selettore delle

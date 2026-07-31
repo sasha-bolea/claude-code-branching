@@ -8,6 +8,11 @@
 # L'area di staging reale non viene alterata: tutte le operazioni usano un index
 # temporaneo tramite GIT_INDEX_FILE.
 #
+# Nel messaggio del commit finisce anche l'uuid dell'ultimo messaggio del turno:
+# e' l'aggancio che permette a cb di risalire dal punto scelto nell'albero al
+# commit corrispondente (vedi src/commit.js). Senza, i commit sarebbero uno
+# storico ispezionabile a mano ma inutilizzabile per il ripristino.
+#
 # Installazione: vedi docs/procedure.md
 
 $ErrorActionPreference = 'Stop'
@@ -21,6 +26,27 @@ try {
 $sessione = $payload.session_id
 $cartella = if ($payload.cwd) { $payload.cwd } else { (Get-Location).Path }
 if (-not $sessione) { exit 0 }
+
+# Uuid dell'ultimo messaggio scritto nel transcript: e' la fine del turno che
+# stiamo salvando, cioe' il punto dell'albero a cui questo commit corrisponde.
+# Si leggono solo le ultime righe: il transcript di una conversazione lunga e'
+# grosso, e il record che serve e' sempre in fondo.
+$messaggio = $null
+if ($payload.transcript_path -and (Test-Path -LiteralPath $payload.transcript_path)) {
+    try {
+        $ultime = Get-Content -LiteralPath $payload.transcript_path -Tail 200 -ErrorAction Stop
+        for ($i = $ultime.Length - 1; $i -ge 0; $i--) {
+            if (-not $ultime[$i].Trim()) { continue }
+            try { $record = $ultime[$i] | ConvertFrom-Json } catch { continue }
+            if ($record.uuid -and ($record.type -eq 'assistant' -or $record.type -eq 'user')) {
+                $messaggio = $record.uuid
+                break
+            }
+        }
+    } catch {
+        $messaggio = $null  # transcript illeggibile: il commit si fa lo stesso
+    }
+}
 
 # Fuori da un repo git non c'e' niente da versionare.
 $radice = & git -C $cartella rev-parse --show-toplevel 2>$null
@@ -54,11 +80,16 @@ try {
         if ($alberoPrecedente -eq $albero) { exit 0 }
     }
 
-    $messaggio = "cb: $($sessione.Substring(0, 8)) $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    # Prima riga leggibile, poi i due campi che servono a cb per ritrovarlo:
+    # la sessione per intero e l'uuid del messaggio a cui il commit corrisponde.
+    $testo = "cb: $($sessione.Substring(0, 8)) $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`n`n" +
+             "sessione: $sessione`n"
+    if ($messaggio) { $testo += "messaggio: $messaggio`n" }
+
     $commit = if ($base) {
-        $messaggio | & git -C $radice commit-tree $albero -p $base
+        $testo | & git -C $radice commit-tree $albero -p $base
     } else {
-        $messaggio | & git -C $radice commit-tree $albero
+        $testo | & git -C $radice commit-tree $albero
     }
 
     if ($LASTEXITCODE -eq 0 -and $commit) {

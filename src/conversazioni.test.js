@@ -311,10 +311,12 @@ const respiro = () => new Promise((r) => setTimeout(r, 30));
   await respiro();
 
   ingresso.emit('data', Buffer.from('\r')); // entra nell'albero
-  ingresso.emit('data', Buffer.from('\r')); // conferma il punto attivo
+  ingresso.emit('data', Buffer.from('\r')); // apre il menu del ripristino
+  ingresso.emit('data', Buffer.from('\r')); // conferma "conversazione e codice"
   const scelta = await attesa;
 
   assert.equal(scelta.riprendi, 'sess-figlia', 'confermando la punta si riprende quella sessione');
+  assert.equal(scelta.modo, 'entrambi', 'con la voce preselezionata torna indietro anche il codice');
   assert.match(uscita.scritto, /\x1b\[\?1049h/, 'la pagina va sullo schermo alternativo');
   assert.match(uscita.scritto, /\x1b\[\?1049l/, 'e all\'uscita il terminale torna com\'era');
 }
@@ -339,8 +341,40 @@ const respiro = () => new Promise((r) => setTimeout(r, 30));
   await respiro();
   ingresso.emit('data', Buffer.from('\r'));
   ingresso.emit('data', Buffer.from('\r'));
+  ingresso.emit('data', Buffer.from('\r'));
   const scelta = await attesa;
   assert.equal(scelta.riprendi, 'sess-sola', 'la freccia giu\' cambia conversazione');
+}
+
+{
+  // Il menu di cosa riportare indietro: le cifre scelgono una voce direttamente.
+  const { ingresso, uscita } = terminaleFinto();
+  const attesa = selezionaConversazione({ cartella, famiglie, ingresso, uscita });
+  await respiro();
+
+  ingresso.emit('data', Buffer.from('\r')); // entra nell'albero
+  ingresso.emit('data', Buffer.from('\r')); // apre il menu
+  assert.match(uscita.scritto, /riporta indietro/, 'il menu compare sopra l\'albero');
+
+  ingresso.emit('data', Buffer.from('3')); // solo il codice
+  const scelta = await attesa;
+
+  assert.equal(scelta.modo, 'codice', 'la cifra sceglie la voce');
+  assert.equal(scelta.riprendi, 'sess-figlia', 'la conversazione riparte dov\'era, senza tagli');
+}
+
+{
+  // Esc nel menu torna all'albero, non chiude il selettore.
+  const { ingresso, uscita } = terminaleFinto();
+  const attesa = selezionaConversazione({ cartella, famiglie, ingresso, uscita });
+  await respiro();
+
+  ingresso.emit('data', Buffer.from('\r')); // albero
+  ingresso.emit('data', Buffer.from('\r')); // menu
+  ingresso.emit('data', Buffer.from('\x1b')); // torna all'albero
+  ingresso.emit('data', Buffer.from('\x1b')); // torna all'elenco
+  ingresso.emit('data', Buffer.from('\x1b')); // annulla
+  assert.equal(await attesa, null, 'esc nel menu non salta fuori dal selettore');
 }
 
 {

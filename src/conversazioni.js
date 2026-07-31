@@ -14,8 +14,15 @@ import { leggiTranscript, unisciAlberi, foglie } from './transcript.js';
 import { fineDelTurno } from './attiva.js';
 import { scansiona } from './indice.js';
 import { slugProgetto, sessioneDaPercorso } from './percorsi.js';
-import { componiVista, disegnaRighe, muovi, puntaRamoAttivo, schermata } from './vista.js';
-import { azioniNavigazione } from './tasti.js';
+import {
+  componiVista,
+  disegnaRighe,
+  muovi,
+  puntaRamoAttivo,
+  schermata,
+  VOCI_RIPRISTINO,
+} from './vista.js';
+import { azioniNavigazione, azioniTastiera } from './tasti.js';
 import { arancioneForte, grigio, normale } from './stile.js';
 import { testoLeggibile } from './albero.js';
 
@@ -154,26 +161,38 @@ function rigaConversazione(famiglia, larghezza, scelta) {
 // Funzione pura, come `schermata` in vista.js: cosi' la si guarda senza lanciare
 // Claude e si prova senza un terminale.
 //
-// stato: { cartella, famiglie, indice, caricata, selezione, modo }
+// stato: { cartella, famiglie, indice, caricata, selezione, modo, menu }
 //   caricata: risultato di caricaFamiglia della conversazione selezionata, o null
-//   modo: 'lista' (↑↓ cambiano conversazione) o 'albero' (↑↓←→ muovono il cursore)
+//   modo: 'lista' (↑↓ cambiano conversazione), 'albero' (↑↓←→ muovono il cursore)
+//     o 'menu' (si sceglie cosa riportare indietro dal punto selezionato)
+//   menu: indice della voce del menu di ripristino selezionata
 // opzioni.colonne, opzioni.altezza: dimensioni del terminale
 // ritorna: array di righe pronte da scrivere
 export function disegnaConversazioni(
-  { cartella, famiglie, indice, caricata, selezione, modo = 'lista', ripristinaCodice = true },
+  {
+    cartella,
+    famiglie,
+    indice,
+    caricata,
+    selezione,
+    modo = 'lista',
+    menu = 0,
+    ripristinaCodice = true,
+  },
   { colonne = 120, altezza = 30 } = {},
 ) {
   // Scelta la conversazione, l'elenco non serve piu': si guarda il punto da cui
   // ripartire, ed e' la stessa schermata dell'overlay dentro la sessione (F2),
   // con il prompt scelto per intero e la storia che porta con se'. Cambia solo
   // dove porta Esc, che qui riporta all'elenco.
-  if (modo === 'albero' && caricata && selezione) {
+  if ((modo === 'albero' || modo === 'menu') && caricata && selezione) {
     return schermata(caricata.vista, selezione, {
       colonne,
       altezza,
       ripristinaCodice,
       titolo: testoLeggibile(famiglie[indice]?.titolo ?? '').slice(0, 60) || 'conversazione',
       esc: { lunga: "torna all'elenco", corta: 'elenco' },
+      menu: modo === 'menu' ? menu : null,
     });
   }
 
@@ -332,13 +351,27 @@ function origineDi(caricata, uuid) {
 //
 // caricata: risultato di caricaFamiglia
 // uuid: nodo scelto
-// ritorna: { percorso, albero, alberi, voce, riprendi } — riprendi valorizzato
-//          solo quando basta riprendere la sessione senza tagliarla
-export function esitoScelta(caricata, uuid) {
+// modo: cosa riportare indietro ('entrambi' | 'conversazione' | 'codice')
+// ritorna: { percorso, albero, alberi, voce, riprendi, modo } — riprendi
+//          valorizzato solo quando basta riprendere la sessione senza tagliarla
+export function esitoScelta(caricata, uuid, modo = 'entrambi') {
   const origine = origineDi(caricata, uuid);
   const alberoOrigine = caricata.alberi.get(origine.percorso) ?? caricata.albero;
   const nodo = alberoOrigine.nodi.get(uuid);
   const fine = nodo ? fineDelTurno(nodo).uuid : null;
+
+  // Solo il codice: la conversazione non va tagliata, si riprende dov'era. Il
+  // punto scelto serve solo a dire a quando riportare i file.
+  if (modo === 'codice') {
+    return {
+      percorso: caricata.percorso,
+      albero: caricata.albero,
+      alberi: caricata.alberi,
+      voce: caricata.albero.nodi.get(uuid),
+      riprendi: sessioneDaPercorso(caricata.percorso),
+      modo,
+    };
+  }
 
   return {
     percorso: caricata.percorso,
@@ -346,6 +379,7 @@ export function esitoScelta(caricata, uuid) {
     alberi: caricata.alberi,
     voce: caricata.albero.nodi.get(uuid),
     riprendi: fine && alberoOrigine.ultimoNodo === fine ? origine.sessionId : null,
+    modo,
   };
 }
 
@@ -371,6 +405,7 @@ export async function selezionaConversazione({
     caricata: null,
     selezione: null,
     modo: 'lista',
+    menu: 0,
     ripristinaCodice,
   };
 
@@ -421,6 +456,32 @@ export async function selezionaConversazione({
     const suDati = (dati) => {
       let daRicaricare = false;
 
+      // Nel menu servono anche le cifre, che la navigazione dell'albero scarta:
+      // si decodifica con azioniTastiera, come fa il wrapper nello stesso punto.
+      if (stato.modo === 'menu') {
+        for (const azione of azioniTastiera(dati)) {
+          if (azione.tipo === 'annulla') {
+            stato.modo = 'albero';
+            break;
+          }
+          if (azione.tipo === 'invio') {
+            return chiudi(esitoScelta(stato.caricata, stato.selezione, VOCI_RIPRISTINO[stato.menu].modo));
+          }
+          if (azione.tipo === 'cifra') {
+            const scelto = Number.parseInt(azione.valore, 10) - 1;
+            if (scelto >= 0 && scelto < VOCI_RIPRISTINO.length) {
+              return chiudi(esitoScelta(stato.caricata, stato.selezione, VOCI_RIPRISTINO[scelto].modo));
+            }
+            continue;
+          }
+          if (azione.tipo === 'freccia') {
+            if (azione.valore === 'su') stato.menu = (stato.menu + VOCI_RIPRISTINO.length - 1) % VOCI_RIPRISTINO.length;
+            else if (azione.valore === 'giu') stato.menu = (stato.menu + 1) % VOCI_RIPRISTINO.length;
+          }
+        }
+        return ridisegna();
+      }
+
       for (const azione of azioniNavigazione(dati)) {
         if (stato.famiglie.length === 0) {
           // Niente da riprendere: qualunque conferma vale come "parti da zero",
@@ -436,7 +497,11 @@ export async function selezionaConversazione({
             continue;
           }
           if (azione === 'conferma') {
-            return chiudi(esitoScelta(stato.caricata, stato.selezione));
+            // Prima di ripartire si sceglie cosa riportare indietro: la stessa
+            // domanda del menu nativo di Claude, e la stessa che fa F2.
+            stato.modo = 'menu';
+            stato.menu = stato.ripristinaCodice ? 0 : 1;
+            continue;
           }
           if (stato.caricata && ['su', 'giu', 'sinistra', 'destra'].includes(azione)) {
             stato.selezione = muovi(stato.caricata.vista, stato.selezione, azione);

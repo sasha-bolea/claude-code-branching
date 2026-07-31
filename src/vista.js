@@ -1,5 +1,5 @@
 import { alberoPrompt, testoLeggibile, uuidRamoAttivo } from './albero.js';
-import { arancione, arancioneForte, grigio, normale } from './stile.js';
+import { arancione, arancioneForte, grigio, normale, rosso, verde } from './stile.js';
 
 // Vista orizzontale dell'albero dei rami: i prompt scorrono da sinistra a
 // destra come nodi di una linea, e ogni biforcazione fa scendere un ramo sotto.
@@ -36,6 +36,18 @@ export const LEGENDA = [
   `${VUOTO} riparti da qui   ${FORCA} biforcazione   arancione = storia di questo punto`,
   `${VUOTO} riparti da qui   ${FORCA} biforcazione`,
   `${VUOTO} riparti da qui`,
+];
+
+// Cosa si puo' riportare indietro dal punto scelto. Sono le stesse tre voci del
+// menu nativo di Claude (Esc Esc), perche' la scelta e' la stessa: la
+// conversazione e il codice tornano indietro insieme o separatamente.
+//
+// L'ordine mette per primo il caso normale, cosi' invio senza pensarci fa la
+// cosa che l'utente si aspetta.
+export const VOCI_RIPRISTINO = [
+  { modo: 'entrambi', etichetta: 'conversazione e codice' },
+  { modo: 'conversazione', etichetta: 'solo la conversazione (i file restano come sono)' },
+  { modo: 'codice', etichetta: "solo il codice (la conversazione resta dov'è)" },
 ];
 
 // Mappa figlio -> padre nell'albero collassato dei prompt.
@@ -109,6 +121,14 @@ export function componiVista(albero) {
 
   // Ogni voce in coda e' una catena da disegnare, con il punto da cui pende.
   //
+  // La coda si consuma in profondita': i rami nati da una catena si disegnano
+  // subito sotto di lei, prima di tutto quello che restava da fare. In ampiezza —
+  // com'era prima — un ramo nato presto ma scoperto tardi finiva in fondo, e la
+  // sua discesa attraversava le righe di tutti i rami nati dopo: a schermo
+  // sembrava passare "sotto" gli altri. Andando in profondita' ogni ramo occupa
+  // una fascia di righe contigua, e sono i rami successivi a scendere per fargli
+  // posto.
+  //
   // Le radici sono piu' d'una quando la biforcazione e' sul primo prompt: li' non
   // c'e' un nodo padre da cui far pendere i rami, e le catene verrebbero disegnate
   // come conversazioni separate, senza niente che le colleghi. La forca si mette
@@ -128,6 +148,10 @@ export function componiVista(albero) {
     const riga0 = nuovaRiga();
     let riga = riga0;
     let colonna = lavoro.colonnaForca === null ? 0 : lavoro.colonnaForca + 2;
+    // Rami che nascono lungo questa catena, in ordine di comparsa da sinistra a
+    // destra: alla fine passano in testa alla coda, cosi' li si disegna prima di
+    // quello che c'era gia' in attesa.
+    const pendenti = [];
 
     // Prima radice di una conversazione biforcata in partenza: la forca la
     // precede, e la catena comincia due colonne piu' in la' per farle posto.
@@ -176,12 +200,11 @@ export function componiVista(albero) {
       poni(riga, colonna + 2, figli.length > 1 ? FORCA : TRATTO, versoTutti);
       poni(riga, colonna + 3, TRATTO, versoIlPrimo);
 
-      // ponytail: la giunzione si decide qui, quindi con tre o piu' rami dalla
-      // stessa forca il ┣ puo' non avere davvero un ramo sotto di se' (le righe
-      // si assegnano piu' tardi e possono intercalarsi). Cosmetico, e le forche
-      // con tre rami sono rare: se capitano, servira' assegnare le righe prima.
+      // La giunzione si decide qui, e con la coda in profondita' e' anche giusta:
+      // i rami di una stessa forca occupano fasce contigue nell'ordine in cui li
+      // si accoda, quindi l'ultimo e' davvero quello piu' in basso.
       figli.slice(1).forEach((figlio, i, extra) => {
-        coda.push({
+        pendenti.push({
           voce: figlio,
           rigaForca: riga,
           colonnaForca: colonna + 2,
@@ -192,6 +215,25 @@ export function componiVista(albero) {
       colonna += PASSO;
       voce = figli[0];
     }
+
+    // Dal ramo con la forca piu' a destra a quello con la forca piu' a sinistra.
+    //
+    // Non e' un dettaglio estetico: la discesa di un ramo scende dritta lungo la
+    // colonna della sua forca, attraversando tutte le righe che trova. Se si
+    // disegna prima il ramo nato piu' a sinistra, quelli nati a destra devono
+    // scendere attraverso le sue righe — che a quel punto sono occupate, perche'
+    // partono da una colonna minore e si estendono a destra. Disegnando prima
+    // quelli piu' a destra, ogni discesa successiva passa a sinistra di tutto
+    // cio' che e' gia' sullo schermo, dove non c'e' niente da attraversare.
+    //
+    // L'ordinamento e' stabile, quindi i rami di una stessa forca (stessa
+    // colonna) restano nell'ordine in cui sono stati accodati: e' quello che
+    // rende giusta la scelta fra ┣ e ┗.
+    pendenti.sort((a, b) => b.colonnaForca - a.colonnaForca);
+
+    // In testa, non in coda: e' questo che tiene ogni ramo attaccato alla catena
+    // da cui nasce invece di spedirlo in fondo all'albero.
+    coda.unshift(...pendenti);
   }
 
   // Larghezza dell'albero intero: serve a `schermata` per sapere quanto resta
@@ -448,6 +490,26 @@ function quando(voce) {
   return data && ora ? `${data} ${ora}` : ' '.repeat(11);
 }
 
+// Righe di codice cambiate in un turno, in forma compatta: "+42 -7".
+//
+// Un turno che non ha toccato codice non mostra niente invece di "+0 -0": e' il
+// caso piu' frequente (domande, spiegazioni) e un contatore a zero ripetuto su
+// ogni prompt sarebbe solo rumore.
+//
+// Il testo torna gia' colorato — verde le aggiunte, rosso le rimozioni — quindi
+// chi lo inserisce nella riga non deve rivestirlo.
+//
+// voce: nodo prompt della vista
+// ritorna: stringa (vuota se non e' cambiato niente)
+function cambiamenti(voce) {
+  const aggiunte = voce?.aggiunte ?? 0;
+  const rimozioni = voce?.rimozioni ?? 0;
+  if (aggiunte === 0 && rimozioni === 0) return '';
+  return [aggiunte > 0 ? verde(`+${aggiunte}`) : '', rimozioni > 0 ? rosso(`-${rimozioni}`) : '']
+    .filter(Boolean)
+    .join(' ');
+}
+
 // Taglia una riga a un numero massimo di colonne VISIBILI: le sequenze ANSI non
 // occupano spazio a schermo e non vanno contate, ne' spezzate a meta'. Se il
 // taglio cade dentro un tratto colorato il colore viene richiuso, o resterebbe
@@ -534,6 +596,9 @@ function finestraAttorno(posizione, quante, totale) {
 // opzioni.extra: altri tasti da annunciare nella barra, se c'e' spazio. Dentro
 //   la sessione sono quelli che portano a un'altra conversazione o cartella;
 //   aprendo l'albero dal selettore non servono, perche' si e' gia' li'.
+// opzioni.menu: indice della voce di VOCI_RIPRISTINO selezionata, quando invio e'
+//   gia' stato premuto e si sta scegliendo cosa riportare indietro. L'albero
+//   resta a schermo: la scelta riguarda il punto che si vede.
 // ritorna: array di righe pronte da scrivere
 export function schermata(
   vista,
@@ -545,6 +610,7 @@ export function schermata(
     titolo = 'rami di questa conversazione',
     esc = { lunga: 'torna a Claude', corta: 'esci' },
     extra = { lunga: '', corta: '' },
+    menu = null,
   } = {},
 ) {
   const scelto = vista.perUuid.get(selezione);
@@ -553,8 +619,10 @@ export function schermata(
 
   // Righe che non sono ne' albero ne' storico: intestazione, legenda, separatori,
   // il prompt selezionato, l'intestazione dello storico, la barra dei tasti e gli
-  // avvisi di albero tagliato sopra, sotto e ai lati.
-  const fisse = 13 + testoScelto.length;
+  // avvisi di albero tagliato sopra, sotto e ai lati. Il menu prende il posto
+  // della barra dei tasti ma occupa piu' righe: vanno tolte all'albero, o la
+  // schermata sfonderebbe in basso.
+  const fisse = 13 + testoScelto.length + (menu === null ? 0 : VOCI_RIPRISTINO.length + 2);
   const disponibili = Math.max(4, altezza - fisse);
   const spazioAlbero = Math.min(vista.griglia.length, Math.max(3, Math.ceil(disponibili * 0.6)));
   const spazioStoria = Math.max(0, disponibili - spazioAlbero);
@@ -595,7 +663,12 @@ export function schermata(
   }
 
   righe.push('', `  ${normale('─'.repeat(Math.max(10, colonne - 4)))}`);
-  righe.push(`  ${arancione(quando(scelto))}  ${normale('riparti da qui')}`);
+  // Fra l'ora e "riparti da qui" stanno le righe di codice cambiate in quel
+  // turno: dice quanto pesa il punto su cui sta il cursore prima di sceglierlo.
+  const cambiate = cambiamenti(scelto);
+  righe.push(
+    `  ${arancione(quando(scelto))}  ${cambiate ? `${cambiate}  ` : ''}${normale('riparti da qui')}`,
+  );
   for (const riga of testoScelto) righe.push(`  ${arancioneForte(riga)}`);
 
   if (spazioStoria > 0) {
@@ -607,6 +680,29 @@ export function schermata(
       const testo = testoLeggibile(voce.testo).slice(0, Math.max(10, larghezzaTesto));
       righe.push(`    ${normale(quando(voce))}  ${normale(testo)}`);
     }
+  }
+
+  // Scelta di cosa riportare indietro: prende il posto della barra dei tasti, con
+  // l'albero ancora a schermo perche' la scelta riguarda il punto selezionato.
+  if (menu !== null) {
+    righe.push('', `  ${normale('riporta indietro:')}`);
+    VOCI_RIPRISTINO.forEach((voce, indice) => {
+      const riga = `  ${indice === menu ? '▸' : ' '} ${indice + 1}. ${voce.etichetta}`;
+      righe.push(indice === menu ? arancioneForte(riga) : normale(riga));
+    });
+    righe.push(
+      `  ${grigio(
+        primaCheEntra(
+          [
+            '↑↓ scegli   1-3 scelta diretta   invio conferma   esc torna all albero',
+            '↑↓ scegli   invio conferma   esc albero',
+            '↑↓ invio esc',
+          ],
+          spazioColonne,
+        ),
+      )}`,
+    );
+    return righe.map((riga) => tagliaVisibile(riga, colonne));
   }
 
   // Barra dei tasti, in tre lunghezze: su un terminale stretto si accorcia invece

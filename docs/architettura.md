@@ -33,6 +33,8 @@ ed è il motivo per cui i rami sopravvivono.
         │       ├── attiva.js      rende raggiungibile/troncato un turno
         │       └── ramo.js        crea la sessione del nuovo ramo
         │
+        ├── src/codice.js       ripristino dei file: archivio delle copie, regola temporale
+        │     └── commit.js       ripiego sui commit automatici (aggancio uuid → commit)
         ├── src/transcript.js   parsing .jsonl, albero da parentUuid, fusione famiglie
         ├── src/percorsi.js     slug delle cartelle, famiglia di sessioni
         ├── src/indice.js       catalogo globale con cache (mtime+size)
@@ -82,6 +84,26 @@ Quando le radici sono più d'una — la biforcazione è sul **primo prompt** —
 da cui far pendere i rami: la forca si mette prima della prima colonna, come se le radici
 pendessero dall'inizio della conversazione. Senza, si vedevano due conversazioni separate.
 
+**L'ordine in cui si assegnano le righe decide se le linee si incrociano.** Un ramo scende
+dritto lungo la colonna della sua forca, attraversando tutte le righe che trova. Da qui due
+regole, entrambe nella coda di `componiVista`:
+
+1. **In profondità, non in ampiezza**: i rami nati da una catena si disegnano subito sotto di
+   lei (`coda.unshift`), così ogni ramo occupa una fascia di righe contigua. In ampiezza un ramo
+   nato presto ma scoperto tardi finiva in fondo, e la sua discesa attraversava tutti gli altri.
+2. **Da destra a sinistra**: fra i rami di una stessa catena si disegna prima quello con la
+   forca più a destra. Le fasce già disegnate cominciano da una colonna maggiore, quindi ogni
+   discesa successiva passa **a sinistra** di tutto ciò che c'è, dove non c'è niente da
+   attraversare. Non è estetica: con quest'ordine nessuna discesa può incrociare un altro ramo.
+
+L'ordinamento è stabile, quindi i rami di una stessa forca (stessa colonna) restano nell'ordine
+di accodamento: è ciò che rende corretta la scelta fra `┣` e `┗`.
+
+Nell'intestazione, fra l'ora del prompt e «riparti da qui», stanno le righe di codice cambiate
+in quel turno (`+42` in verde, `-7` in rosso). Il conteggio viene dal diff che Claude scrive già
+nel transcript (`toolUseResult.structuredPatch`), sommato dal prompt fino al prompt successivo —
+lo stesso confine di `fineDelTurno`, quindi descrive esattamente il pezzo che ripartirebbe.
+
 Geometria e glifi vengono da `esempio-albero.txt`, il disegno di riferimento: passo di 4
 colonne fra i nodi, `⬤━┳━⬤`, ramo che parte con `┗` sulla colonna della forca.
 
@@ -128,18 +150,22 @@ nella cartella scelta.
 4. unisciAlberi()             un albero solo, ogni nodo con le sue `origini`
 5. componiVista()             griglia orizzontale, una volta sola
 6. ciclo: schermata() → azioniTastiera() → muovi()   finché invio o esc
-7. scegliOrigine()            da quale sessione ripartire per quel nodo
-8. chiudiProcesso()           attende l'uscita reale di Claude
-9. fineDelTurno()             dove tagliare: prompt + sua risposta
-10. riattivaConVerifica()     ramo raggiungibile, con verifica e ritentativi
-11. ripristinaFile()          --rewind-files sui file di lavoro
-12. creaSessioneTroncata()    nuovo .jsonl con la sola catena fino al taglio
-13. avviaClaude({riprendi})   --resume <nuova sessione>
+7. menu: conversazione / codice / entrambi           (esc torna all'albero)
+8. scegliOrigine()            da quale sessione ripartire per quel nodo
+9. chiudiProcesso()           attende l'uscita reale di Claude
+10. fineDelTurno()            dove tagliare: prompt + sua risposta
+11. riattivaConVerifica()     ramo raggiungibile, con verifica e ritentativi
+12. ripristinaFile()          copie dell'archivio sui file di lavoro
+13. creaSessioneTroncata()    nuovo .jsonl con la sola catena fino al taglio
+14. avviaClaude({riprendi})   --resume <nuova sessione>
 ```
 
-L'ordine di 8-12 non è arbitrario: le scritture devono essere le ultime (Claude in uscita
-appende un `last-prompt`), e il rewind dei file richiede che il messaggio sia nella catena
-attiva della sessione di partenza.
+L'ordine di 9-13 non è arbitrario: le scritture devono essere le ultime, perché Claude in uscita
+appende un `last-prompt` che sovrascriverebbe la riattivazione del ramo.
+
+Con **solo il codice** il flusso si ferma al 12: la conversazione resta dov'è, quindi non c'è
+niente da chiudere né da tagliare e Claude non viene riavviato. È l'unico caso in cui il cambio
+ramo non è un cambio di processo.
 
 ## Modello dei dati
 
@@ -175,13 +201,59 @@ Il file di partenza resta intero, e i turni successivi restano un ramo in dispar
 
 ## Codice e file di lavoro
 
-Due meccanismi indipendenti, con orizzonti diversi:
+Il ripristino del codice non chiede niente a Claude: **legge il suo archivio di copie**
+(`src/codice.js`). Claude non usa git — prima di modificare un file ne salva il contenuto
+**intero** in `~/.claude/file-history/<sessione>/<hash del percorso>@v<N>`, e annota la copia
+nel transcript con due tipi di record:
+
+| Record | Cosa contiene |
+|---|---|
+| `file-history-snapshot` | uno per prompt utente: la mappa completa `percorso → copia` in quel punto |
+| `file-history-delta` | una copia fatta a metà turno, con `trackingPath` e `backup` |
+
+Ogni copia è il contenuto **precedente** alla modifica che l'ha generata. Da qui la regola, una
+sola, che regge tutto il ripristino:
+
+> lo stato di un file all'istante T è la **prima copia con `backupTime ≥ T`**.
+> Nessuna copia dopo T = il file non è più stato toccato. Copia `null` = a T non esisteva.
+
+Tre conseguenze che il codice deve rispettare:
+
+- **Le versioni ripartono da `v1` in ogni sessione**, quindi il nome di una copia identifica
+  qualcosa solo insieme alla sua cartella. Le sessioni troncate che cb crea copiano i record ma
+  non le copie: la stessa voce compare più volte e quelle delle troncate puntano a cartelle che
+  non esistono. `preferisciCopiePresenti` tiene, fra voci identiche, quella che c'è davvero.
+- **Nell'archivio non c'è mai lo stato finale di un file**: è il "prima" di una modifica che non
+  è ancora avvenuta. Perché si possa tornare *avanti*, cb copia ciò che sta per sovrascrivere
+  nel proprio archivio (`~/.claude/cb/file-history/` + `indice.jsonl`), con la stessa semantica.
+- **Fuori dalla cartella di lavoro non si scrive.** Nell'archivio finisce ogni file toccato da
+  Claude, profilo PowerShell e file di memoria compresi: si contano e si dicono, non si toccano.
+
+Rispetto al ripristino nativo (`--resume <id> --rewind-files <uuid>`, che cb usava prima) non
+serve lanciare un processo né la variabile `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING`, e
+soprattutto si guardano le copie di **tutta la famiglia**: il flag nativo ne conosce una sola,
+mentre i rami di una conversazione stanno in file diversi.
+
+### Il ripiego: i commit automatici
+
+L'archivio nativo scade (le cartelle più vecchie durano qualche settimana) e copre solo i file
+che Claude ha toccato. L'hook `Stop` (`hooks/cb-commit.ps1`) salva quindi **tutto il working
+tree** a fine turno su `refs/cb/<sessione>/auto`, via `write-tree`/`commit-tree`/`update-ref`
+con un index temporaneo (`GIT_INDEX_FILE`): non compare in `git log`/`branch`/`tag`/`status`,
+non tocca il branch corrente né l'area di staging.
+
+Nel messaggio del commit finisce l'**uuid dell'ultimo messaggio del turno** — l'hook lo legge
+dalle ultime righe del transcript. È l'aggancio fra l'albero e lo storico del codice:
+`src/commit.js` risolve un punto dell'albero in un commit (prima per uuid, poi ripiegando
+sull'ultimo commit precedente a quell'istante) ed estrae un file per volta con `git show`. Un
+file per volta e non l'albero intero: riportare indietro tutto sovrascriverebbe anche ciò che il
+ripristino non aveva motivo di toccare.
+
+`ripristinaA` interroga il ripiego solo per le copie mancanti, e vale `null` fuori da un repo o
+senza commit: senza hook il comportamento è esattamente quello di prima.
 
 | | Copertura | Durata |
 |---|---|---|
-| `--rewind-files` (checkpoint nativi) | file toccati da Claude | legata al session-id, con retention |
-| `hooks/cb-commit.ps1` (opzionale) | tutto il working tree | permanente, ref git nascosti |
-
-L'hook scrive su `refs/cb/<sessione>/auto` via `write-tree`/`commit-tree`/`update-ref`, con un
-index temporaneo (`GIT_INDEX_FILE`): non compare in `git log`/`branch`/`tag`/`status`, non
-tocca il branch corrente né l'area di staging.
+| archivio di Claude | file toccati da Claude | qualche settimana (pulizia periodica) |
+| archivio di cb | file toccati dai ripristini di cb | permanente, nessuna pulizia |
+| commit automatici | tutto il working tree | permanente, ref git nascosti |

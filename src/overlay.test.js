@@ -62,9 +62,9 @@ function wrapperFinto(sessionId, cartella, opzioni = {}) {
     wrapper.ramoAvviato = true;
     wrapper.sessioneRipresa = riprendi;
   };
-  wrapper.ripristinaFile = async (sessione, uuid) => {
-    ripristini.push({ sessione, uuid });
-    return opzioni.esitoRipristino ?? { ok: true, uscita: 'Restored 2 files', senzaSnapshot: false };
+  wrapper.ripristinaFile = async (albero, uuid, percorsoOrigine) => {
+    ripristini.push({ uuid, percorso: percorsoOrigine, albero });
+    return opzioni.esitoRipristino ?? { ok: true, riassunto: '2 file ripristinati' };
   };
 
   return { wrapper, schermo: () => schermo.join(''), ripristini };
@@ -80,6 +80,12 @@ const GIU = `${esc}[B`;
 const SINISTRA = `${esc}[D`;
 const INVIO = '\r';
 const ANNULLA = esc;
+
+// Invio apre il menu di cosa riportare indietro: le cifre scelgono una voce
+// direttamente, senza passare dalle frecce.
+const ENTRAMBI = '1';
+const SOLO_CONVERSAZIONE = '2';
+const SOLO_CODICE = '3';
 
 // Preme una sequenza di tasti, cedendo il controllo fra uno e l'altro: dopo ogni
 // tasto l'overlay ridisegna e riattacca l'ascoltatore, e senza la pausa il tasto
@@ -163,10 +169,11 @@ async function testOverlayDisegnaAlberoEScegliRamo() {
   await premiTasti('w');
   assert.match(schermo().slice(da), /strada uno/, 'w muove come la freccia su');
 
-  await premiTasti(INVIO);
+  await premiTasti(INVIO, ENTRAMBI);
   await attesa;
 
   const testo = schermo();
+  assert.match(testo, /riporta indietro/, 'invio chiede prima cosa riportare indietro');
   assert.match(testo, /riparto da/, 'conferma la ripartenza');
   assert.equal(wrapper.ramoAvviato, true, 'viene lanciato un nuovo processo Claude');
 
@@ -236,7 +243,8 @@ async function testOverlaySopravviveAiRilasci() {
 
 // Crea un transcript con due rami e sceglie il ramo in disparte.
 // Il cursore parte da "strada due" (punta del ramo attivo): un colpo di freccia
-// su lo porta sul fratello "strada uno".
+// su lo porta sul fratello "strada uno". Invio apre il menu, e la voce si conferma
+// premendo invio sulla preselezione.
 // opzioni: passate a wrapperFinto
 // ritorna: { wrapper, schermo, ripristini, percorso }
 async function scegliRamo(sessionId, opzioni = {}) {
@@ -251,7 +259,7 @@ async function scegliRamo(sessionId, opzioni = {}) {
   const contesto = wrapperFinto(sessionId, CARTELLA, opzioni);
   const attesa = contesto.wrapper.mostraOverlay();
   await attendiPrompt(contesto.schermo);
-  await premiTasti(SU, INVIO);
+  await premiTasti(SU, INVIO, INVIO);
   await attesa;
 
   return { ...contesto, percorso };
@@ -343,10 +351,10 @@ async function testRipristinaAncheIFile() {
   const { wrapper, schermo, ripristini, percorso } = await scegliRamo(sessionId);
 
   assert.equal(ripristini.length, 1, 'il ripristino dei file viene eseguito');
-  assert.equal(ripristini[0].sessione, sessionId, 'sulla sessione di partenza');
+  assert.equal(ripristini[0].percorso, percorso, 'sul transcript della sessione di partenza');
   assert.equal(ripristini[0].uuid, 'c1', 'sul messaggio scelto');
   assert.match(schermo(), /ripristino i file/, 'lo dice a schermo');
-  assert.match(schermo(), /Restored 2 files/, 'riporta l esito');
+  assert.match(schermo(), /2 file ripristinati/, 'riporta l esito');
   assert.equal(wrapper.ramoAvviato, true, 'poi riparte Claude');
 
   fs.unlinkSync(percorso);
@@ -365,19 +373,15 @@ async function testSenzaFileNonRipristina() {
   fs.unlinkSync(percorso);
 }
 
-async function testNessunoSnapshotNonEUnErrore() {
+async function testNessunaCopiaNonEUnErrore() {
   // Se da quel messaggio i file non sono stati toccati non c'e' niente da
   // ripristinare: va detto con calma, non come un guasto.
   const sessionId = '00000000-0000-4000-8000-0000000000b3';
   const { wrapper, schermo, percorso } = await scegliRamo(sessionId, {
-    esitoRipristino: {
-      ok: true,
-      uscita: 'Error: No file checkpoint found for this message.',
-      senzaSnapshot: true,
-    },
+    esitoRipristino: { ok: true, riassunto: "i file erano gia' in quello stato" },
   });
 
-  assert.match(schermo(), /nessuna modifica ai file/, 'messaggio non allarmante');
+  assert.match(schermo(), /erano gia' in quello stato/, 'messaggio non allarmante');
   assert.doesNotMatch(schermo(), /NON ripristinati/, 'non viene dato per errore');
   assert.equal(wrapper.ramoAvviato, true, 'il ramo parte comunque');
 
@@ -387,12 +391,144 @@ async function testNessunoSnapshotNonEUnErrore() {
 async function testRipristinoFallitoAvvisaEProsegue() {
   const sessionId = '00000000-0000-4000-8000-0000000000b4';
   const { wrapper, schermo, percorso } = await scegliRamo(sessionId, {
-    esitoRipristino: { ok: false, uscita: 'Failed to rewind: disco pieno', senzaSnapshot: false },
+    esitoRipristino: { ok: false, riassunto: 'disco pieno' },
   });
 
   assert.match(schermo(), /file NON ripristinati/, 'avvisa che i file non sono tornati indietro');
   assert.match(schermo(), /disco pieno/, 'riporta il motivo');
   assert.equal(wrapper.ramoAvviato, true, 'la conversazione riparte comunque');
+
+  fs.unlinkSync(percorso);
+}
+
+async function testSoloCodiceNonToccaLaConversazione() {
+  // "Solo il codice" e' l'unico caso in cui Claude non va riavviato: la
+  // conversazione resta dov'e', tornano indietro solo i file.
+  const sessionId = '00000000-0000-4000-8000-0000000000b5';
+  const percorso = creaTranscript(sessionId, CARTELLA, [
+    msg('a', null, 'user', 'primo prompt', 1),
+    msg('b', 'a', 'assistant', 'prima risposta', 2),
+    msg('c1', 'b', 'user', 'strada uno', 3),
+    msg('c2', 'b', 'user', 'strada due', 4),
+    { type: 'last-prompt', leafUuid: 'c2', lastPrompt: 'strada due', sessionId },
+  ]);
+
+  const contesto = wrapperFinto(sessionId, CARTELLA);
+  const { wrapper } = contesto;
+  let ucciso = false;
+  const kill = wrapper.processo.kill;
+  wrapper.processo.kill = () => {
+    ucciso = true;
+    kill();
+  };
+
+  const attesa = wrapper.mostraOverlay();
+  await attendiPrompt(contesto.schermo);
+  await premiTasti(SU, INVIO, SOLO_CODICE);
+  await attesa;
+
+  assert.equal(contesto.ripristini.length, 1, 'i file tornano indietro');
+  assert.equal(contesto.ripristini[0].uuid, 'c1', 'al punto scelto nell albero');
+  assert.equal(ucciso, false, 'il processo Claude non viene chiuso');
+  assert.equal(wrapper.ramoAvviato, undefined, 'e nessuna sessione nuova viene avviata');
+  assert.equal(wrapper.inOverlay, false, 'l overlay si richiude');
+
+  // Il transcript non viene toccato: nessuna riattivazione, nessun taglio.
+  const dopo = await leggiTranscript(percorso);
+  assert.equal(dopo.leafAttivo, 'c2', 'il ramo attivo resta quello di prima');
+
+  fs.unlinkSync(percorso);
+}
+
+async function testSoloConversazioneNonToccaIFile() {
+  const sessionId = '00000000-0000-4000-8000-0000000000b6';
+  const percorso = creaTranscript(sessionId, CARTELLA, [
+    msg('a', null, 'user', 'primo prompt', 1),
+    msg('b', 'a', 'assistant', 'prima risposta', 2),
+    msg('c1', 'b', 'user', 'strada uno', 3),
+    msg('c2', 'b', 'user', 'strada due', 4),
+    { type: 'last-prompt', leafUuid: 'c2', lastPrompt: 'strada due', sessionId },
+  ]);
+
+  const contesto = wrapperFinto(sessionId, CARTELLA);
+  const attesa = contesto.wrapper.mostraOverlay();
+  await attendiPrompt(contesto.schermo);
+  await premiTasti(SU, INVIO, SOLO_CONVERSAZIONE);
+  await attesa;
+
+  assert.equal(contesto.ripristini.length, 0, 'i file non si toccano');
+  assert.equal(contesto.wrapper.ramoAvviato, true, 'ma la conversazione riparte dal punto scelto');
+
+  fs.unlinkSync(percorso);
+  const creata = path.join(
+    CARTELLA_PROGETTI,
+    slugProgetto(CARTELLA),
+    `${contesto.wrapper.sessioneRipresa}.jsonl`,
+  );
+  if (fs.existsSync(creata)) fs.unlinkSync(creata);
+}
+
+async function testDoppioInvioNellaStessaLettura() {
+  // Due invii battuti in fretta arrivano in una lettura sola: il primo apre il
+  // menu, il secondo finiva nella coda della navigazione e il menu restava li'
+  // ad aspettare un tasto che l'utente aveva gia' premuto.
+  const sessionId = '00000000-0000-4000-8000-0000000000b8';
+  const percorso = creaTranscript(sessionId, CARTELLA, [
+    msg('a', null, 'user', 'primo prompt', 1),
+    msg('b', 'a', 'assistant', 'prima risposta', 2),
+    msg('c1', 'b', 'user', 'strada uno', 3),
+    msg('c2', 'b', 'user', 'strada due', 4),
+    { type: 'last-prompt', leafUuid: 'c2', lastPrompt: 'strada due', sessionId },
+  ]);
+
+  const contesto = wrapperFinto(sessionId, CARTELLA);
+  const attesa = contesto.wrapper.mostraOverlay();
+  await attendiPrompt(contesto.schermo);
+
+  premi(`${INVIO}${INVIO}`); // una sola lettura con due invii
+  await attesa;
+
+  assert.equal(contesto.ripristini.length, 1, 'il secondo invio conferma la preselezione');
+  assert.equal(contesto.wrapper.ramoAvviato, true, 'e il ramo parte senza altri tasti');
+
+  fs.unlinkSync(percorso);
+  const creata = path.join(
+    CARTELLA_PROGETTI,
+    slugProgetto(CARTELLA),
+    `${contesto.wrapper.sessioneRipresa}.jsonl`,
+  );
+  if (fs.existsSync(creata)) fs.unlinkSync(creata);
+}
+
+async function testEscNelMenuTornaAllAlbero() {
+  const sessionId = '00000000-0000-4000-8000-0000000000b7';
+  const percorso = creaTranscript(sessionId, CARTELLA, [
+    msg('a', null, 'user', 'primo prompt', 1),
+    msg('b', 'a', 'assistant', 'prima risposta', 2),
+    msg('c1', 'b', 'user', 'strada uno', 3),
+    msg('c2', 'b', 'user', 'strada due', 4),
+    { type: 'last-prompt', leafUuid: 'c2', lastPrompt: 'strada due', sessionId },
+  ]);
+
+  const contesto = wrapperFinto(sessionId, CARTELLA);
+  const attesa = contesto.wrapper.mostraOverlay();
+  await attendiPrompt(contesto.schermo);
+
+  await premiTasti(INVIO);
+  assert.match(contesto.schermo(), /riporta indietro/, 'invio apre il menu');
+
+  // Esc nel menu non chiude l'overlay: riporta all'albero, dove si puo'
+  // cambiare punto e riprovare.
+  const da = contesto.schermo().length;
+  await premiTasti(ANNULLA);
+  assert.equal(contesto.wrapper.inOverlay, true, 'l overlay resta aperto');
+  assert.match(contesto.schermo().slice(da), /invio = riparti/, 'e torna la barra dei tasti');
+
+  premi(ANNULLA); // ora chiudo davvero
+  await attesa;
+
+  assert.equal(contesto.ripristini.length, 0, 'niente e stato ripristinato');
+  assert.equal(contesto.wrapper.ramoAvviato, undefined, 'e nessun ramo e partito');
 
   fs.unlinkSync(percorso);
 }
@@ -427,10 +563,10 @@ async function testRamoDelPadreVisibileESelezionabile() {
   await premiTasti(SU);
   assert.match(schermo(), /strada abbandonata/, 'il ramo del padre e raggiungibile dal figlio');
 
-  await premiTasti(INVIO);
+  await premiTasti(INVIO, ENTRAMBI);
   await attesa;
 
-  assert.equal(ripristini[0]?.sessione, sidPadre, 'il fork riparte dalla sessione del padre');
+  assert.equal(ripristini[0]?.percorso, filePadre, 'il fork riparte dalla sessione del padre');
   assert.equal(ripristini[0]?.uuid, 'vecchio', 'dal messaggio scelto');
   assert.match(schermo(), /ramo della sessione/, 'avvisa che il ramo viene da un altra sessione');
 
@@ -470,7 +606,7 @@ async function testAlberoRestaDopoIlCambioRamo() {
 
   const primo = wrapper.mostraOverlay();
   await attendiPrompt(contesto.schermo);
-  await premiTasti(SU, INVIO); // dal ramo attivo al fratello: "strada uno"
+  await premiTasti(SU, INVIO, ENTRAMBI); // dal ramo attivo al fratello: "strada uno"
   await primo;
 
   assert.ok(wrapper.sessioneRipresa, 'il primo cambio ramo crea e riprende una sessione');
@@ -543,7 +679,7 @@ async function testRiattivazioneSopravviveAScrittureInRitardo() {
 
   const attesa = wrapper.mostraOverlay();
   await attendiPrompt(contesto.schermo);
-  await premiTasti(SU, INVIO); // "strada uno", ramo in disparte
+  await premiTasti(SU, INVIO, ENTRAMBI); // "strada uno", ramo in disparte
   await attesa;
 
   assert.equal(sabotaggi, 1, 'la scrittura tardiva e stata simulata');
@@ -581,7 +717,7 @@ async function testDueCambiRamoDiFila() {
   // Primo cambio ramo: dal ramo attivo ("cosa fai?") al fratello "come sati?"
   const primo = wrapper.mostraOverlay();
   await attendiPrompt(contesto.schermo);
-  await premiTasti(SU, INVIO);
+  await premiTasti(SU, INVIO, ENTRAMBI);
   await primo;
 
   assert.ok(avvii[0], 'primo cambio ramo avvenuto');
@@ -592,15 +728,15 @@ async function testDueCambiRamoDiFila() {
   const lunghezza = contesto.schermo().length;
   const secondo = wrapper.mostraOverlay();
   await attendiPrompt(() => contesto.schermo().slice(lunghezza));
-  await premiTasti(GIU, INVIO);
+  await premiTasti(GIU, INVIO, ENTRAMBI);
   await secondo;
 
   assert.equal(avvii.length, 2, 'anche il secondo cambio ramo avviene');
   assert.notEqual(avvii[1], avvii[0], 'ogni ramo e una sessione distinta');
   assert.equal(contesto.ripristini[1].uuid, 'c2', 'secondo ramo scelto');
   assert.equal(
-    contesto.ripristini[1].sessione,
-    sessionId,
+    contesto.ripristini[1].percorso,
+    percorso,
     'il ripristino dei file usa la sessione che ha il transcript',
   );
 
@@ -632,7 +768,7 @@ async function testPuntoIntermedioTagliaLaConversazione() {
   const attesa = wrapper.mostraOverlay();
   await attendiPrompt(contesto.schermo);
   // Catena unica: il cursore parte da "test", sinistra risale a "cosa fai?"
-  await premiTasti(SINISTRA, INVIO);
+  await premiTasti(SINISTRA, INVIO, ENTRAMBI);
   await attesa;
 
   assert.ok(wrapper.sessioneRipresa, 'viene creata una sessione per il ramo');
@@ -723,8 +859,12 @@ const prove = [
   testOverlaySiRidisegnaAlRidimensionamento,
   testRipristinaAncheIFile,
   testSenzaFileNonRipristina,
-  testNessunoSnapshotNonEUnErrore,
+  testNessunaCopiaNonEUnErrore,
   testRipristinoFallitoAvvisaEProsegue,
+  testSoloCodiceNonToccaLaConversazione,
+  testSoloConversazioneNonToccaIFile,
+  testDoppioInvioNellaStessaLettura,
+  testEscNelMenuTornaAllAlbero,
 ];
 
 for (const prova of prove) {

@@ -16,6 +16,14 @@ const ARANCIONE = '38;2;255;140;102';
 // Unico tono abbassato dell'interfaccia: la legenda.
 const GRIGIO = '38;2;140;140;140';
 
+// Verde e rosso delle righe aggiunte e tolte. Non sono tinte scelte a occhio:
+// hanno la stessa saturazione e la stessa luminosita' dell'arancione del marchio
+// (in HSL: 100% e 70%), e cambiano solo la tonalita'. Cosi' restano coerenti con
+// la regola della tavolozza — ci si distingue per TINTA, non per luminosita' — e
+// nessuno dei tre colori sembra piu' acceso degli altri.
+const VERDE = '38;2;102;255;166'; // hsl(140, 100%, 70%)
+const ROSSO = '38;2;255;102;102'; // hsl(0, 100%, 70%)
+
 // I colori si spengono se l'uscita non e' un terminale (redirezione, pipe, test)
 // o se l'utente lo chiede con NO_COLOR, la convenzione di no-color.org.
 // CB_COLORI=1 li riaccende a forza, per catturare l'aspetto vero in un file.
@@ -35,6 +43,8 @@ const vesti = (codice) => (testo) =>
 export const arancione = vesti(ARANCIONE);
 export const arancioneForte = vesti(`1;${ARANCIONE}`);
 export const grigio = vesti(GRIGIO);
+export const verde = vesti(VERDE);
+export const rosso = vesti(ROSSO);
 
 // Massima luminosita': nessun colore, cioe' il primo piano del terminale cosi'
 // com'e'. E' piu' chiaro di qualsiasi bianco scelto da noi, perche' e' esattamente

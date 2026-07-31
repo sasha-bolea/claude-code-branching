@@ -2,9 +2,10 @@
 // Serve a guardare una modifica all'interfaccia su una conversazione vera: le
 // prove verificano la struttura del disegno, non se e' leggibile.
 //
-// Uso: node src/anteprima.js [percorso.jsonl]
+// Uso: node src/anteprima.js [percorso.jsonl] [--menu[=indice]]
 // Senza argomenti prende la sessione con piu' ripristini, che e' quella con
-// l'albero piu' ramificato.
+// l'albero piu' ramificato. Con --menu si guarda la schermata come si presenta
+// dopo aver premuto invio, quando si sceglie cosa riportare indietro.
 
 // I colori si accendono a forza: cosi' l'anteprima si puo' anche redirigere su
 // file conservando le sequenze ANSI.
@@ -16,8 +17,10 @@ import { sessioniDellaFamiglia } from './percorsi.js';
 import { componiVista, schermata, puntaRamoAttivo } from './vista.js';
 import { grigio } from './stile.js';
 
-const indicato = process.argv[2];
-let percorso = indicato;
+const argomenti = process.argv.slice(2);
+const richiestaMenu = argomenti.find((a) => a.startsWith('--menu'));
+const menu = richiestaMenu ? Number.parseInt(richiestaMenu.split('=')[1] ?? '0', 10) : null;
+let percorso = argomenti.find((a) => !a.startsWith('--'));
 
 if (!percorso) {
   const schede = await scansiona();
@@ -46,6 +49,7 @@ const righe = schermata(vista, selezione, {
   colonne,
   altezza,
   extra: { lunga: 'c = altra conversazione   p = altra cartella', corta: 'c/p altra conv.' },
+  menu,
 });
 for (const riga of righe) console.log(riga);
 console.log(

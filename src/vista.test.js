@@ -22,13 +22,15 @@ import {
 // ritorna: albero finto
 function alberoFinto(righe, leafAttivo, ultimoNodo = leafAttivo) {
   const nodi = new Map();
-  righe.forEach(([uuid, parentUuid, tipo], i) => {
+  righe.forEach(([uuid, parentUuid, tipo, cambiate], i) => {
     nodi.set(uuid, {
       uuid,
       parentUuid,
       isPromptUtente: tipo === 'u',
       testo: uuid,
       timestamp: `2026-07-30T10:${String(i).padStart(2, '0')}:00.000Z`,
+      aggiunte: cambiate?.aggiunte ?? 0,
+      rimozioni: cambiate?.rimozioni ?? 0,
       figli: [],
     });
   });
@@ -86,26 +88,28 @@ function testTreRamiDallaStessaForca() {
   assert.deepEqual(disegna(albero), ['⬤━┳━⬤', '  ┣━⬤', '  ┗━⬤']);
 }
 
-function testDiscesaAttraversaLeRigheIntermedie() {
-  // Ramo che parte da un punto piu' avanzato della linea: la discesa deve
-  // arrivare fino alla sua riga, sotto a quelle gia' disegnate.
+function testDiscesaPassaASinistraDiQuantoGiaDisegnato() {
+  // Due rami dalla stessa catena, uno nato prima (colonna 2) e uno dopo
+  // (colonna 6). Si disegna prima quello nato piu' a destra: la discesa dell'altro
+  // scende allora lungo una colonna dove non c'e' ancora niente, invece di
+  // attraversare una riga gia' occupata passandole "sotto".
   const albero = alberoFinto(
     [
       ['a', null, 'u'],
       ['r1', 'a', 'r'],
       ['b', 'r1', 'u'], // primo figlio di a
-      ['c', 'r1', 'u'], // secondo figlio di a: riga 1
+      ['c', 'r1', 'u'], // secondo figlio di a: forca in colonna 2
       ['r2', 'b', 'r'],
       ['d', 'r2', 'u'], // primo figlio di b
-      ['e', 'r2', 'u'], // secondo figlio di b: riga 2, discesa dalla colonna 6
+      ['e', 'r2', 'u'], // secondo figlio di b: forca in colonna 6
     ],
     'b',
   );
 
   assert.deepEqual(disegna(albero), [
     '⬤━┳━⬤━┳━⬤',
-    '  ┗━⬤ ┃', // la discesa verso la riga 2 attraversa questa riga
-    '      ┗━⬤',
+    '  ┃   ┗━⬤', // il ramo nato piu' a destra sta subito sotto alla sua catena
+    '  ┗━⬤', // e quello nato prima scende sulla propria colonna, senza incroci
   ]);
 }
 
@@ -426,13 +430,13 @@ function testSinistraSaleInvecediTagliareInDiagonale() {
 }
 
 function testSinistraRipiegaSulPadreSeSopraNonCeNessuno() {
-  // Due forche a distanza diversa: sopra il primo prompt del ramo di h non c'e'
-  // nessun prompt incolonnato, perche' la riga di mezzo appartiene a un ramo
-  // nato prima e piu' corto. Li' la sinistra torna a essere il passo indietro.
+  // Due forche a distanza diversa: sopra il primo prompt del ramo di g non c'e'
+  // nessun prompt incolonnato, perche' la riga di mezzo appartiene a un ramo nato
+  // piu' a destra. Li' la sinistra torna a essere il passo indietro.
   //
   //   riga 0:  a━┳━b━┳━c
-  //   riga 1:    ┗━g       g e' una foglia in colonna 4
-  //   riga 2:      ┗━h     h nasce in colonna 8: sopra, in colonna 8, c'e' un vuoto
+  //   riga 1:    ┃   ┗━h   h nasce piu' a destra, quindi si disegna per primo
+  //   riga 2:    ┗━g       g nasce in colonna 4: sopra, in colonna 4, c'e' un vuoto
   const vista = componiVista(
     alberoFinto(
       [
@@ -446,9 +450,9 @@ function testSinistraRipiegaSulPadreSeSopraNonCeNessuno() {
     ),
   );
 
-  assert.equal(vista.posizioni.get('h').colonna, 8, 'h nasce in colonna 8');
-  assert.equal(vista.posizioni.get('g').colonna, 4, 'e sopra, in quella colonna, non c e nessuno');
-  assert.equal(muovi(vista, 'h', 'sinistra'), 'b', 'senza nessuno sopra si ripiega sul padre');
+  assert.equal(vista.posizioni.get('g').colonna, 4, 'g nasce in colonna 4');
+  assert.equal(vista.posizioni.get('h').colonna, 8, 'e sopra, in quella colonna, non c e nessuno');
+  assert.equal(muovi(vista, 'g', 'sinistra'), 'a', 'senza nessuno sopra si ripiega sul padre');
 }
 
 function testDestraScendeSuUnRamoCheFinisceDoveSiamo() {
@@ -634,6 +638,126 @@ function testSchermataStaNelloSchermo() {
   assert.match(testo, /invio/, 'la barra dei tasti non viene spinta fuori');
 }
 
+function testNessunaDiscesaAttraversaUnAltroRamo() {
+  // Il caso segnalato guardando lo schermo: un ramo finiva in fondo all'albero e
+  // la sua discesa attraversava le righe dei rami disegnati prima, passandoci
+  // "sotto". Succedeva perche' i rami si disegnavano da sinistra a destra: quello
+  // nato piu' a destra scendeva per forza lungo righe gia' occupate.
+  //
+  // Disegnandoli da destra a sinistra ogni discesa passa a sinistra di quello che
+  // c'e' gia', dove non c'e' niente da attraversare. In piu' ogni ramo resta
+  // attaccato alla catena da cui nasce, invece di finire in fondo.
+  const albero = alberoFinto(
+    [
+      ['m1', null, 'u'],
+      ['m2', 'm1', 'u'],
+      ['m3', 'm2', 'u'],
+      ['m4', 'm3', 'u'],
+      ['b1', 'm2', 'u'], // ramo della principale, forca in colonna 6
+      ['b2', 'b1', 'u'],
+      ['c1', 'm3', 'u'], // ramo della principale, forca in colonna 10
+      ['d1', 'b1', 'u'], // ramo DEL ramo b, forca in colonna 10 della sua riga
+    ],
+    'm4',
+  );
+
+  const vista = componiVista(albero);
+
+  assert.deepEqual(disegnaRighe(vista), [
+    '⬤━━━⬤━┳━⬤━┳━⬤', // linea principale, con due forche
+    '      ┃   ┗━⬤', // c1: forca piu' a destra, quindi subito sotto
+    '      ┗━⬤━┳━⬤', // b1 e b2: scendono lungo una colonna libera
+    '          ┗━⬤', // d1: attaccato al ramo da cui nasce, non in fondo
+  ]);
+
+  // Nessuna discesa scavalca un nodo: ogni tratto verticale ha solo spazio
+  // vuoto sopra e sotto di se', nella sua colonna.
+  const riga = (uuid) => vista.posizioni.get(uuid).riga;
+  assert.equal(riga('d1') - riga('b1'), 1, 'il ramo del ramo e adiacente al suo');
+  assert.equal(riga('c1'), 1, 'il ramo nato piu a destra sta subito sotto alla principale');
+}
+
+function testRigheCambiateNellIntestazione() {
+  // Fra l'ora del prompt e "riparti da qui" sta quanto codice quel turno ha
+  // cambiato: si sommano tutti i record del turno, fino al prompt successivo.
+  const albero = alberoFinto(
+    [
+      ['a', null, 'u'],
+      ['ra1', 'a', 'r', { aggiunte: 10, rimozioni: 2 }],
+      ['ra2', 'ra1', 'r', { aggiunte: 5, rimozioni: 0 }],
+      ['b', 'ra2', 'u'], // prompt successivo: il turno di "a" finisce qui
+      ['rb', 'b', 'r', { aggiunte: 3, rimozioni: 7 }],
+    ],
+    'b',
+  );
+  const vista = componiVista(albero);
+
+  assert.equal(vista.perUuid.get('a').aggiunte, 15, 'le aggiunte del turno si sommano');
+  assert.equal(vista.perUuid.get('a').rimozioni, 2, 'e cosi le rimozioni');
+  assert.equal(vista.perUuid.get('b').aggiunte, 3, 'il turno dopo conta per se');
+
+  const suA = schermata(vista, 'a', { colonne: 100, altezza: 30 }).join('\n');
+  assert.match(suA, /\+15 -2 {2}riparti da qui/, 'l intestazione mostra il conteggio');
+
+  const suB = schermata(vista, 'b', { colonne: 100, altezza: 30 }).join('\n');
+  assert.match(suB, /\+3 -7 {2}riparti da qui/, 'e cambia con il cursore');
+
+  // Un turno che non tocca codice non mostra "+0 -0": sarebbe solo rumore.
+  const senzaCodice = componiVista(alberoFinto([['x', null, 'u'], ['y', 'x', 'u']], 'y'));
+  const pulita = schermata(senzaCodice, 'x', { colonne: 100, altezza: 30 }).join('\n');
+  // L'ora e' seguita direttamente da "riparti da qui": nessun "+0 -0" in mezzo.
+  assert.match(pulita, /\d\d:\d\d {2}riparti da qui/, 'niente contatore a zero');
+
+  // Con i colori accesi: verde le aggiunte, rosso le rimozioni.
+  process.env.NO_COLOR = '';
+  process.env.CB_COLORI = '1';
+  try {
+    const colorata = schermata(vista, 'a', { colonne: 100, altezza: 30 }).join('\n');
+    assert.match(colorata, /\x1b\[38;2;102;255;166m\+15\x1b\[0m/, 'le aggiunte sono verdi');
+    assert.match(colorata, /\x1b\[38;2;255;102;102m-2\x1b\[0m/, 'le rimozioni sono rosse');
+  } finally {
+    process.env.CB_COLORI = '';
+    process.env.NO_COLOR = '1';
+  }
+}
+
+function testMenuDelRipristino() {
+  // Premuto invio l'albero resta a schermo — la scelta riguarda il punto che si
+  // vede — e la barra dei tasti lascia il posto alle tre voci.
+  const albero = alberoFinto([['a', null, 'u'], ['b', 'a', 'a'], ['c', 'b', 'u']], 'c');
+  const vista = componiVista(albero);
+  const disegno = schermata(vista, 'c', { colonne: 100, altezza: 30, menu: 0 });
+  const testo = disegno.join('\n');
+
+  assert.match(testo, /riporta indietro/, 'annuncia la scelta');
+  assert.match(testo, /1\. conversazione e codice/, 'prima voce');
+  assert.match(testo, /2\. solo la conversazione/, 'seconda voce');
+  assert.match(testo, /3\. solo il codice/, 'terza voce');
+  assert.doesNotMatch(testo, /invio = riparti/, 'la barra dei tasti dell albero non c e piu');
+  assert.match(testo, /rami di questa conversazione/, 'ma l albero resta a schermo');
+
+  // Il cursore del menu si vede: la voce selezionata e' l'unica marcata.
+  const marcate = disegno.filter((riga) => riga.includes('▸'));
+  assert.equal(marcate.length, 1, 'una sola voce selezionata');
+  assert.match(marcate[0], /conversazione e codice/, 'quella preselezionata e la prima');
+
+  const seconda = schermata(vista, 'c', { colonne: 100, altezza: 30, menu: 1 });
+  assert.match(
+    seconda.find((riga) => riga.includes('▸')),
+    /solo la conversazione/,
+    'l indice sposta il cursore',
+  );
+
+  // Nemmeno col menu aperto una riga puo' eccedere la larghezza: il capo
+  // sfaserebbe tutto il disegno.
+  for (const colonne of [120, 80, 60, 40, 24]) {
+    for (const riga of schermata(vista, 'c', { colonne, altezza: 24, menu: 2 })) {
+      const nudo = riga.replace(/\x1b\[[0-9;]*m/g, '');
+      assert.ok([...nudo].length <= colonne, `riga di ${[...nudo].length} colonne su ${colonne}`);
+    }
+  }
+}
+
 function testBarraETestateSiAccorcianoSuTerminaleStretto() {
   // Legenda e barra dei tasti avevano lunghezza fissa: su un terminale stretto
   // andavano a capo e sfasavano tutto il disegno sotto.
@@ -744,7 +868,7 @@ const prove = [
   testCatenaSuUnaRiga,
   testBiforcazione,
   testTreRamiDallaStessaForca,
-  testDiscesaAttraversaLeRigheIntermedie,
+  testDiscesaPassaASinistraDiQuantoGiaDisegnato,
   testCatenaLungaNonVaACapo,
   testRitaglioOrizzontale,
   testRitaglioNonSpezzaLeSequenzeAnsi,
@@ -766,6 +890,9 @@ const prove = [
   testAlberoVuoto,
   testSchermata,
   testSchermataStaNelloSchermo,
+  testNessunaDiscesaAttraversaUnAltroRamo,
+  testRigheCambiateNellIntestazione,
+  testMenuDelRipristino,
   testBarraETestateSiAccorcianoSuTerminaleStretto,
   testTaglioNonLasciaIlColoreAcceso,
   testGiunzioniAttraversateSiIlluminano,

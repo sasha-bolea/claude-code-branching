@@ -1,58 +1,58 @@
 # STATO
 
-**Ultimo aggiornamento:** 2026-07-31 00:57
+**Ultimo aggiornamento:** 2026-07-31 18:19
 
 ## Stato attuale
 
-Progetto **funzionante e pubblicato**. Nato e cresciuto in quattro sessioni (29-31 luglio 2026).
+Progetto **funzionante e pubblicato**. Nato e cresciuto in cinque sessioni (29-31 luglio 2026).
 
 - Repo pubblica: **https://github.com/sasha-bolea/claude-code-branching** (MIT, branch `master`)
 - Cartella locale: `C:\Users\sasha\Documents\REPOSITORY\personale\cb`
-- `cb` installato come comando globale (`npm link`)
-- Agganciato alla funzione `claude` del profilo PowerShell: scrivi `claude`, poi **F2**
-- **95 prove** nominali con `assert` più i due selettori (115 assert), nessun framework
-  (`npm test`)
+- `cb` installato come comando globale (`npm link`), agganciato alla funzione `claude` del
+  profilo PowerShell: scrivi `claude`, poi **F2**
+- **121 prove** con `assert` più i due selettori, nessun framework (`npm test`)
+- Hook dei commit automatici **installato** in `~/.claude/settings.json` (vedi `procedure.md`)
 
-Il workflow funziona end-to-end. Scrivendo `claude`:
+Il workflow funziona end-to-end. Scrivendo `claude`: cb chiede dove lavorare, poi quale
+conversazione riprendere (una conversazione è tutta la sua famiglia di sessioni), poi da quale
+punto ripartire. Dentro la sessione **F2** riapre lo stesso albero; `c`/`p` riportano ai due
+selettori senza chiudere Claude.
 
-1. **cb chiede dove lavorare** — albero delle cartelle, `r` alterna avvio normale e ripresa;
-2. in ripresa **cb chiede quale conversazione** — albero della conversazione selezionata in
-   cima, elenco sotto, `↑↓` per scorrerle; una conversazione è tutta la sua famiglia di
-   sessioni, non un file;
-3. invio entra nell'albero e si sceglie il punto da cui ripartire;
-4. dentro la sessione **F2** riapre lo stesso albero, e `c`/`p` riportano ai due selettori
-   senza chiudere Claude.
+Premendo invio su un punto si sceglie **cosa riportare indietro**: conversazione e codice, solo
+la conversazione, solo il codice. Con «solo il codice» Claude non viene nemmeno riavviato.
 
-L'albero è orizzontale e navigabile: la conversazione scorre da sinistra a destra, ogni
-biforcazione fa scendere un ramo, e l'arancione marca il percorso dal cursore alla radice —
-cioè quello che ripartirebbe premendo invio.
+**Il codice segue la conversazione** leggendo l'archivio di copie di Claude (che non usa git:
+vedi `architettura.md`), con due ripieghi: le copie che cb fa prima di sovrascrivere, e i commit
+automatici su ref nascosti, agganciati all'albero per uuid del messaggio.
 
 ## Problemi aperti
 
-- **Commit automatici del codice non installati.** `hooks/cb-commit.ps1` è scritto e provato,
-  ma non registrato in `settings.json`. Finché non lo è, il ripristino dei file dipende dai
-  checkpoint nativi, che sono legati al session-id e hanno una retention: su rami vecchi il
-  codice non torna più indietro. Procedura in `procedure.md`.
-- **Titolo della tab da verificare sul campo.** Il loop di rinomina che stava nel profilo è
-  stato tolto: adesso il titolo lo scrive cb a ogni avvio di Claude. Se in una tab ricomparisse
-  `…\claude.exe`, il loop va rimesso (sta nel backup del profilo).
-- **Il conteggio dei messaggi nell'elenco delle conversazioni è una stima**: il file più lungo
-  della famiglia. Il numero esatto si sa solo unendo gli alberi, e compare in cima quando la
-  conversazione è selezionata.
-- **Glifi a larghezza incerta.** `⬤ ◯ ━ ┳ ┃ ┣ ┗` sono tutti "East Asian Ambiguous": un
-  terminale che li rendesse a doppia larghezza sfaserebbe il rientro dei rami, che è fatto di
-  spazi. Sono in cima a `src/vista.js` e si sostituiscono in tre costanti.
-- **Solo Windows.** Il parsing dei transcript è portabile; l'intercettazione dei tasti no
-  (win32-input-mode). Su Linux/macOS mai provata.
-- **Più terminali sulla stessa cartella**: con avvio `-r`/`--continue` cb ripiega sul
-  transcript più recente della cartella e può agganciare la sessione sbagliata. Con l'avvio
-  normale non succede, perché l'id lo impone cb.
-- **Sessioni troncate accumulate**: ogni cambio ramo crea un `.jsonl`. Nessuna pulizia
-  automatica.
-- **Rami che nascono tardi partono a destra.** Un ramo comincia dalla colonna in cui si è
-  diramato, quindi con biforcazioni avanzate nella conversazione va a capo presto.
-- **Il selettore delle conversazioni rilegge la famiglia a ogni selezione** (con cache in
-  memoria per la durata della schermata). Su conversazioni da 2000 messaggi si sente.
+- **Copertura parziale del ripristino.** L'archivio di Claude contiene solo i file che *Claude*
+  ha toccato: modifiche a mano, altri terminali, build, `npm install` non ci sono. Ripristinare
+  un punto dà un albero **misto** — i file di Claude com'erano allora, il resto com'è adesso.
+  I commit automatici coprono tutto il working tree, ma oggi sono solo un ripiego per le copie
+  scadute, non la sorgente principale.
+- **Nessuna pulizia, da nessuna parte.** L'archivio di cb cresce a ogni ripristino (copie
+  integrali, nessuna deduplica); i ref `refs/cb/*` non scadono; le sessioni troncate si
+  accumulano (19 in venti minuti di prove). Serve un `cb prune` che li tenga tutti e tre.
+- **Non si può guardare dentro agli archivi.** Nessun `cb files`, nessuna anteprima di «cosa
+  cambierà», nessun annulla. Se un ripristino sovrascrive del lavoro, la copia c'è ma va
+  ripescata a mano dall'indice.
+- **Nessuna atomicità nel ripristino**: se una scrittura fallisce a metà (permessi, file
+  bloccato) l'albero resta misto e nessuno lo riporta indietro.
+- **Scadenza dell'archivio nativo (~30 giorni)**: dedotta dalle date delle cartelle e da
+  `.last-cleanup`, non dalla documentazione. La politica esatta non è verificata.
+- **L'hook gira su ogni sessione in ogni repo git**, non solo qui: in un repo con file grossi
+  non ignorati l'`add -A` a fine turno si sente.
+- **Il conteggio dei messaggi nell'elenco delle conversazioni è una stima** (il file più lungo
+  della famiglia); il numero esatto compare in cima quando la conversazione è selezionata.
+- **Glifi a larghezza incerta.** `⬤ ◯ ━ ┳ ┃ ┣ ┗` sono "East Asian Ambiguous": un terminale che
+  li rendesse a doppia larghezza sfaserebbe il rientro dei rami. Sono in cima a `src/vista.js`.
+- **Solo Windows.** Il parsing è portabile, l'intercettazione dei tasti no (win32-input-mode).
+- **Più terminali sulla stessa cartella**: con avvio `-r`/`--continue` cb ripiega sul transcript
+  più recente e può agganciare la sessione sbagliata.
+- **Il selettore delle conversazioni rilegge la famiglia a ogni selezione** (cache in memoria per
+  la durata della schermata). Su conversazioni da 2000 messaggi si sente.
 
 ## Decisioni
 
@@ -69,25 +69,28 @@ cioè quello che ripartirebbe premendo invio.
 | 2026-07-30 | Scorciatoia **F2**, non più `ctrl+g` | `ctrl+g` è già usato da Claude Code |
 | 2026-07-30 | Albero **orizzontale** navigabile, al posto dell'elenco numerato | La conversazione è una linea e i rami sono deviazioni |
 | 2026-07-30 | L'arancione marca il percorso **dal cursore alla radice** | È quello che ripartirebbe premendo invio |
-| 2026-07-30 | Layout separato dal disegno (`componiVista` / `disegnaRighe` / `schermata`) | Muovere il cursore o ridimensionare non ricalcola il layout |
-| 2026-07-31 | Il selettore di cartella passa dal profilo PowerShell **dentro cb** | Una cosa sola da mantenere, e la stessa tavolozza del resto |
-| 2026-07-31 | La cartella scelta torna alla shell per **file** (`CB_CARTELLA_SCELTA`) | Un processo figlio non può cambiare la cwd del padre |
-| 2026-07-31 | Selettore di conversazioni proprio, al posto di quello nativo di `claude -r` | Il nativo elenca i **file**: dopo un fork i rami della stessa conversazione sembrano conversazioni diverse |
+| 2026-07-31 | I selettori di cartella e conversazione stanno **dentro cb** | Una cosa sola da mantenere, e la stessa tavolozza |
 | 2026-07-31 | Una conversazione = tutta la famiglia, raggruppata per **uuid di radice** | È l'unica chiave che il fork copia insieme alla storia |
-| 2026-07-31 | Scegliendo la punta si **riprende** la sessione, non si taglia | Tagliare comunque duplicherebbe l'intera conversazione a ogni ripresa |
-| 2026-07-31 | Scelta la conversazione si mostra la stessa schermata di F2 | Una sola interfaccia per «da dove riparto», ovunque la si apra |
-| 2026-07-31 | Pannello dell'albero ad **altezza fissa** nel selettore | Alberi di altezza diversa facevano saltare l'elenco a ogni freccia |
-| 2026-07-31 | `←→` cambiano ramo quando l'albero lo suggerisce all'occhio | Il disegno è la mappa: se un ramo finisce sotto al cursore, la destra ci deve scendere |
+| 2026-07-31 | Il ripristino **legge** l'archivio di Claude invece di chiamare `--rewind-files` | Niente processo da lanciare, e si vede tutta la famiglia invece di una sessione sola |
+| 2026-07-31 | Regola unica: lo stato a T è la **prima copia con `backupTime ≥ T`** | Ogni copia è il "prima" di una modifica: è l'unica lettura coerente dell'archivio |
+| 2026-07-31 | cb **copia prima di sovrascrivere**, nel proprio archivio | Nell'archivio di Claude non c'è mai lo stato finale di un file: senza, non si torna avanti |
+| 2026-07-31 | Fuori dalla cartella di lavoro **non si scrive** | Nell'archivio finiscono anche il profilo PowerShell e i file di memoria |
+| 2026-07-31 | Menu a tre voci sul punto scelto, come Esc Esc | La domanda è la stessa, e una sola interfaccia ovunque |
+| 2026-07-31 | «Solo codice» **non riavvia Claude** | La conversazione non cambia: non c'è niente da ricaricare |
+| 2026-07-31 | I rami si disegnano in profondità e **da destra a sinistra** | È l'unico ordine in cui nessuna discesa incrocia un altro ramo |
+| 2026-07-31 | L'uuid del messaggio nel corpo del commit automatico | Senza aggancio, i commit sono uno storico ispezionabile ma inutilizzabile |
+| 2026-07-31 | I commit sono un **ripiego per file**, non un ripristino d'albero | Riportare indietro tutto sovrascriverebbe ciò che il ripristino non doveva toccare |
+| 2026-07-31 | Verde e rosso con la stessa saturazione e luminosità dell'arancione | La tavolozza distingue per tinta, non per luminosità |
 
 ## Backlog
 
-- **Aggiungere il codice al versionamento** (deciso per la prossima sessione)
-- Installare l'hook dei commit automatici
-- Pulizia delle sessioni troncate accumulate (`cb prune`?)
-- Portare la vista orizzontale anche a `cb tree`/`pick` (oggi usano l'elenco numerato, che
-  serve a `cb open <sessione> 3` per avere un numero a cui riferirsi)
-- Un comando che apra il selettore delle conversazioni da fuori (`cb riprendi`), oggi ci si
-  arriva solo da `--scegli` o da F2
+- **`cb prune`**: sessioni troncate, archivio di cb, ref `refs/cb/*` — i tre accumuli
+- **Usare i commit come sorgente e non solo come ripiego**, per coprire i file che Claude non ha
+  toccato (serve decidere cosa fare delle modifiche non versionate)
+- **Ispezione degli archivi**: `cb files <punto>`, anteprima delle modifiche prima di premere
+  invio, annulla dell'ultimo ripristino
+- Portare la vista orizzontale anche a `cb tree`/`pick` (oggi usano l'elenco numerato)
+- Un comando che apra il selettore delle conversazioni da fuori (`cb riprendi`)
 - Verifica su Linux/macOS: parsing e codifiche ANSI dovrebbero reggere, il resto no
 - Valutare lo scorrimento "fermo finché non tocchi il bordo" al posto del cursore centrato
 - Rinominare `master` → `main` (scelta rimandata)
@@ -95,7 +98,7 @@ cioè quello che ripartirebbe premendo invio.
 ## Riferimenti
 
 - `brief.md` — spec e vincoli scoperti, con i riscontri
-- `architettura.md` — stack, componenti, flussi, i due selettori, la vista dell'albero
-- `bug-risolti.md` — 23 bug con causa e fix
-- `procedure.md` — installazione, aggancio a `claude`, pubblicazione, diagnosi
+- `architettura.md` — stack, componenti, flussi, archivio delle copie, vista dell'albero
+- `bug-risolti.md` — 28 bug con causa e fix (grep-abile)
+- `procedure.md` — installazione, aggancio a `claude`, hook dei commit, pubblicazione, diagnosi
 - `storico-sessioni.md` — archivio delle sessioni
