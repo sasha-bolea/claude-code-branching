@@ -42,8 +42,9 @@ cb — branching for Claude Code conversations
 
 In the tree inside a session: ←→ (or a/d) move along the conversation, ↑↓ (or
 w/s) switch branch, enter restarts from there, esc goes back to Claude. From
-there "c" opens the folder's conversations and "p" the folder picker: you change
-conversation or project without closing Claude. The commands above use the
+there "c" or "p" open the folder navigator, where "r" switches between resuming
+a conversation and starting a new one: you change conversation, project or start
+over without closing Claude. The commands above use the
 numbered list, so that "cb open <session> 3" has a number to refer to.
 Set the shortcut once and for all with the CB_TASTO variable, and the language
 with CB_LINGUA (en, it).
@@ -104,7 +105,7 @@ with CB_LINGUA (en, it).
     barraMinima: (esc) => `←→↑↓ move  enter restart  esc ${esc}`,
     // Tasti in piu' disponibili solo dentro la sessione, e nome dell'uscita
     // quando l'albero e' stato aperto dal selettore delle conversazioni.
-    extraLunga: 'c = other conversation   p = other folder',
+    extraLunga: 'c/p = folder and conversation',
     extraCorta: 'c/p other conv.',
     escElencoLunga: 'back to the list',
     escElencoCorta: 'list',
@@ -175,13 +176,26 @@ with CB_LINGUA (en, it).
   // src/wrapper.js — messaggi durante il cambio ramo
   wrapper: {
     invioPerTornare: 'enter to go back to Claude',
+    tastiAvviso: 'c or p  pick folder and conversation      enter or esc  back to Claude',
     senzaTranscript: (scorciatoia, sessione) => [
       'This conversation has no transcript on disk yet.',
       '',
       'Claude writes it at the first exchange: send a prompt, wait for the',
       `answer, then press ${scorciatoia} again.`,
       '',
+      'Or start somewhere else: c and p open the folder navigator, where "r"',
+      'switches between resuming a conversation and starting a new one.',
+      '',
       `session: ${sessione}`,
+    ],
+    senzaMessaggi: (sessione, transcript) => [
+      'This conversation has no message to restart from yet.',
+      '',
+      'c and p open the folder navigator, where "r" switches between resuming',
+      'a conversation and starting a new one.',
+      '',
+      `session: ${sessione}`,
+      `transcript: ${transcript}`,
     ],
     ripartoDa: (testo) => `restarting from: ${testo}`,
     ramoDiSessione: (sessione) => `(branch of session ${sessione})`,
@@ -238,9 +252,10 @@ cb — branching per conversazioni Claude Code
   cb --aiuto            questo testo
 
 Nell'albero dentro la sessione: ←→ (o a/d) scorrono la conversazione, ↑↓ (o w/s)
-cambiano ramo, invio riparte da lì, esc torna a Claude. Da lì "c" apre l'elenco
-delle conversazioni della cartella e "p" prima il selettore delle cartelle: si
-cambia conversazione o progetto senza chiudere Claude. I comandi qui sopra usano
+cambiano ramo, invio riparte da lì, esc torna a Claude. Da lì "c" o "p" aprono
+il navigatore delle cartelle, dove "r" alterna la ripresa di una conversazione e
+l'avvio di una nuova: si cambia conversazione, progetto o si riparte da zero
+senza chiudere Claude. I comandi qui sopra usano
 l'elenco numerato, così "cb open <sessione> 3" ha un numero a cui riferirsi.
 La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGUA
 (en, it).
@@ -297,7 +312,7 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     frecceCorte: '↑↓ ws',
     invioRiparti: 'invio = riparti',
     barraMinima: (esc) => `←→↑↓ muovi  invio riparti  esc ${esc}`,
-    extraLunga: 'c = altra conversazione   p = altra cartella',
+    extraLunga: 'c/p = cartella e conversazione',
     extraCorta: 'c/p altra conv.',
     escElencoLunga: "torna all'elenco",
     escElencoCorta: 'elenco',
@@ -364,13 +379,27 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
 
   wrapper: {
     invioPerTornare: 'invio per tornare a Claude',
+    tastiAvviso: 'c o p  scegli cartella e conversazione      invio o esc  torna a Claude',
     senzaTranscript: (scorciatoia, sessione) => [
       'Questa conversazione non ha ancora un transcript su disco.',
       '',
       'Claude lo scrive al primo scambio: manda un prompt, attendi la',
       `risposta, poi ripremi ${scorciatoia}.`,
       '',
+      'Oppure riparti da un altro punto: c e p aprono il navigatore delle',
+      'cartelle, dove "r" alterna la ripresa di una conversazione e l\'avvio',
+      'di una nuova.',
+      '',
       `sessione: ${sessione}`,
+    ],
+    senzaMessaggi: (sessione, transcript) => [
+      'La conversazione non contiene ancora messaggi da cui ripartire.',
+      '',
+      'c e p aprono il navigatore delle cartelle, dove "r" alterna la ripresa',
+      'di una conversazione e l\'avvio di una nuova.',
+      '',
+      `sessione: ${sessione}`,
+      `transcript: ${transcript}`,
     ],
     ripartoDa: (testo) => `riparto da: ${testo}`,
     ramoDiSessione: (sessione) => `(ramo della sessione ${sessione})`,

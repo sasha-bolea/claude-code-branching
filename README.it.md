@@ -149,8 +149,10 @@ fork ne crea uno nuovo, i rami della stessa conversazione compaiono come convers
 diverse. Qui le sessioni si raggruppano per uuid di radice, e una conversazione è tutto il
 suo albero.
 
-Le stesse due schermate si riaprono a sessione avviata, dall'albero (`c` le conversazioni,
-`p` le cartelle): si cambia progetto senza chiudere Claude.
+Le stesse due schermate si riaprono a sessione avviata premendo `c` o `p` — dall'albero, o
+dall'avviso che compare quando un transcript ancora non c'è. Portano tutt'e due al navigatore
+delle cartelle, e lì `r` alterna la ripresa di una conversazione e l'avvio di una nuova. Così
+si cambia conversazione, si cambia progetto o si riparte da zero senza chiudere Claude.
 
 Se la variabile `CB_CARTELLA_SCELTA` punta a un file, cb ci scrive la cartella scelta: chi
 lancia cb può leggerla all'uscita e spostarcisi (un processo figlio non può cambiare la

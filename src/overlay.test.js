@@ -140,6 +140,46 @@ async function testOverlaySenzaTranscript() {
 // nuovo. cb si era agganciato all'id all'avvio e non lo ricontrollava, quindi
 // continuava a mostrare la conversazione precedente il clear — e invio ci
 // forkava sopra, ripristinando i file all'istante di un'altra conversazione.
+// Senza transcript non c'e' albero, ma la schermata non deve essere un vicolo
+// cieco: da li' si arriva al navigatore delle cartelle, dove "r" alterna la
+// ripresa e l'avvio di una conversazione nuova. E' il caso di chi preme la
+// scorciatoia prima ancora di aver scritto un prompt.
+async function testSenzaTranscriptSiArrivaAiSelettori() {
+  for (const tasto of ['c', 'p']) {
+    pulisciCartella();
+    const { wrapper, schermo } = wrapperFinto('00000000-0000-4000-8000-00000000dea0', CARTELLA);
+    let aperture = 0;
+    wrapper.cambiaConversazione = async () => {
+      aperture += 1;
+      wrapper.inOverlay = false;
+    };
+
+    const attesa = wrapper.mostraOverlay();
+    // Non c'e' barra dei tasti dell'albero: si aspetta il testo dell'avviso.
+    for (let i = 0; i < 200 && !schermo().includes('transcript'); i += 1) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    assert.match(schermo(), /non ha ancora un transcript/, 'spiega perche non c e l albero');
+    assert.match(schermo(), /c e p|c o p/, 'e annuncia i tasti per ripartire da altrove');
+
+    await premiTasti(tasto);
+    await attesa;
+    assert.equal(aperture, 1, `"${tasto}" apre il navigatore anche senza transcript`);
+  }
+
+  // Esc invece torna a Claude, come prima.
+  pulisciCartella();
+  const { wrapper, schermo } = wrapperFinto('00000000-0000-4000-8000-00000000dea1', CARTELLA);
+  wrapper.cambiaConversazione = async () => assert.fail('esc non deve aprire niente');
+  const attesa = wrapper.mostraOverlay();
+  for (let i = 0; i < 200 && !schermo().includes('transcript'); i += 1) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  premi(ANNULLA);
+  await attesa;
+  assert.equal(wrapper.inOverlay, false, 'esc chiude e basta');
+}
+
 async function testSeguelaSessioneDopoUnClear() {
   const primaDelClear = '00000000-0000-4000-8000-0000000c1ea1';
   const dopoIlClear = '00000000-0000-4000-8000-0000000c1ea2';
@@ -881,16 +921,16 @@ async function testTastiPerCambiareConversazioneOCartella() {
     { type: 'last-prompt', leafUuid: 'b', sessionId },
   ]);
 
-  for (const [tasto, ancheCartella] of [
-    ['c', false],
-    ['p', true],
-  ]) {
+  // c e p portano allo stesso posto: il navigatore delle cartelle, dove "r"
+  // alterna ripresa e avvio normale. Prima "c" saltava direttamente all'elenco
+  // delle conversazioni, e da li' non c'era modo di cominciarne una nuova.
+  for (const tasto of ['c', 'p']) {
     const { wrapper, schermo } = wrapperFinto(sessionId, CARTELLA);
-    const richieste = [];
+    let aperture = 0;
     // Il selettore vero prende lo stdin e legge il disco: qui interessa solo
-    // che il tasto arrivi fin qui, e con quale richiesta.
-    wrapper.cambiaConversazione = async (opzioni) => {
-      richieste.push(opzioni);
+    // che il tasto arrivi fin qui.
+    wrapper.cambiaConversazione = async () => {
+      aperture += 1;
       wrapper.inOverlay = false;
     };
 
@@ -901,12 +941,7 @@ async function testTastiPerCambiareConversazioneOCartella() {
     await premiTasti(tasto);
     await attesa;
 
-    assert.equal(richieste.length, 1, `"${tasto}" apre il selettore`);
-    assert.equal(
-      richieste[0].ancheCartella,
-      ancheCartella,
-      `"${tasto}" chiede${ancheCartella ? '' : ' di non'} cambiare anche cartella`,
-    );
+    assert.equal(aperture, 1, `"${tasto}" apre il navigatore`);
     pulisciCartella();
     creaTranscript(sessionId, CARTELLA, [
       msg('a', null, 'user', 'primo prompt', 1),
@@ -921,6 +956,7 @@ async function testTastiPerCambiareConversazioneOCartella() {
 const prove = [
   testTastiPerCambiareConversazioneOCartella,
   testOverlaySenzaTranscript,
+  testSenzaTranscriptSiArrivaAiSelettori,
   testSeguelaSessioneDopoUnClear,
   testUnParenteNonSiRubaLaSessione,
   testPuntoIntermedioTagliaLaConversazione,

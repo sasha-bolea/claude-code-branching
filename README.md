@@ -148,8 +148,10 @@ Why not the `claude -r` picker: that one lists session **files**, and since a fo
 new one, the branches of the same conversation show up as different conversations. Here
 sessions are grouped by root uuid, and a conversation is its whole tree.
 
-The same two screens reopen from inside a running session, from the tree (`c` for
-conversations, `p` for folders): you change project without closing Claude.
+The same two screens reopen from inside a running session: press `c` or `p` — from the tree,
+or from the notice you get when there is no transcript yet. Both land on the folder
+navigator, and `r` there switches between resuming a conversation and starting a new one. So
+you change conversation, change project, or start over, without closing Claude.
 
 If `CB_CARTELLA_SCELTA` points to a file, cb writes the chosen folder into it: whoever
 launched cb can read it on exit and move there (a child process cannot change the current

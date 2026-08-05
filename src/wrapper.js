@@ -369,7 +369,13 @@ export class Wrapper {
   // Mostra una schermata di sola informazione e attende un invio.
   // Serve quando non c'e' ancora un albero: senza questo il messaggio verrebbe
   // coperto dal ridisegno di Claude e la scorciatoia sembrerebbe non funzionare.
-  async mostraAvviso(righe) {
+  // Non e' piu' un avviso di sola lettura: da qui si arriva ai selettori con gli
+  // stessi tasti dell'albero. Prima era un vicolo cieco — proprio quando non c'e'
+  // un albero da mostrare, cioe' prima del primo prompt, l'unica cosa che si
+  // poteva fare era tornare indietro.
+  // righe: testo da mostrare
+  // ritorna: Promise<'selettori' | null> — null se si torna a Claude
+  mostraAvviso(righe) {
     this.inOverlay = true;
     this.mouse(false); // schermo nostro: il mouse torni a selezionare il testo
     // Registrato come ridisegno cosi' anche questa schermata segue il
@@ -378,12 +384,26 @@ export class Wrapper {
       this.scrivi(MOSTRA_CURSORE + PULISCI_SCHERMO);
       this.scrivi(`  cb\r\n\r\n`);
       for (const riga of righe) this.scrivi(`  ${riga}\r\n`);
-      this.scrivi(`\r\n  ${T.wrapper.invioPerTornare}\r\n  > `);
+      this.scrivi(`\r\n  ${T.wrapper.tastiAvviso}\r\n`);
     };
 
     this.ridisegnaOverlay();
-    await this.leggiNumero(0);
-    this.chiudiOverlay();
+
+    return new Promise((risolvi) => {
+      const ascoltatore = (dati) => {
+        for (const comando of azioniNavigazione(dati)) {
+          if (comando === 'conversazione' || comando === 'progetto') {
+            process.stdin.off('data', ascoltatore);
+            return risolvi('selettori');
+          }
+          if (comando === 'conferma' || comando === 'annulla') {
+            process.stdin.off('data', ascoltatore);
+            return risolvi(null);
+          }
+        }
+      };
+      process.stdin.on('data', ascoltatore);
+    });
   }
 
   // Percorso del transcript della sessione in corso.
@@ -449,9 +469,11 @@ export class Wrapper {
     const percorso = this.trovaTranscript();
     this.registra(`overlay sessione=${this.sessionId} transcript=${percorso ?? 'ASSENTE'}`);
     if (!percorso) {
-      await this.mostraAvviso(
+      const scelta = await this.mostraAvviso(
         T.wrapper.senzaTranscript(this.descrizioneScorciatoia, this.sessionId),
       );
+      if (scelta === 'selettori') await this.cambiaConversazione();
+      else this.chiudiOverlay();
       return;
     }
 
@@ -492,12 +514,9 @@ export class Wrapper {
 
     if (vista.nodi.length === 0) {
       this.inOverlay = false;
-      await this.mostraAvviso([
-        'La conversazione non contiene ancora messaggi da cui ripartire.',
-        '',
-        `sessione: ${this.sessionId}`,
-        `transcript: ${percorso}`,
-      ]);
+      const scelta = await this.mostraAvviso(T.wrapper.senzaMessaggi(this.sessionId, percorso));
+      if (scelta === 'selettori') await this.cambiaConversazione();
+      else this.chiudiOverlay();
       return;
     }
 
@@ -529,7 +548,7 @@ export class Wrapper {
       // Da qui si esce dalla conversazione corrente: si sceglie un'altra
       // conversazione della stessa cartella, o prima un'altra cartella.
       if (azione.tipo === 'conversazione' || azione.tipo === 'progetto') {
-        await this.cambiaConversazione({ ancheCartella: azione.tipo === 'progetto' });
+        await this.cambiaConversazione();
         return;
       }
       selezione = muovi(vista, selezione, azione.valore);
@@ -650,8 +669,12 @@ export class Wrapper {
   // registrato in avvia() resta attaccato, e `inOverlay` gli fa ignorare tutto
   // quello che digitiamo nei selettori.
   //
-  // ancheCartella: true per scegliere prima un'altra cartella di lavoro
-  async cambiaConversazione({ ancheCartella = false } = {}) {
+  // Si comincia sempre dal navigatore delle cartelle, anche restando in questa:
+  // e' la stessa schermata di `cb --scegli`, e li' dentro il tasto "r" alterna
+  // gia' "avvio normale" e "ripresa". Quell'alternanza e' anche il modo di
+  // cominciare una conversazione nuova senza uscire da Claude — prima non c'era,
+  // perche' il selettore offre "parti da zero" solo in una cartella vuota.
+  async cambiaConversazione() {
     const { selezionaCartella, annotaCartellaScelta } = await import('./cartelle.js');
     const { selezionaConversazione } = await import('./conversazioni.js');
 
@@ -663,16 +686,16 @@ export class Wrapper {
 
     let cartella = this.cwd;
     try {
-      if (ancheCartella) {
-        const scelta = await selezionaCartella({ cwd: cartella, ripresa: true });
-        if (!scelta) return this.chiudiOverlay(); // annullato: si torna a Claude
-        cartella = scelta.percorso;
-      }
+      const scelta = await selezionaCartella({ cwd: cartella, ripresa: true });
+      if (!scelta) return this.chiudiOverlay(); // annullato: si torna a Claude
+      cartella = scelta.percorso;
 
-      const conversazione = await selezionaConversazione({
-        cartella,
-        ripristinaCodice: this.ripristinaCodice,
-      });
+      // "Avvio normale" nel navigatore vuol dire non riprendere niente: si
+      // comincia una conversazione nuova in quella cartella, senza passare
+      // dall'elenco di quelle passate.
+      const conversazione = scelta.ripresa
+        ? await selezionaConversazione({ cartella, ripristinaCodice: this.ripristinaCodice })
+        : { nuova: true };
       if (!conversazione) return this.chiudiOverlay();
 
       this.registra(

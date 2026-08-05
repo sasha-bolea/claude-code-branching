@@ -116,6 +116,13 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   di dedurre dallo schermo: registra byte, interpretazione e decisioni dell'overlay.
 - Ogni cambio di ramo **riavvia il processo Claude**: non esiste modo di ricaricare una
   conversazione in un processo vivo.
+- **`c` e `p` portano tutt'e due al navigatore delle cartelle**, e da lì `r` alterna ripresa e
+  avvio normale: è così che si comincia una conversazione nuova senza uscire da Claude. Prima
+  `c` saltava dritto all'elenco delle conversazioni, che offre «parti da zero» **solo in una
+  cartella vuota** (`conversazioni.js:488`) — quindi con conversazioni passate presenti non
+  c'era alcun modo di cominciarne una. La schermata mostrata quando manca il transcript
+  accetta gli stessi tasti: prima del primo prompt era un vicolo cieco, proprio nel momento in
+  cui l'albero non c'è.
 - **Seguire «il transcript più recente della cartella» e basta è sbagliato.** Nella cartella
   convivono i file della stessa famiglia — dopo un fork quello di partenza sta lì accanto — e
   due scritture possono cadere nello stesso millisecondo: la scelta diventa una monetina e cb
