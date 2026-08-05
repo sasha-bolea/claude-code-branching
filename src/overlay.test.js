@@ -208,6 +208,75 @@ async function testLaLegendaDellAvvisoStaInFondo() {
   wrapper.chiudiOverlay();
 }
 
+// Il passo interno del "torna indietro": Esc nell'elenco delle conversazioni
+// riporta al navigatore delle cartelle, non chiude i selettori. Si prova sul
+// vero cambiaConversazione, con i due selettori finti: e' la sequenza delle
+// chiamate a dire se il ciclo esiste davvero.
+async function testEscDalleConversazioniTornaAlleCartelle() {
+  pulisciCartella();
+  const { wrapper } = wrapperFinto('00000000-0000-4000-8000-00000000ba02', CARTELLA);
+
+  const passi = [];
+  // Prima volta: si sceglie una cartella. Seconda: si esce, cioe' "indietro".
+  let visiteCartelle = 0;
+  wrapper.apriCartelle = async () => {
+    passi.push('cartelle');
+    visiteCartelle += 1;
+    return visiteCartelle === 1 ? { percorso: CARTELLA, ripresa: true } : null;
+  };
+  // L'elenco delle conversazioni viene annullato: deve riportare alle cartelle.
+  wrapper.apriConversazioni = async () => {
+    passi.push('conversazioni');
+    return null;
+  };
+
+  const esito = await wrapper.cambiaConversazione();
+  assert.deepEqual(
+    passi,
+    ['cartelle', 'conversazioni', 'cartelle'],
+    'esc dalle conversazioni riapre le cartelle invece di chiudere',
+  );
+  assert.equal(esito, 'indietro', 'e esc sulle cartelle riporta a chi ha aperto i selettori');
+}
+
+// Una schermata aperta da un'altra deve poter tornare da dove e' venuta: Esc nel
+// primo selettore riporta all'albero, non fuori dall'overlay. Sbagliare tasto
+// non deve costare l'uscita.
+async function testEscNeiSelettoriTornaAllAlbero() {
+  pulisciCartella();
+  const sessionId = '00000000-0000-4000-8000-00000000ba01';
+  creaTranscript(sessionId, CARTELLA, [
+    msg('a', null, 'user', 'il prompt di partenza', 1),
+    { type: 'last-prompt', leafUuid: 'a', sessionId },
+  ]);
+
+  const { wrapper, schermo } = wrapperFinto(sessionId, CARTELLA);
+  let aperture = 0;
+  // Il selettore vero legge il disco e si prende lo stdin: qui basta dire che
+  // l'utente ha premuto Esc sul primo passo.
+  wrapper.cambiaConversazione = async () => {
+    aperture += 1;
+    return 'indietro';
+  };
+
+  const attesa = wrapper.mostraOverlay();
+  await attendiPrompt(schermo);
+
+  const da = schermo().length;
+  await premiTasti('c');
+  // Ci si aspetta che l'albero sia stato ridisegnato dopo il ritorno.
+  for (let i = 0; i < 200 && !schermo().slice(da).includes('il prompt di partenza'); i += 1) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.equal(aperture, 1, 'il selettore e stato aperto');
+  assert.match(schermo().slice(da), /il prompt di partenza/, 'e l albero e tornato a schermo');
+  assert.equal(wrapper.inOverlay, true, 'restando dentro l overlay');
+
+  premi(ANNULLA);
+  await attesa;
+  assert.equal(wrapper.inOverlay, false, 'e da li esc chiude come sempre');
+}
+
 async function testSeguelaSessioneDopoUnClear() {
   const primaDelClear = '00000000-0000-4000-8000-0000000c1ea1';
   const dopoIlClear = '00000000-0000-4000-8000-0000000c1ea2';
@@ -986,6 +1055,8 @@ const prove = [
   testOverlaySenzaTranscript,
   testSenzaTranscriptSiArrivaAiSelettori,
   testLaLegendaDellAvvisoStaInFondo,
+  testEscNeiSelettoriTornaAllAlbero,
+  testEscDalleConversazioniTornaAlleCartelle,
   testSeguelaSessioneDopoUnClear,
   testUnParenteNonSiRubaLaSessione,
   testPuntoIntermedioTagliaLaConversazione,

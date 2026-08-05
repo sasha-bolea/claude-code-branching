@@ -488,8 +488,12 @@ export class Wrapper {
       const scelta = await this.mostraAvviso(
         T.wrapper.senzaTranscript(this.descrizioneScorciatoia, this.sessionId),
       );
-      if (scelta === 'selettori') await this.cambiaConversazione();
-      else this.chiudiOverlay();
+      if (scelta !== 'selettori') {
+        this.chiudiOverlay();
+        return;
+      }
+      // Esc sul primo selettore riporta a questo avviso, non fuori.
+      if ((await this.cambiaConversazione()) === 'indietro') return this.mostraOverlay();
       return;
     }
 
@@ -531,8 +535,12 @@ export class Wrapper {
     if (vista.nodi.length === 0) {
       this.inOverlay = false;
       const scelta = await this.mostraAvviso(T.wrapper.senzaMessaggi(this.sessionId, percorso));
-      if (scelta === 'selettori') await this.cambiaConversazione();
-      else this.chiudiOverlay();
+      if (scelta !== 'selettori') {
+        this.chiudiOverlay();
+        return;
+      }
+      // Esc sul primo selettore riporta a questo avviso, non fuori.
+      if ((await this.cambiaConversazione()) === 'indietro') return this.mostraOverlay();
       return;
     }
 
@@ -564,7 +572,11 @@ export class Wrapper {
       // Da qui si esce dalla conversazione corrente: si sceglie un'altra
       // conversazione della stessa cartella, o prima un'altra cartella.
       if (azione.tipo === 'conversazione' || azione.tipo === 'progetto') {
-        await this.cambiaConversazione();
+        // Esc sul primo selettore riporta all'albero, da dove si era partiti.
+        // Si ricomincia da capo invece di riusare la vista: nel frattempo la
+        // conversazione puo' essere cresciuta, e ridisegnare quella vecchia
+        // mostrerebbe un albero gia' scaduto.
+        if ((await this.cambiaConversazione()) === 'indietro') return this.mostraOverlay();
         return;
       }
       selezione = muovi(vista, selezione, azione.valore);
@@ -690,9 +702,28 @@ export class Wrapper {
   // gia' "avvio normale" e "ripresa". Quell'alternanza e' anche il modo di
   // cominciare una conversazione nuova senza uscire da Claude — prima non c'era,
   // perche' il selettore offre "parti da zero" solo in una cartella vuota.
-  async cambiaConversazione() {
-    const { selezionaCartella, annotaCartellaScelta } = await import('./cartelle.js');
+  //
+  // Esc risale di un passo, non esce: dall'elenco delle conversazioni si torna
+  // alle cartelle, e dalle cartelle si torna alla schermata che ha aperto i
+  // selettori. Una schermata aperta da un'altra deve poter tornare da dove e'
+  // venuta, altrimenti sbagliare tasto costa l'uscita dall'overlay.
+  // ritorna: 'indietro' se si e' usciti dal primo passo senza scegliere niente
+  // I due selettori passano da qui e non sono chiamati direttamente, per lo
+  // stesso motivo di `creaProcesso`: cosi' le prove possono verificare **in che
+  // ordine** vengono aperti senza un terminale e senza leggere il disco. E'
+  // l'ordine, non il singolo selettore, a dire se il "torna indietro" esiste.
+  async apriCartelle(opzioni) {
+    const { selezionaCartella } = await import('./cartelle.js');
+    return selezionaCartella(opzioni);
+  }
+
+  async apriConversazioni(opzioni) {
     const { selezionaConversazione } = await import('./conversazioni.js');
+    return selezionaConversazione(opzioni);
+  }
+
+  async cambiaConversazione() {
+    const { annotaCartellaScelta } = await import('./cartelle.js');
 
     // Lo stdin torna al wrapper comunque vada: anche annullando, anche in errore.
     const restituisciTastiera = () => {
@@ -702,17 +733,28 @@ export class Wrapper {
 
     let cartella = this.cwd;
     try {
-      const scelta = await selezionaCartella({ cwd: cartella, ripresa: true });
-      if (!scelta) return this.chiudiOverlay(); // annullato: si torna a Claude
-      cartella = scelta.percorso;
+      let conversazione = null;
 
-      // "Avvio normale" nel navigatore vuol dire non riprendere niente: si
-      // comincia una conversazione nuova in quella cartella, senza passare
-      // dall'elenco di quelle passate.
-      const conversazione = scelta.ripresa
-        ? await selezionaConversazione({ cartella, ripristinaCodice: this.ripristinaCodice })
-        : { nuova: true };
-      if (!conversazione) return this.chiudiOverlay();
+      // Il ciclo e' il "torna indietro": uscendo dall'elenco delle conversazioni
+      // si ricomincia dalle cartelle invece di chiudere tutto.
+      while (!conversazione) {
+        const scelta = await this.apriCartelle({ cwd: cartella, ripresa: true });
+        if (!scelta) return 'indietro'; // esc sul primo passo: decide chi ci ha chiamato
+        cartella = scelta.percorso;
+
+        // "Avvio normale" nel navigatore vuol dire non riprendere niente: si
+        // comincia una conversazione nuova in quella cartella, senza passare
+        // dall'elenco di quelle passate.
+        if (!scelta.ripresa) {
+          conversazione = { nuova: true };
+          break;
+        }
+
+        conversazione = await this.apriConversazioni({
+          cartella,
+          ripristinaCodice: this.ripristinaCodice,
+        });
+      }
 
       this.registra(
         `cambio conversazione cartella=${cartella} modo=${conversazione.modo ?? '-'} ` +

@@ -199,23 +199,33 @@ async function main() {
       if (argomenti.includes('--scegli')) {
         const { selezionaCartella, annotaCartellaScelta } = await import('../src/cartelle.js');
         const iniziale = chiedeRipresa(argomentiClaude);
-        const scelta = await selezionaCartella({ cwd: cartella, ripresa: iniziale });
-        // Esc: nessuna cartella scelta, e nessuna sessione da avviare.
-        if (!scelta) return;
-        cartella = scelta.percorso;
-        annotaCartellaScelta(cartella);
+        let scelta = null;
+        let conversazione = null;
 
-        if (scelta.ripresa) {
+        // Il ciclo e' il "torna indietro": Esc nell'elenco delle conversazioni
+        // riporta al navigatore delle cartelle invece di uscire da cb. Esc nel
+        // navigatore, che e' il primo passo, esce davvero: non c'e' un passo
+        // precedente a cui tornare.
+        while (!conversazione) {
+          scelta = await selezionaCartella({ cwd: cartella, ripresa: iniziale });
+          if (!scelta) return;
+          cartella = scelta.percorso;
+
+          if (!scelta.ripresa) break;
+
           // La ripresa la gestisce cb con il suo selettore, che raggruppa i rami
           // di una conversazione in un albero solo: il -r dell'utente aprirebbe
           // quello nativo, dove ogni fork e' una conversazione a se'.
           const { selezionaConversazione } = await import('../src/conversazioni.js');
-          const conversazione = await selezionaConversazione({
+          conversazione = await selezionaConversazione({
             cartella,
             ripristinaCodice: !argomenti.includes('--senza-file'),
           });
-          // Esc nel selettore: non si avvia niente, come per la cartella.
-          if (!conversazione) return;
+        }
+
+        annotaCartellaScelta(cartella);
+
+        if (conversazione) {
           // Cartella senza conversazioni: si parte da zero, non si riprende nulla.
           ripartenza = conversazione.nuova ? null : conversazione;
           perClaude = senzaRipresa(argomentiClaude);

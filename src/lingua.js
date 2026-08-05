@@ -154,8 +154,8 @@ with CB_LINGUA (en, it).
   conversazioni: {
     legende: [
       [
-        "↑↓ pick the conversation   enter go into the tree   esc cancel",
-        '↑↓ conversation   enter tree   esc exit',
+        '↑↓ pick the conversation   enter go into the tree   esc back to folders',
+        '↑↓ conversation   enter tree   esc back',
       ],
       [
         '←→ back and forth   ↑↓ switch branch   enter restart here   esc back to list',
@@ -358,8 +358,8 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
   conversazioni: {
     legende: [
       [
-        "↑↓ scegli la conversazione   invio entra nell'albero   esc annulla",
-        '↑↓ conversazione   invio albero   esc esci',
+        "↑↓ scegli la conversazione   invio entra nell'albero   esc alle cartelle",
+        '↑↓ conversazione   invio albero   esc indietro',
       ],
       [
         "←→ avanti e indietro   ↑↓ cambia ramo   invio riparti da qui   esc torna all'elenco",

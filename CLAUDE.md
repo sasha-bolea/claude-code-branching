@@ -116,6 +116,18 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   di dedurre dallo schermo: registra byte, interpretazione e decisioni dell'overlay.
 - Ogni cambio di ramo **riavvia il processo Claude**: non esiste modo di ricaricare una
   conversazione in un processo vivo.
+- **Esc risale di un passo, non esce.** Una schermata aperta da un'altra deve poter tornare da
+  dove è venuta: dall'elenco delle conversazioni si torna alle cartelle (un `while` in
+  `cambiaConversazione` e in `bin/cb.js`), e dal navigatore delle cartelle si torna all'albero
+  o all'avviso che lo ha aperto (`cambiaConversazione` restituisce `'indietro'`, e il
+  chiamante rifà `mostraOverlay()`). Si ricomincia da capo invece di riusare la vista: nel
+  frattempo la conversazione può essere cresciuta. Solo il primo passo di `--scegli` esce
+  davvero, perché prima non c'è niente.
+- **I selettori si aprono da `apriCartelle`/`apriConversazioni`**, non chiamando direttamente
+  le funzioni importate: i moduli ESM sono in sola lettura e non si possono sostituire da
+  fuori, quindi senza questi due metodi le prove non potrebbero verificare **in che ordine**
+  vengono aperti — ed è l'ordine, non il singolo selettore, a dire se il ritorno indietro
+  esiste. Stessa ragione di `creaProcesso`.
 - **`c` e `p` portano tutt'e due al navigatore delle cartelle**, e da lì `r` alterna ripresa e
   avvio normale: è così che si comincia una conversazione nuova senza uscire da Claude. Prima
   `c` saltava dritto all'elenco delle conversazioni, che offre «parti da zero» **solo in una
