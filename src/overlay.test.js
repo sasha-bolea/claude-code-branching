@@ -175,6 +175,40 @@ async function testSeguelaSessioneDopoUnClear() {
   assert.equal(wrapper.sessionId, dopoIlClear, 'e da qui in poi forka la sessione giusta');
 }
 
+// Il rovescio della medaglia del test qui sopra: i file di una famiglia stanno
+// nella stessa cartella, e uno di loro non deve rubarsi l'albero solo perche' il
+// disco gli ha dato lo stesso millisecondo. Seguire "il piu' recente" e basta
+// rendeva la scelta una monetina, e cb saltava sulla sessione sbagliata.
+async function testUnParenteNonSiRubaLaSessione() {
+  const nostra = '00000000-0000-4000-8000-0000000d0001';
+  const parente = '00000000-0000-4000-8000-0000000d0002';
+
+  const fileNostro = creaTranscript(nostra, CARTELLA, [
+    msg('a', null, 'user', 'la nostra conversazione', 1),
+    { type: 'last-prompt', leafUuid: 'a', sessionId: nostra },
+  ]);
+  const fileParente = creaTranscript(parente, CARTELLA, [
+    msg('a', null, 'user', 'il ramo di un parente', 1),
+    { type: 'last-prompt', leafUuid: 'a', sessionId: parente },
+  ]);
+
+  // Stesso istante esatto: e' il caso che rendeva la prova una monetina.
+  const adesso = Date.now() / 1000;
+  fs.utimesSync(fileNostro, adesso, adesso);
+  fs.utimesSync(fileParente, adesso, adesso);
+
+  const { wrapper, schermo } = wrapperFinto(nostra, CARTELLA);
+  wrapper.avviatoIl = 0;
+
+  const attesa = wrapper.mostraOverlay();
+  await attendiPrompt(schermo);
+  premi(ANNULLA);
+  await attesa;
+
+  assert.match(schermo(), /la nostra conversazione/, 'resta sulla sessione che stiamo seguendo');
+  assert.equal(wrapper.sessionId, nostra, 'e l id non cambia');
+}
+
 async function testOverlayDisegnaAlberoEScegliRamo() {
   const sessionId = '00000000-0000-4000-8000-00000000beef';
   const percorso = creaTranscript(sessionId, CARTELLA, [
@@ -888,6 +922,7 @@ const prove = [
   testTastiPerCambiareConversazioneOCartella,
   testOverlaySenzaTranscript,
   testSeguelaSessioneDopoUnClear,
+  testUnParenteNonSiRubaLaSessione,
   testPuntoIntermedioTagliaLaConversazione,
   testRamoDelPadreVisibileESelezionabile,
   testAlberoRestaDopoIlCambioRamo,

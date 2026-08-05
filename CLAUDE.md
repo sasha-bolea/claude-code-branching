@@ -116,6 +116,14 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   di dedurre dallo schermo: registra byte, interpretazione e decisioni dell'overlay.
 - Ogni cambio di ramo **riavvia il processo Claude**: non esiste modo di ricaricare una
   conversazione in un processo vivo.
+- **Seguire «il transcript più recente della cartella» e basta è sbagliato.** Nella cartella
+  convivono i file della stessa famiglia — dopo un fork quello di partenza sta lì accanto — e
+  due scritture possono cadere nello stesso millisecondo: la scelta diventa una monetina e cb
+  salta sulla sessione sbagliata (prova `testUnParenteNonSiRubaLaSessione`, che falliva a
+  giri alterni). La regola giusta è **si tiene il nostro file, a meno che non ne esista uno di
+  un'altra sessione _strettamente_ più recente**: dopo un clear il nostro smette di crescere e
+  il nuovo continua, mentre i parenti restano fermi. A parità di istante vince quello che cb
+  sta già seguendo.
 - **`/clear` fa nascere un file di sessione nuovo**, non taglia dentro a quello corrente: le
   due sessioni hanno radici diverse, quindi non sono parenti e nel selettore compaiono come
   due conversazioni, che è giusto. Ma **l'id in mano al wrapper resta quello di prima**:

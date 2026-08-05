@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import pty from 'node-pty';
@@ -33,6 +33,19 @@ import {
 // controllo nel sorgente sarebbero invisibili in fase di lettura.
 const PULISCI_SCHERMO = '[2J[H';
 const MOSTRA_CURSORE = '[?25h';
+
+// Vero se `candidato` e' stato scritto dopo `riferimento`.
+// A parita' di istante vince il riferimento: due file scritti nello stesso
+// millisecondo non dicono niente su quale sia il piu' nuovo, e in quel dubbio la
+// sessione che cb sta gia' seguendo non va abbandonata.
+// ritorna: true se candidato e' strettamente piu' recente
+function scrittoDopo(candidato, riferimento) {
+  try {
+    return statSync(candidato).mtimeMs > statSync(riferimento).mtimeMs;
+  } catch {
+    return false; // un file illeggibile non puo' scalzare quello che abbiamo
+  }
+}
 
 // Modi di tracciamento del mouse che una TUI puo' accendere. Finche' sono accesi
 // il terminale manda movimenti e clic all'applicazione invece di selezionare il
@@ -382,27 +395,42 @@ export class Wrapper {
   // peggio del disegno, invio ci forkava sopra, ripristinando i file all'istante
   // di un turno di un'altra conversazione.
   //
-  // Il criterio e' "il piu' recente scritto dopo l'avvio di cb": con due Claude
-  // aperti nella stessa cartella si prende quello che ha scritto per ultimo,
-  // cioe' quasi sempre quello con cui l'utente sta parlando.
+  // Il criterio non e' "il piu' recente della cartella" e basta: nella cartella
+  // convivono i file della stessa famiglia — dopo un fork il file di partenza sta
+  // li' accanto — e prendere il piu' recente in assoluto faceva saltare cb sulla
+  // sessione sbagliata quando due file venivano scritti nello stesso istante.
+  //
+  // La regola e': si tiene il **nostro** file, a meno che non ne esista uno di
+  // un'altra sessione **strettamente piu' recente**. Dopo un clear e' proprio
+  // cosi' — il nostro smette di crescere e il nuovo continua — mentre i parenti
+  // di una famiglia restano fermi e non ce lo rubano.
   // ritorna: percorso del .jsonl, o null se non esiste ancora
   trovaTranscript() {
+    const nostro = this.sessionId ? percorsoTranscript(this.sessionId, this.cwd) : null;
     const recente = transcriptPiuRecente(this.cwd, this.avviatoIl ?? 0);
+
+    if (nostro && recente && recente.sessionId !== this.sessionId) {
+      if (scrittoDopo(recente.percorso, nostro)) {
+        this.registra(`sessione cambiata: ${this.sessionId} -> ${recente.sessionId}`);
+        this.sessionId = recente.sessionId;
+        return recente.percorso;
+      }
+    }
+
+    // Il nostro file, quando c'e', e' quello giusto: appena avviati, e subito
+    // dopo un cambio ramo — li' il file della sessione troncata lo ha scritto cb
+    // prima di rilanciare, quindi e' piu' vecchio di `avviatoIl` e non comparirebbe
+    // fra i recenti.
+    if (nostro) return nostro;
+
+    // Nessun file nostro: la sessione l'ha scelta Claude (--resume, --continue) e
+    // si scopre dal disco.
     if (recente) {
       if (recente.sessionId !== this.sessionId) {
-        this.registra(`sessione cambiata: ${this.sessionId ?? '(ignota)'} -> ${recente.sessionId}`);
+        this.registra(`sessione scoperta dal disco: ${recente.sessionId}`);
         this.sessionId = recente.sessionId;
       }
       return recente.percorso;
-    }
-
-    // Niente scritto dopo l'avvio: la sessione e' ancora quella che conoscevamo.
-    // Succede appena avviati, e subito dopo un cambio ramo — li' il file della
-    // sessione troncata lo ha scritto cb prima di rilanciare, quindi e' piu'
-    // vecchio di `avviatoIl` e va cercato per id.
-    if (this.sessionId) {
-      const suo = percorsoTranscript(this.sessionId, this.cwd);
-      if (suo) return suo;
     }
 
     // Appena forkato con --fork-session, Claude non ha ancora scritto il file: lo
