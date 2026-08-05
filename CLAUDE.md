@@ -263,6 +263,12 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   (raw mode spento, flusso in pausa): va rimesso come lo vuole il wrapper in un `finally`, o i
   tasti non arrivano più a Claude. Mentre sono aperti `inOverlay` resta vero, così
   l'ascoltatore del wrapper ignora tutto e l'output del pty non copre la schermata.
+- **La legenda sta in fondo allo schermo in ogni schermata**, non subito sotto il contenuto:
+  gli avvisi e gli elenchi hanno altezze diverse, e una legenda che sale e scende si legge
+  peggio di una che sta sempre nello stesso posto. Si riempie l'altezza **esatta** e si unisce
+  con `\r\n` senza a capo finale — una riga in più fa scorrere via l'intestazione. Il taglio
+  del contenuto va fatto **prima** di aggiungere la legenda: tagliando la pagina finita
+  sparirebbe proprio lei, cioè l'unica riga che dice come si esce.
 - **Nel selettore delle conversazioni il pannello dell'albero ha altezza fissa**: gli alberi
   hanno altezze diverse, e un pannello che si adatta fa saltare separatore ed elenco a ogni
   freccia. Il riempimento è invisibile, il salto no.

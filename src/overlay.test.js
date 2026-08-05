@@ -180,6 +180,34 @@ async function testSenzaTranscriptSiArrivaAiSelettori() {
   assert.equal(wrapper.inOverlay, false, 'esc chiude e basta');
 }
 
+// La legenda dell'avviso sta in fondo allo schermo, come negli altri selettori:
+// gli avvisi hanno lunghezze diverse, e una legenda che sale e scende col testo
+// si legge peggio di una che sta sempre nello stesso posto. Deve restare
+// l'ultima riga anche quando il testo e' piu' alto dello schermo — tagliando la
+// pagina finita sarebbe sparita proprio lei, cioe' l'unica riga che dice come
+// si esce.
+async function testLaLegendaDellAvvisoStaInFondo() {
+  pulisciCartella();
+  const { wrapper, schermo } = wrapperFinto('00000000-0000-4000-8000-00000000dea2', CARTELLA);
+
+  const alte = process.stdout.rows;
+  process.stdout.rows = 12;
+  try {
+    const attesa = wrapper.mostraAvviso(Array.from({ length: 40 }, (_, i) => `riga ${i}`));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const righe = schermo().split('\r\n');
+    assert.match(righe[righe.length - 1], /invio o esc|enter or esc/, 'la legenda e l ultima riga');
+    assert.equal(righe.length, 12, 'e la pagina riempie lo schermo esatto');
+
+    premi(ANNULLA);
+    await attesa;
+  } finally {
+    process.stdout.rows = alte;
+  }
+  wrapper.chiudiOverlay();
+}
+
 async function testSeguelaSessioneDopoUnClear() {
   const primaDelClear = '00000000-0000-4000-8000-0000000c1ea1';
   const dopoIlClear = '00000000-0000-4000-8000-0000000c1ea2';
@@ -957,6 +985,7 @@ const prove = [
   testTastiPerCambiareConversazioneOCartella,
   testOverlaySenzaTranscript,
   testSenzaTranscriptSiArrivaAiSelettori,
+  testLaLegendaDellAvvisoStaInFondo,
   testSeguelaSessioneDopoUnClear,
   testUnParenteNonSiRubaLaSessione,
   testPuntoIntermedioTagliaLaConversazione,

@@ -381,10 +381,26 @@ export class Wrapper {
     // Registrato come ridisegno cosi' anche questa schermata segue il
     // ridimensionamento della finestra (vedi ridisegnaOverlay).
     this.ridisegnaOverlay = () => {
+      // Intestazione, riga vuota, il testo. Poi il riempimento, poi la legenda.
+      const pagina = ['  cb', '', ...righe.map((riga) => `  ${riga}`)];
+
+      // La legenda in fondo allo schermo, come negli altri selettori: gli avvisi
+      // hanno lunghezze diverse, e una legenda che sale e scende a seconda del
+      // testo si legge peggio di una che sta sempre nello stesso posto.
+      //
+      // Si riempie lo schermo esatto e si unisce con \r\n senza andare a capo in
+      // fondo: una riga in piu' farebbe scorrere via l'intestazione.
+      const altezza = process.stdout.rows || 30;
+      const spazio = Math.max(1, altezza - 1);
+      // Il testo si taglia prima di aggiungere la legenda, non dopo: tagliando
+      // la pagina finita sarebbe proprio la legenda a sparire, cioe' l'unica
+      // riga che dice come si esce.
+      const pronta = pagina.slice(0, spazio);
+      while (pronta.length < spazio) pronta.push('');
+      pronta.push(`  ${T.wrapper.tastiAvviso}`);
+
       this.scrivi(MOSTRA_CURSORE + PULISCI_SCHERMO);
-      this.scrivi(`  cb\r\n\r\n`);
-      for (const riga of righe) this.scrivi(`  ${riga}\r\n`);
-      this.scrivi(`\r\n  ${T.wrapper.tastiAvviso}\r\n`);
+      this.scrivi(pronta.join('\r\n'));
     };
 
     this.ridisegnaOverlay();
