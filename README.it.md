@@ -116,6 +116,10 @@ cb ls [filtro]          elenca le sessioni di tutti i progetti
 cb tree <sessione>      albero dei rami di una sessione
 cb open <sessione> [n]  riprendi da fuori, opzionalmente dal punto n
 cb pick                 catalogo interattivo da fuori
+cb prune [--esegui]     toglie ciò che cb lascia dietro: sessioni troncate, copie
+                        dei file, commit automatici più vecchi di 7 giorni
+                        (--giorni N). Senza --esegui dice solo cosa toglierebbe.
+                        cb lo fa anche da solo, una volta al giorno, oltre i 2 mesi
 cb --impostazioni       schermata delle impostazioni (la prima volta si apre da sola)
 cb --version            numero di versione
 ```
@@ -130,6 +134,7 @@ cb --version            numero di versione
 | `CB_CLAUDE_EXE` | percorso completo dell'eseguibile di Claude Code, per installazioni non standard |
 | `CB_CARTELLA_SCELTA` | file in cui cb scrive la cartella scelta, per la shell chiamante |
 | `CB_IMPOSTAZIONI` | percorso del file delle impostazioni, se lo vuoi altrove |
+| `CB_GIORNI_PULIZIA` | età in giorni di ciò che la pulizia automatica toglie (default `60`, con `0` si spegne) |
 
 Ordine di precedenza, per tutte: **variabile d'ambiente → file delle impostazioni → predefinito.**
 

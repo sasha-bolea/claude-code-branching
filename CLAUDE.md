@@ -34,6 +34,7 @@ Sasha, singolo sviluppatore.
 | `src/stile.js` | Tavolozza dei colori, in un posto solo |
 | `src/lingua.js` | Tutti i testi a schermo, inglese e italiano; scelta con `CB_LINGUA` |
 | `src/impostazioni.js` | Lettura/scrittura di `~/.claude/cb/impostazioni.json`, precedenza dei valori |
+| `src/pulizia.js` | I tre accumuli che non scadono: `cb prune` a mano, e la pulizia automatica |
 | `src/configura.js` | Schermata del primo avvio: lingua, cartella di lavoro, scorciatoia |
 | `src/prove.js` | Esecutore delle prove: un processo per file, lingua fissata a `it` |
 | `src/albero.js` | Collasso ai soli prompt utente; elenco verticale numerato per i comandi da fuori |
@@ -73,6 +74,8 @@ node src/verifica-reale.js [file] verifica il parser su una sessione vera
 node bin/cb.js ls                 catalogo globale
 node bin/cb.js tree <sessione>    albero dei rami
 node bin/cb.js --scegli           avvio completo: cartella, conversazione, Claude
+node bin/cb.js prune              cosa toglierebbe la pulizia (7 giorni, niente cancellato)
+node bin/cb.js prune --giorni 1 --esegui   pulizia vera con una soglia stretta
 ```
 
 `anteprima.js` senza argomenti prende la sessione con più ripristini, che è quella con
@@ -291,8 +294,22 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   tabelle fra loro: stesse voci, e varianti di legenda in ordine di lunghezza decrescente
   **dentro ogni lingua** — è quell'ordine, non il confronto fra le lingue, che rende
   corretto `primaCheEntra`.
+- **Una sessione troncata si riconosce dagli uuid, non da un marchio.** Un transcript i cui uuid
+  stanno **tutti** dentro un altro transcript della stessa cartella è una copia mai proseguita:
+  un solo messaggio scritto dall'utente basta a dargli un uuid che nell'originale non c'è. Il
+  confronto è per sottoinsieme **stretto**, o due file identici sarebbero l'uno il sottoinsieme
+  dell'altro e verrebbero cancellati tutti e due. Non marcare i file alla creazione è ciò che
+  rende il criterio valido anche sulle sessioni già accumulate, che un marchio non ce l'hanno.
+- **La pulizia automatica scrive il proprio segnale prima di lavorare, non dopo**
+  (`~/.claude/cb/ultima-pulizia`): se lancia — disco pieno, permesso negato — si riprova domani
+  invece che a ogni singolo avvio. Gira **senza `await`** accanto alla sessione, perché legge
+  tutti i transcript di tutti i progetti e Claude non deve aspettarla, e inghiotte ogni errore:
+  una pulizia che fallisce non è un motivo per non far partire Claude. La soglia larga (60
+  giorni contro i 7 del comando a mano) è ciò che rende accettabile il «senza chiedere».
 - **La precedenza delle impostazioni è ambiente → file → predefinito** (`impostazione` in
-  `src/impostazioni.js`). L'ambiente per primo perché è la scelta più esplicita: chi scrive
+  `src/impostazioni.js`). Il predefinito non si sceglie con `||`: uno `0` salvato è un valore
+  vero — è così che si spegne la pulizia automatica — e con `||` cadeva sul predefinito insieme
+  ai valori assenti. Vale «assente o stringa vuota», non «falso». L'ambiente per primo perché è la scelta più esplicita: chi scrive
   `CB_TASTO=f5 cb` per una volta non vuole che il file glielo ignori, e tutto ciò che il
   README documenta sulle variabili continua a valere. `impostazioni.js` **non importa
   `lingua.js`**: è `lingua.js` a leggere di lì quale lingua è stata scelta, e importarsi a
@@ -348,8 +365,10 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   altrove. Su Windows si cerca solo `claude.exe`, mai `claude`: quello è lo shim, che
   node-pty non lancia.
 - Le prove stanno in `src/transcript.test.js`, `src/tasti.test.js`, `src/titolo.test.js`,
-  `src/vista.test.js`, `src/wrapper.test.js`, `src/overlay.test.js`, `src/cartelle.test.js` e
-  `src/conversazioni.test.js`, con `assert`. I cicli interattivi dei selettori si provano con
+  `src/vista.test.js`, `src/wrapper.test.js`, `src/overlay.test.js`, `src/cartelle.test.js`,
+  `src/conversazioni.test.js` e `src/pulizia.test.js`, con `assert`. Quelle che toccano
+  impostazioni o archivi lavorano su cartelle temporanee e con `CB_IMPOSTAZIONI` puntato altrove:
+  una prova della pulizia che parte dalla cwd cancellerebbe i `refs/cb/*` veri del repo. I cicli interattivi dei selettori si provano con
   un terminale finto (un `EventEmitter` con `write`/`resume`/`pause`), senza TTY.
   Niente framework. Nel wrapper i test usano un pty finto: la logica dei tasti è
   isolabile, l'interazione con la TUI vera no. `creaProcesso` è estratto apposta perché i test

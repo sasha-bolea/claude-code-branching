@@ -118,6 +118,57 @@ async function chiediNumero(domanda, massimo) {
   }
 }
 
+// Il comando `cb prune`: toglie i tre accumuli che non scadono da soli.
+// Senza --esegui non tocca niente, dice solo cosa toglierebbe: cancellare per
+// difetto e' il tipo di scelta che si rimpiange una volta sola.
+// resto: argomenti dopo "prune"
+async function prune(resto) {
+  const { pianoPulizia, applicaPiano, dimensione, GIORNI_PREDEFINITI } = await import(
+    '../src/pulizia.js'
+  );
+  const { radiceGit } = await import('../src/commit.js');
+
+  const posizione = resto.indexOf('--giorni');
+  const giorni = posizione >= 0 ? Number(resto[posizione + 1]) : GIORNI_PREDEFINITI;
+  if (!Number.isFinite(giorni) || giorni <= 0) {
+    console.log(T.pulizia.giorniNonValidi);
+    process.exitCode = 1;
+    return;
+  }
+
+  // I ref stanno dentro un repo: si guardano quelli del repo in cui siamo.
+  const radiceRepo = radiceGit(process.cwd());
+  const piano = await pianoPulizia({ giorni, radiceRepo });
+  const esegui = resto.includes('--esegui');
+  const niente =
+    piano.sessioni.length === 0 && piano.copie.blob.length === 0 && piano.ref.length === 0;
+
+  console.log(esegui ? T.pulizia.fatto(giorni) : T.pulizia.anteprima(giorni));
+  if (niente) {
+    console.log(`  ${T.pulizia.nienteDaTogliere}`);
+    if (!radiceRepo) console.log(`  ${T.pulizia.fuoriRepo}`);
+    return;
+  }
+
+  const byteSessioni = piano.sessioni.reduce((somma, s) => somma + s.byte, 0);
+  const fatto = esegui ? applicaPiano(piano, { radiceRepo }) : null;
+  const riga = (etichetta, quanti, fatti) =>
+    console.log(`  ${etichetta.padEnd(24)}${quanti}${fatto ? `   → ${T.pulizia.tolti(fatti)}` : ''}`);
+
+  if (piano.sessioni.length) {
+    riga(T.pulizia.sessioni, T.pulizia.quantiFile(piano.sessioni.length, dimensione(byteSessioni)), fatto?.sessioni);
+  }
+  if (piano.copie.blob.length) {
+    riga(T.pulizia.copie, T.pulizia.quantiFile(piano.copie.blob.length, dimensione(piano.copie.byte)), fatto?.copie);
+  }
+  if (piano.ref.length) {
+    riga(T.pulizia.ref, T.pulizia.quantiRef(piano.ref.length), fatto?.ref);
+    console.log(`  ${T.pulizia.dopoRef}`);
+  }
+  if (!radiceRepo) console.log(`  ${T.pulizia.fuoriRepo}`);
+  if (!esegui) console.log(T.pulizia.comeProcedere);
+}
+
 async function main() {
   // Tutto quello che segue "--" e' destinato a Claude, non a cb. Serve per
   // inoltrare argomenti che collidono con i comandi di cb (o che sono prompt).
@@ -244,6 +295,15 @@ async function main() {
               .join(' ')
           : predefinita;
 
+      // Pulizia dei tre accumuli, in silenzio e al massimo una volta al giorno.
+      // Non si attende apposta: legge tutti i transcript di tutti i progetti, e
+      // Claude non deve aspettarla per partire. Gira accanto alla sessione, e
+      // tocca solo roba di due mesi fa — cioe' niente di quello che la sessione
+      // che sta nascendo andra' a leggere.
+      import('../src/pulizia.js')
+        .then(({ puliziaAutomatica }) => puliziaAutomatica({ cartella }))
+        .catch(() => {});
+
       // Va atteso: avvia() e' asincrona (puo' passare dal ripristino di un ramo),
       // e senza await il suo errore non arriverebbe a questo catch.
       await new Wrapper({
@@ -259,6 +319,13 @@ async function main() {
       console.error(`cb: ${errore?.message ?? errore}`);
       process.exit(USCITA_AVVIO_FALLITO);
     }
+    return;
+  }
+
+  // La pulizia sta prima della scansione: non guarda le sessioni una per una, e
+  // "nessuna sessione" non e' una risposta sensata a un prune.
+  if (comando === 'prune') {
+    await prune(resto);
     return;
   }
 

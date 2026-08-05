@@ -116,6 +116,10 @@ cb ls [filter]          list the sessions of every project
 cb tree <session>       branch tree of a session
 cb open <session> [n]   resume from outside, optionally from point n
 cb pick                 interactive catalogue from outside
+cb prune [--esegui]     remove what cb leaves behind: truncated sessions, file
+                        copies, auto commits older than 7 days (--giorni N).
+                        Without --esegui it only shows what it would remove.
+                        cb also does it by itself, once a day, over 2 months
 cb --impostazioni       settings screen (opens by itself the first time)
 cb --version            version number
 ```
@@ -130,6 +134,7 @@ cb --version            version number
 | `CB_CLAUDE_EXE` | full path of the Claude Code executable, for non-standard installs |
 | `CB_CARTELLA_SCELTA` | file where cb writes the folder you picked, for the calling shell |
 | `CB_IMPOSTAZIONI` | path of the settings file, if you want it somewhere else |
+| `CB_GIORNI_PULIZIA` | age in days of what the automatic cleanup removes (default `60`, `0` turns it off) |
 
 Order of precedence, for all of them: **environment variable → settings file → default.**
 

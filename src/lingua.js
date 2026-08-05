@@ -35,6 +35,12 @@ cb — branching for Claude Code conversations
   cb tree <session>     show the branch tree of a session
   cb open <session> [n]   resume a session from outside, optionally from branch n
   cb pick               interactive catalogue: pick a session, then a branch
+  cb prune [--giorni N] [--esegui]
+                        remove what cb leaves behind and never expires: truncated
+                        sessions, file copies, auto commits. Older than N days
+                        (7); without --esegui it only shows what it would remove.
+                        cb does it by itself too, once a day, over 2 months
+                        (CB_GIORNI_PULIZIA, 0 turns it off)
   cb --impostazioni     settings screen: language, work folder, shortcut
                         (it opens by itself the first time)
   cb --version          version number
@@ -63,6 +69,23 @@ with CB_LINGUA (en, it).
     chiediPunto: (massimo) => `Restart from point (1-${massimo}, enter = continue the active branch): `,
     ramoRiattivato: (foglia) => `\n  abandoned branch reactivated (leaf ${foglia})`,
     legendaElenco: '● = active branch   ⑂ = fork',
+  },
+
+  // bin/cb.js — cb prune
+  pulizia: {
+    anteprima: (giorni) => `\ncb prune — older than ${giorni} days (nothing removed yet)\n`,
+    fatto: (giorni) => `\ncb prune — older than ${giorni} days\n`,
+    sessioni: 'truncated sessions',
+    copie: 'file copies of cb',
+    ref: 'auto commits',
+    quantiFile: (n, dim) => `${n} files, ${dim}`,
+    quantiRef: (n) => `${n} refs`,
+    tolti: (n) => `${n} removed`,
+    nienteDaTogliere: 'Nothing to remove.',
+    comeProcedere: '\ncb prune --esegui to remove them',
+    dopoRef: 'the commits free their space with: git gc --prune=now',
+    fuoriRepo: '(not a git repository: auto commits not checked)',
+    giorniNonValidi: 'The value of --giorni must be a positive number.',
   },
 
   // src/vista.js — l'albero dentro la sessione
@@ -246,6 +269,12 @@ cb — branching per conversazioni Claude Code
   cb tree <sessione>    mostra l'albero dei rami di una sessione
   cb open <sessione> [n]  riprendi una sessione da fuori, opzionalmente dal ramo n
   cb pick               catalogo interattivo: scegli sessione, poi ramo
+  cb prune [--giorni N] [--esegui]
+                        toglie ciò che cb lascia dietro e non scade mai: sessioni
+                        troncate, copie dei file, commit automatici. Più vecchi
+                        di N giorni (7); senza --esegui dice solo cosa toglierebbe.
+                        cb lo fa anche da solo, una volta al giorno, oltre i 2 mesi
+                        (CB_GIORNI_PULIZIA, con 0 si spegne)
   cb --impostazioni     schermata delle impostazioni: lingua, cartella, scorciatoia
                         (la prima volta si apre da sola)
   cb --version          numero di versione
@@ -273,6 +302,22 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     chiediPunto: (massimo) => `Ripartire dal punto (1-${massimo}, invio = continua il ramo attivo): `,
     ramoRiattivato: (foglia) => `\n  ramo abbandonato riattivato (foglia ${foglia})`,
     legendaElenco: '● = ramo attivo   ⑂ = biforcazione',
+  },
+
+  pulizia: {
+    anteprima: (giorni) => `\ncb prune — più vecchi di ${giorni} giorni (non ho tolto niente)\n`,
+    fatto: (giorni) => `\ncb prune — più vecchi di ${giorni} giorni\n`,
+    sessioni: 'sessioni troncate',
+    copie: 'copie dei file di cb',
+    ref: 'commit automatici',
+    quantiFile: (n, dim) => `${n} file, ${dim}`,
+    quantiRef: (n) => `${n} ref`,
+    tolti: (n) => `${n} tolti`,
+    nienteDaTogliere: 'Non c\'è niente da togliere.',
+    comeProcedere: '\ncb prune --esegui per toglierli',
+    dopoRef: 'lo spazio dei commit torna con: git gc --prune=now',
+    fuoriRepo: '(non siamo in un repo git: commit automatici non controllati)',
+    giorniNonValidi: 'Il valore di --giorni deve essere un numero positivo.',
   },
 
   albero: {

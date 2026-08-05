@@ -71,10 +71,18 @@ export function scriviImpostazioni(impostazioni) {
 // predefinito: valore da usare se non c'e' ne' ambiente ne' file
 // ritorna: il valore scelto
 export function impostazione(nome, predefinito) {
-  const ambiente = { lingua: 'CB_LINGUA', radice: 'CB_RADICE', scorciatoia: 'CB_TASTO' }[nome];
+  const ambiente = {
+    lingua: 'CB_LINGUA',
+    radice: 'CB_RADICE',
+    scorciatoia: 'CB_TASTO',
+    giorniPulizia: 'CB_GIORNI_PULIZIA',
+  }[nome];
   const daAmbiente = ambiente ? process.env[ambiente] : null;
   if (daAmbiente) return daAmbiente;
 
+  // Lo zero e' un valore vero: `giorniPulizia: 0` spegne la pulizia automatica, e
+  // con un `||` sarebbe caduto sul predefinito, cioe' non l'avrebbe spenta.
+  // La stringa vuota resta trattata come "non scelto".
   const salvato = leggiImpostazioni()[nome];
-  return salvato || predefinito;
+  return salvato === undefined || salvato === '' ? predefinito : salvato;
 }

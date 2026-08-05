@@ -37,10 +37,10 @@ const ARCHIVIO = path.join(os.homedir(), '.claude', 'file-history');
 // Quindi cb copia quello che sta per sovrascrivere, esattamente come fa Claude,
 // e le sue copie entrano nella stessa regola del "primo backup successivo".
 //
-// ponytail: nessuna pulizia, le copie si accumulano a ogni ripristino. Se
-// l'archivio pesera', una scadenza per data (o un `cb prune`) e' il rimedio.
-const ARCHIVIO_CB = path.join(os.homedir(), '.claude', 'cb', 'file-history');
-const INDICE_CB = 'indice.jsonl';
+// Le copie si accumulano a ogni ripristino: le toglie `cb prune` (src/pulizia.js),
+// che le legge da qui — percorso e nome dell'indice sono esportati apposta.
+export const ARCHIVIO_CB = path.join(os.homedir(), '.claude', 'cb', 'file-history');
+export const INDICE_CB = 'indice.jsonl';
 
 // Percorso assoluto del file a cui si riferisce una copia.
 // `trackingPath` e' relativo e con i separatori di Windows; `realParentDir` e' la
