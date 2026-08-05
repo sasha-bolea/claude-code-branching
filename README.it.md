@@ -5,6 +5,8 @@
 Branching per conversazioni Claude Code: albero dei rami, catalogo globale, ripresa da
 qualsiasi messaggio — compresi i rami che hai abbandonato con un ripristino.
 
+![L'albero di una conversazione, con il menu del ripristino aperto](https://raw.githubusercontent.com/sasha-bolea/claude-code-branching/master/assets/tree.png)
+
 ## Il problema
 
 Claude Code ha "restore code and conversation" (Esc Esc), ma è un undo a senso unico:
