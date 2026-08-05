@@ -163,6 +163,63 @@ function testInvioConfermaEscLasciaComEra() {
   console.log('ok  testInvioConfermaEscLasciaComEra');
 }
 
+// Il tasto Invio arriva come `\r\n` su molti terminali: due azioni per una
+// pressione sola. La prima chiude il campo, la seconda cadeva su un campo che
+// non c'era piu' — 'invio' moriva su null.trim(), 'carattere' scriveva la
+// stringa "nullx" dentro il percorso.
+function testUnInvioCheArrivaDoppioNonRompeNiente() {
+  pulisci();
+  const stato = statoIniziale();
+  applicaAzione(stato, 'giu'); // cartella
+  applicaAzione(stato, 'conferma'); // apre il campo
+  stato.modifica = 'C:\\scritto';
+
+  // Le due azioni che azioniTesto produce da un solo Invio.
+  applicaTesto(stato, { tipo: 'invio' });
+  applicaTesto(stato, { tipo: 'invio' });
+
+  assert.equal(stato.valori.radice, 'C:\\scritto', 'il percorso resta quello scritto');
+  assert.equal(stato.modifica, null, 'e il campo resta chiuso');
+
+  // Stessa storia per un carattere arrivato in ritardo.
+  applicaTesto(stato, { tipo: 'carattere', valore: 'x' });
+  assert.equal(stato.modifica, null, 'a campo chiuso non si scrive');
+  assert.equal(stato.valori.radice, 'C:\\scritto', 'e il percorso non si sporca');
+  console.log('ok  testUnInvioCheArrivaDoppioNonRompeNiente');
+}
+
+// Lo stesso, ma dai byte: e' la prova che coglierebbe il ciclo se smettesse di
+// fermarsi alla chiusura del campo.
+async function testInvioDoppioDaiByte() {
+  pulisci();
+  const ingresso = new EventEmitter();
+  ingresso.resume = () => {};
+  ingresso.pause = () => {};
+  const uscita = new EventEmitter();
+  uscita.write = () => {};
+  uscita.rows = 30;
+  uscita.columns = 100;
+
+  const premi = async (testo) => {
+    ingresso.emit('data', Buffer.from(testo, 'latin1'));
+    await new Promise((r) => setTimeout(r, 5));
+  };
+
+  const attesa = configura({ ingresso, uscita });
+  await premi('\x1b[B'); // giu -> cartella
+  await premi('\r'); // apre il campo
+  await premi('\x7f'.repeat(200)); // svuota
+  await premi('C:\\Doppio');
+  await premi('\r\n'); // UN Invio, due azioni
+  await premi('\x1b[B');
+  await premi('\x1b[B'); // giu giu -> fatto
+  await premi('\r');
+
+  const scelte = await attesa;
+  assert.equal(scelte.radice, 'C:\\Doppio', 'il percorso sopravvive all invio doppio');
+  console.log('ok  testInvioDoppioDaiByte');
+}
+
 // La schermata mostra i percorsi con la tilde, quindi deve accettarli riscritti
 // cosi': chi legge `~\Documents` e lo ridigita non deve ottenere una cartella
 // chiamata "~".
@@ -270,11 +327,13 @@ testFrecceCambianoIlValore();
 testInvioAgisceSullaRiga();
 testIlPercorsoSiScrive();
 testInvioConfermaEscLasciaComEra();
+testUnInvioCheArrivaDoppioNonRompeNiente();
 testTildeSiEspande();
 testEscTieneQuelloCheSiVede();
 testLaSchermataDiceTutto();
 await testIlCicloSalvaSuDisco();
 await testSiScriveDavveroDaTastiera();
+await testInvioDoppioDaiByte();
 
 pulisci();
-console.log('\n13 prove superate');
+console.log('\n15 prove superate');

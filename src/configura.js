@@ -121,6 +121,12 @@ export function applicaAzione(stato, azione) {
 // azione: uno degli oggetti prodotti da azioniTesto
 // ritorna: { esito } — sempre 'continua', il campo non chiude la schermata
 export function applicaTesto(stato, azione) {
+  // A campo chiuso non c'e' niente da modificare. Senza questa riga un tasto di
+  // troppo scriveva su `null`: 'carattere' dava la stringa "nullx", e 'invio'
+  // moriva su null.trim(). Sono i due modi in cui una lettura che contiene piu'
+  // di un tasto arriva qui dopo che il campo si e' gia' chiuso.
+  if (stato.modifica === null) return { esito: 'continua' };
+
   switch (azione.tipo) {
     case 'carattere':
       stato.modifica += azione.valore;
@@ -254,7 +260,13 @@ export function configura({ ingresso = process.stdin, uscita = process.stdout } 
     // senza che il ciclo cambi.
     const suDati = (dati) => {
       if (stato.modifica !== null) {
-        for (const azione of azioniTesto(dati)) applicaTesto(stato, azione);
+        for (const azione of azioniTesto(dati)) {
+          applicaTesto(stato, azione);
+          // Chiuso il campo, il resto della lettura non e' piu' testo: il tasto
+          // Invio arriva come `\r\n` su molti terminali, cioe' due azioni, e la
+          // seconda finirebbe su un campo che non c'e' piu'.
+          if (stato.modifica === null) break;
+        }
         return ridisegna();
       }
 

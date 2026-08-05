@@ -270,6 +270,13 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   il wizard fosse rotto (successo davvero, il 2026-08-01). Lo snippet ora non passa `--tasto`:
   la scorciatoia viene dalle impostazioni. Vale per ogni impostazione nuova — se ha un flag
   corrispondente, il profilo consigliato non deve passarlo.
+- **Un tasto solo può produrre più azioni, e il ciclo deve fermarsi quando lo stato cambia.**
+  Invio arriva come `\r\n` su molti terminali: `azioniTesto` ne ricava due `invio`. La prima
+  chiude il campo di testo, la seconda cadeva su `stato.modifica === null` — `'invio'` moriva
+  su `null.trim()`, `'carattere'` scriveva la stringa `"nullx"` dentro il percorso. Ogni ciclo
+  che consuma le azioni di una lettura deve controllare lo stato **fra un'azione e l'altra**,
+  non solo all'inizio: è lo stesso motivo per cui il ciclo di navigazione esce appena il campo
+  si apre. Le prove sono `testUnInvioCheArrivaDoppioNonRompeNiente` e `testInvioDoppioDaiByte`.
 - **Il percorso della cartella di lavoro si scrive, non si sceglie da un albero.** Serve
   `azioniTesto` e non `azioniTastiera`: quella mappa w/a/s/d sulle direzioni, e in un campo di
   testo servono come lettere. Serve anche `tasto.grezzo` e non `tasto.carattere`, che
