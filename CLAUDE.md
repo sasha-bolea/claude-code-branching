@@ -270,6 +270,14 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   il wizard fosse rotto (successo davvero, il 2026-08-01). Lo snippet ora non passa `--tasto`:
   la scorciatoia viene dalle impostazioni. Vale per ogni impostazione nuova — se ha un flag
   corrispondente, il profilo consigliato non deve passarlo.
+- **Con l'overlay a schermo il tracciamento del mouse va spento.** Claude accende i modi
+  `ESC[?1002h`/`?1006h` e simili; finché sono accesi il terminale manda movimenti e clic
+  all'applicazione invece di selezionare, e dall'albero non si riesce a copiare niente (cb
+  quegli eventi li scarta e basta). Quali siano accesi **non si indovina**: `osservaMouse`
+  legge l'output del pty di passaggio e ne tiene lo stato, e alla chiusura si rimette
+  esattamente quello — riaccendere un modo che Claude non aveva chiesto gli farebbe arrivare
+  eventi che non si aspetta. L'output arriva a blocchi, quindi si conserva una coda di 9
+  caratteri: una sequenza spezzata fra due letture andrebbe altrimenti persa.
 - **Un tasto solo può produrre più azioni, e il ciclo deve fermarsi quando lo stato cambia.**
   Invio arriva come `\r\n` su molti terminali: `azioniTesto` ne ricava due `invio`. La prima
   chiude il campo di testo, la seconda cadeva su `stato.modifica === null` — `'invio'` moriva

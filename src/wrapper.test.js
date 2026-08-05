@@ -233,7 +233,75 @@ function testCambioRamoNonRiapreIlSelettore() {
   assert.deepEqual(avvii[2], ['--resume', 'ramo-ancora', '--dangerously-skip-permissions']);
 }
 
+// Con l'overlay a schermo il mouse deve tornare a selezionare il testo.
+// Claude accende il tracciamento del mouse e da quel momento il terminale manda
+// gli eventi all'applicazione invece di selezionare: cb quegli eventi li scarta,
+// quindi dall'albero non si riusciva a copiare niente.
+function testIlMouseTornaASelezionareNellOverlay() {
+  const scritto = [];
+  const wrapper = new Wrapper({});
+  wrapper.scrivi = (t) => scritto.push(t);
+  wrapper.registra = () => {};
+
+  // Quello che Claude manda avviando la sua interfaccia.
+  wrapper.osservaMouse('\x1b[?1002h\x1b[?1006h');
+  assert.deepEqual([...wrapper.mouseAcceso], ['1002', '1006'], 'presi nota dei modi accesi');
+
+  scritto.length = 0;
+  wrapper.mouse(false);
+  const spegne = scritto.join('');
+  assert.ok(spegne.includes('\x1b[?1002l'), 'spegne 1002');
+  assert.ok(spegne.includes('\x1b[?1006l'), 'spegne 1006');
+
+  scritto.length = 0;
+  wrapper.mouse(true);
+  const accende = scritto.join('');
+  assert.ok(accende.includes('\x1b[?1002h') && accende.includes('\x1b[?1006h'), 'e li rimette');
+  assert.ok(!accende.includes('1003'), 'senza accendere modi che Claude non aveva chiesto');
+}
+
+// Lo stato va seguito, non fotografato una volta: se Claude spegne un modo, alla
+// chiusura dell'overlay non va riacceso.
+function testUnModoSpentoDaClaudeNonTorna() {
+  const wrapper = new Wrapper({});
+  wrapper.scrivi = () => {};
+  wrapper.registra = () => {};
+
+  wrapper.osservaMouse('\x1b[?1003h');
+  wrapper.osservaMouse('\x1b[?1003l');
+  assert.equal(wrapper.mouseAcceso.size, 0, 'acceso e poi spento vale spento');
+}
+
+// L'output del pty arriva a blocchi, e una sequenza puo' essere spezzata a meta'
+// fra due letture: senza la coda, quel modo resterebbe acceso sotto l'overlay.
+function testSequenzaSpezzataFraDueBlocchi() {
+  const wrapper = new Wrapper({});
+  wrapper.scrivi = () => {};
+  wrapper.registra = () => {};
+
+  wrapper.osservaMouse('roba a schermo\x1b[?10');
+  wrapper.osservaMouse('06h altra roba');
+  assert.deepEqual([...wrapper.mouseAcceso], ['1006'], 'riconosciuta a cavallo dei due blocchi');
+}
+
+// Senza mouse acceso non si scrive niente: un terminale che non lo usa non deve
+// ricevere sequenze che non ha chiesto.
+function testSenzaMouseNonScriveNiente() {
+  const scritto = [];
+  const wrapper = new Wrapper({});
+  wrapper.scrivi = (t) => scritto.push(t);
+  wrapper.registra = () => {};
+
+  wrapper.mouse(false);
+  wrapper.mouse(true);
+  assert.equal(scritto.length, 0, 'nessuna sequenza inventata');
+}
+
 const prove = [
+  testIlMouseTornaASelezionareNellOverlay,
+  testUnModoSpentoDaClaudeNonTorna,
+  testSequenzaSpezzataFraDueBlocchi,
+  testSenzaMouseNonScriveNiente,
   testSenzaRipresa,
   testCambioRamoNonRiapreIlSelettore,
   testDoppioEscInLettureSeparate,

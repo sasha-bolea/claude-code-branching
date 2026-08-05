@@ -34,6 +34,21 @@ import {
 const PULISCI_SCHERMO = '[2J[H';
 const MOSTRA_CURSORE = '[?25h';
 
+// Modi di tracciamento del mouse che una TUI puo' accendere. Finche' sono accesi
+// il terminale manda movimenti e clic all'applicazione invece di selezionare il
+// testo: con l'overlay a schermo non si riusciva a copiare niente, perche' cb
+// quegli eventi li scarta e basta.
+//
+// Quali siano accesi non si indovina: si guarda cosa Claude ha chiesto
+// (`osservaMouse`) e si rimette esattamente quello alla chiusura dell'overlay.
+const MODI_MOUSE = [1000, 1002, 1003, 1005, 1006, 1015, 1016];
+const RE_MODO_MOUSE = new RegExp(`\\x1b\\[\\?(${MODI_MOUSE.join('|')})([hl])`, 'g');
+
+// La sequenza piu' lunga fra quelle cercate e' `ESC[?1016h`, nove caratteri:
+// conservando la coda della lettura precedente, una sequenza spezzata fra due
+// blocchi di output viene riconosciuta lo stesso.
+const CODA_MOUSE = 9;
+
 // Millisecondi di attesa dopo il primo Esc per capire se ne arriva un secondo.
 // Trattenere il primo Esc e' necessario: se lo inoltrassimo subito, Claude
 // aprirebbe il proprio menu di ripristino prima che il secondo arrivi.
@@ -149,6 +164,8 @@ export class Wrapper {
     this.processo = null;
     this.sessionId = null;
     this.inOverlay = false; // true mentre mostriamo l'albero: lo stdin e' nostro
+    this.mouseAcceso = new Set(); // modi mouse che Claude ha chiesto, per rimetterli
+    this.codaMouse = ''; // fine dell'ultimo blocco, per le sequenze spezzate
     this.timerEsc = null;
     this.pressioniInAttesa = 0; // pressioni della scorciatoia gia' viste
     this.byteTrattenuti = null; // byte da inoltrare se la sequenza non si completa
@@ -236,6 +253,7 @@ export class Wrapper {
     this.processo = this.creaProcesso(argomenti);
 
     this.processo.onData((dati) => {
+      this.osservaMouse(dati);
       if (!this.inOverlay) this.scrivi(senzaTitolo(dati));
     });
 
@@ -279,8 +297,38 @@ export class Wrapper {
     this.inOverlay = false;
     this.ridisegnaOverlay = null; // da qui in poi lo schermo e' di Claude
     clearTimeout(this.timerRidimensiona);
+    this.mouse(true); // lo schermo torna a Claude, e il mouse e' suo
     this.scrivi(PULISCI_SCHERMO);
     this.forzaRidisegno();
+  }
+
+  // Prende nota dei modi mouse che Claude accende o spegne, leggendo il suo
+  // output di passaggio.
+  //
+  // Si osserva invece di indovinare perche' alla chiusura dell'overlay va
+  // rimesso **esattamente** quello che c'era: riaccendere un modo che Claude non
+  // aveva chiesto gli farebbe arrivare eventi che non si aspetta.
+  // dati: blocco di output del pty
+  osservaMouse(dati) {
+    const testo = (this.codaMouse ?? '') + dati;
+    RE_MODO_MOUSE.lastIndex = 0;
+    for (const trovato of testo.matchAll(RE_MODO_MOUSE)) {
+      if (trovato[2] === 'h') this.mouseAcceso.add(trovato[1]);
+      else this.mouseAcceso.delete(trovato[1]);
+    }
+    // Coda per la lettura successiva: una sequenza puo' arrivare spezzata a
+    // meta' fra due blocchi, e senza questo pezzo andrebbe persa.
+    this.codaMouse = testo.slice(-CODA_MOUSE);
+  }
+
+  // Accende o spegne i modi mouse che Claude aveva chiesto.
+  // Spenti, il terminale torna a fare la selezione del testo con il mouse: e'
+  // quello che serve mentre l'overlay e' a schermo.
+  // acceso: true per rimetterli come li voleva Claude
+  mouse(acceso) {
+    if (this.mouseAcceso.size === 0) return;
+    const finale = acceso ? 'h' : 'l';
+    this.scrivi([...this.mouseAcceso].map((modo) => `\x1b[?${modo}${finale}`).join(''));
   }
 
   // Reagisce al ridimensionamento della finestra del terminale.
@@ -310,6 +358,7 @@ export class Wrapper {
   // coperto dal ridisegno di Claude e la scorciatoia sembrerebbe non funzionare.
   async mostraAvviso(righe) {
     this.inOverlay = true;
+    this.mouse(false); // schermo nostro: il mouse torni a selezionare il testo
     // Registrato come ridisegno cosi' anche questa schermata segue il
     // ridimensionamento della finestra (vedi ridisegnaOverlay).
     this.ridisegnaOverlay = () => {
@@ -379,6 +428,7 @@ export class Wrapper {
     }
 
     this.inOverlay = true;
+    this.mouse(false); // schermo nostro: il mouse torni a selezionare il testo
     this.scrivi(MOSTRA_CURSORE + PULISCI_SCHERMO); // cursore visibile, schermo pulito
 
     // I rami abbandonati prima di un fork vivono nel file della sessione di
