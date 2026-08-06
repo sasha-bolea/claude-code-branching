@@ -37,7 +37,11 @@ export const LEGENDA = T.albero.legenda;
 
 // Cosa si puo' riportare indietro dal punto scelto. Sono le stesse tre voci del
 // menu nativo di Claude (Esc Esc), perche' la scelta e' la stessa: la
-// conversazione e il codice tornano indietro insieme o separatamente.
+// conversazione e i file tornano indietro insieme o separatamente.
+//
+// Dove finisce il prompt scelto e' una scelta a parte (`daRimandare`), non una
+// quarta voce: vale insieme a tutt'e tre — anche con «solo i file», dove decide
+// se le modifiche di quel turno restano o se ne vanno.
 //
 // L'ordine mette per primo il caso normale, cosi' invio senza pensarci fa la
 // cosa che l'utente si aspetta. Il `modo` non e' testo: e' il valore che il
@@ -556,7 +560,7 @@ function tagliaVisibile(riga, massimo) {
 // varianti: testi in ordine di preferenza
 // spazio: colonne disponibili
 // ritorna: il testo scelto
-function primaCheEntra(varianti, spazio) {
+export function primaCheEntra(varianti, spazio) {
   const scelta = varianti.find((testo) => testo.length <= spazio);
   return scelta ?? varianti[varianti.length - 1].slice(0, Math.max(0, spazio));
 }
@@ -597,6 +601,19 @@ function finestraAttorno(posizione, quante, totale) {
 // opzioni.menu: indice della voce di VOCI_RIPRISTINO selezionata, quando invio e'
 //   gia' stato premuto e si sta scegliendo cosa riportare indietro. L'albero
 //   resta a schermo: la scelta riguarda il punto che si vede.
+// opzioni.daRimandare: col menu aperto, se il prompt scelto deve tornare nella
+//   barra di input invece di restare inviato con la sua risposta.
+// opzioni.ricorda: col menu aperto, se la casella «ricordati questa scelta» e'
+//   accesa.
+// opzioni.ricordabile: se mostrare la casella «ricordati questa scelta». La
+//   decide chi disegna, e vale quando ci sarebbe davvero qualcosa da salvare:
+//   non da `cb -r`, dove la scelta vale per quella volta sola, e non quando lo
+//   stato mostrato e' gia' quello salvato — offrire di ricordare cio' che e' gia'
+//   ricordato e' una casella che non fa niente. Le frecce funzionano comunque.
+// opzioni.profili: { elenco, indice } quando si sta scegliendo con quale
+//   profilo rilanciare Claude. Come il menu, prende il posto della barra dei
+//   tasti e lascia l'albero a schermo. Un nome `null` nell'elenco e' il profilo
+//   base, cioe' l'ambiente con cui cb e' stato lanciato.
 // ritorna: array di righe pronte da scrivere
 export function schermata(
   vista,
@@ -609,6 +626,10 @@ export function schermata(
     esc = { lunga: T.albero.escLunga, corta: T.albero.escCorta },
     extra = { lunga: '', corta: '' },
     menu = null,
+    daRimandare = false,
+    ricorda = false,
+    ricordabile = true,
+    profili = null,
   } = {},
 ) {
   const scelto = vista.perUuid.get(selezione);
@@ -620,7 +641,13 @@ export function schermata(
   // avvisi di albero tagliato sopra, sotto e ai lati. Il menu prende il posto
   // della barra dei tasti ma occupa piu' righe: vanno tolte all'albero, o la
   // schermata sfonderebbe in basso.
-  const fisse = 13 + testoScelto.length + (menu === null ? 0 : VOCI_RIPRISTINO.length + 2);
+  // Il menu prende il posto della barra dei tasti; la scelta sul prompt costa
+  // altre tre righe, piu' una per la casella quando si puo' far ricordare.
+  // L'elenco dei profili occupa il suo posto, con una riga per profilo.
+  let righeMenu = 0;
+  if (menu !== null) righeMenu = VOCI_RIPRISTINO.length + 2 + (ricordabile ? 4 : 3);
+  else if (profili) righeMenu = profili.elenco.length + 4;
+  const fisse = 13 + testoScelto.length + righeMenu;
   const disponibili = Math.max(4, altezza - fisse);
   const spazioAlbero = Math.min(vista.griglia.length, Math.max(3, Math.ceil(disponibili * 0.6)));
   const spazioStoria = Math.max(0, disponibili - spazioAlbero);
@@ -680,6 +707,22 @@ export function schermata(
     }
   }
 
+  // Scelta del profilo: come il menu, prende il posto della barra dei tasti.
+  // L'albero resta a schermo perche' la conversazione non si muove — cambia solo
+  // l'ambiente del processo — ed e' esattamente quello che la riga sotto l'elenco
+  // dice, perche' non e' evidente.
+  if (menu === null && profili) {
+    righe.push('', `  ${normale(T.albero.qualeProfilo)}`);
+    profili.elenco.forEach((nome, indice) => {
+      const etichetta = nome ?? T.albero.profiloBase;
+      const riga = `  ${indice === profili.indice ? '▸' : ' '} ${etichetta}`;
+      righe.push(indice === profili.indice ? arancioneForte(riga) : normale(riga));
+    });
+    righe.push('', `  ${grigio(T.albero.profiloResta.slice(0, spazioColonne))}`);
+    righe.push(`  ${grigio(primaCheEntra(T.albero.legendaProfili, spazioColonne))}`);
+    return righe.map((riga) => tagliaVisibile(riga, colonne));
+  }
+
   // Scelta di cosa riportare indietro: prende il posto della barra dei tasti, con
   // l'albero ancora a schermo perche' la scelta riguarda il punto selezionato.
   if (menu !== null) {
@@ -688,7 +731,27 @@ export function schermata(
       const riga = `  ${indice === menu ? '▸' : ' '} ${indice + 1}. ${voce.etichetta}`;
       righe.push(indice === menu ? arancioneForte(riga) : normale(riga));
     });
-    righe.push(`  ${grigio(primaCheEntra(T.albero.legendaMenu, spazioColonne))}`);
+
+    // Dove finisce il prompt scelto. Non e' una quarta voce: e' una scelta a
+    // parte, che vale insieme a quella qui sopra. Dei due stati si mostra per
+    // intero quello attivo — una frase che dice cosa succedera' — con il tasto
+    // che lo cambia scritto accanto, dove serve, invece che solo in legenda.
+    //
+    // Il rientro dei due tasti e' lo stesso (sei colonne) perche' le due righe
+    // che li seguono si leggano incolonnate.
+    const frase = daRimandare ? T.albero.promptDaRimandare : T.albero.promptInviato;
+    righe.push('', `  ${arancioneForte(`←→  ${primaCheEntra(frase, spazioColonne - 6)}`)}`);
+    // La casella solo quando c'e' davvero qualcosa da salvare: annunciare un
+    // tasto che non cambierebbe niente e' peggio che tacerlo.
+    if (ricordabile) {
+      righe.push(
+        `   r  ${normale(
+          `[${ricorda ? '×' : ' '}] ${primaCheEntra(T.albero.ricordaScelta, spazioColonne - 10)}`,
+        )}`,
+      );
+    }
+
+    righe.push('', `  ${grigio(primaCheEntra(T.albero.legendaMenu, spazioColonne))}`);
     return righe.map((riga) => tagliaVisibile(riga, colonne));
   }
 

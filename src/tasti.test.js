@@ -211,8 +211,14 @@ function testAzioniWasd() {
   const ctrlD = testo(`${esc}[68;1;100;1;${8};1_`);
   assert.deepEqual(azioniTastiera(ctrlD), [], 'ctrl+d non e un movimento');
 
-  // Le altre lettere non fanno niente, come prima.
-  assert.deepEqual(azioniTastiera(testo('qz')), []);
+  // Le altre lettere escono come 'lettera': servono alle caselle che si
+  // accendono con un tasto loro (la scelta ricordata, nel menu del ripristino).
+  // Chi non le usa le ignora.
+  assert.deepEqual(azioniTastiera(testo('qz')), [
+    { tipo: 'lettera', valore: 'q' },
+    { tipo: 'lettera', valore: 'z' },
+  ]);
+  assert.deepEqual(azioniTastiera(win32(82, 114, 1)), [{ tipo: 'lettera', valore: 'r' }]);
 }
 
 function testAzioniByteGrezzi() {

@@ -203,12 +203,34 @@ async function main() {
   // Modalita' predefinita: Claude avvolto, con l'albero a portata di tasto.
   // --tasto e --tasti sono opzioni combinabili, non comandi alternativi.
   const argomenti = [comando, ...resto].filter(Boolean);
-  const modiWrapper = ['--tasti', '--tasto', '--senza-file', '--scegli'];
+  const modiWrapper = ['--tasti', '--tasto', '--senza-file', '--scegli', '--profilo'];
   if (argomenti.length === 0 || modiWrapper.includes(argomenti[0])) {
-    // Uso non interattivo: niente pseudo-terminale, cb si fa da parte.
+    // Profilo di variabili d'ambiente con cui lanciare Claude. Si risolve prima
+    // di tutto il resto: un nome che non esiste va detto subito, perche'
+    // proseguire con l'ambiente di sempre farebbe credere che il gateway sia in
+    // uso quando non lo e'.
+    const posizioneProfilo = argomenti.indexOf('--profilo');
+    const nomeProfilo =
+      posizioneProfilo >= 0 && !(argomenti[posizioneProfilo + 1] ?? '--').startsWith('--')
+        ? argomenti[posizioneProfilo + 1]
+        : null;
+    let ambienteProfilo = null;
+    if (nomeProfilo) {
+      const { leggiProfili, ambienteConProfilo } = await import('../src/profili.js');
+      const noti = leggiProfili();
+      if (!noti.has(nomeProfilo)) {
+        console.error(T.wrapper.profiloSconosciuto(nomeProfilo, [...noti.keys()].join(', ')));
+        process.exit(1);
+      }
+      ambienteProfilo = ambienteConProfilo(process.env, noti.get(nomeProfilo));
+    }
+
+    // Uso non interattivo: niente pseudo-terminale, cb si fa da parte. Il profilo
+    // invece va applicato lo stesso: cb si fa da parte sull'interfaccia, non
+    // sulla scelta del provider.
     const stampa = argomentiClaude.some((a) => a === '-p' || a === '--print');
     if (stampa || !process.stdin.isTTY) {
-      const codice = await lanciaClaudeDiretto(argomentiClaude);
+      const codice = await lanciaClaudeDiretto(argomentiClaude, process.cwd(), ambienteProfilo);
       process.exit(codice ?? 0);
     }
 
@@ -247,6 +269,10 @@ async function main() {
       let cartella = process.cwd();
       let perClaude = argomentiClaude;
       let ripartenza = null;
+      // Il profilo puo' arrivare dalla riga di comando o essere scelto nel
+      // navigatore delle cartelle, che e' il momento in cui si decide dove e con
+      // cosa lavorare.
+      let profilo = nomeProfilo;
       if (argomenti.includes('--scegli')) {
         const { selezionaCartella, annotaCartellaScelta } = await import('../src/cartelle.js');
         const iniziale = chiedeRipresa(argomentiClaude);
@@ -258,9 +284,10 @@ async function main() {
         // navigatore, che e' il primo passo, esce davvero: non c'e' un passo
         // precedente a cui tornare.
         while (!conversazione) {
-          scelta = await selezionaCartella({ cwd: cartella, ripresa: iniziale });
+          scelta = await selezionaCartella({ cwd: cartella, ripresa: iniziale, profilo });
           if (!scelta) return;
           cartella = scelta.percorso;
+          profilo = scelta.profilo;
 
           if (!scelta.ripresa) break;
 
@@ -312,6 +339,7 @@ async function main() {
         scorciatoia: scorciatoia || predefinita,
         ripristinaCodice: !argomenti.includes('--senza-file'),
         diagnostica,
+        profilo,
       }).avvia({ ripartenza });
     } catch (errore) {
       // Codice dedicato: dice a chi ci ha lanciato che cb non e' partito, e che

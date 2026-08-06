@@ -18,6 +18,7 @@ import path from 'node:path';
 import { azioniNavigazione } from './tasti.js';
 import { arancione, arancioneForte, grigio, normale } from './stile.js';
 import { impostazione } from './impostazioni.js';
+import { leggiProfili, elencoProfili } from './profili.js';
 import { T } from './lingua.js';
 
 // Caratteri dell'albero: gli stessi giunti del disegno dei rami.
@@ -118,11 +119,22 @@ const taglia = (testo, larghezza) =>
 // Compone la pagina del selettore.
 // Funzione pura: prende lo stato e restituisce il testo da scrivere, cosi' le
 // prove possono verificare finestra e selezione senza un terminale.
-// stato: { righe, indice, ripresa }
+// stato: { righe, indice, ripresa, profili, profilo }
+//   profili: nomi configurati, con null in testa per l'ambiente di partenza.
+//     Vuoto (o assente) = nessuno: della riga del profilo non si parla, e `m`
+//     non ha niente da alternare.
+//   profilo: quello scelto, o null per l'ambiente di partenza
 // altezza/larghezza: dimensioni del terminale
 // ritorna: stringa con la schermata intera
-export function disegna({ righe, indice, ripresa }, altezza, larghezza) {
-  const visibili = Math.max(1, altezza - RIGHE_FISSE);
+export function disegna(
+  { righe, indice, ripresa, profili = [], profilo = null },
+  altezza,
+  larghezza,
+) {
+  // La riga del profilo esiste solo se ci sono profili: una riga in piu' toglie
+  // una cartella all'elenco, e non si paga per una funzione che non si usa.
+  const conProfili = profili.length > 1;
+  const visibili = Math.max(1, altezza - RIGHE_FISSE - (conProfili ? 1 : 0));
   // Finestra centrata sulla selezione, ferma ai bordi dell'elenco.
   let inizio = Math.max(0, indice - Math.floor(visibili / 2));
   inizio = Math.min(inizio, Math.max(0, righe.length - visibili));
@@ -130,14 +142,21 @@ export function disegna({ righe, indice, ripresa }, altezza, larghezza) {
   const modo = ripresa ? T.cartelle.modoRipresa : T.cartelle.modoNormale;
   // Varianti della legenda dalla piu' distesa alla piu' stretta: si prende la
   // prima che ci sta. Tagliarla e basta perderebbe proprio l'ultimo tasto.
+  const varianti = conProfili ? T.cartelle.legendeConProfilo : LEGENDE;
   const legenda =
-    LEGENDE.find((testo) => testo.length + 2 <= larghezza) ?? LEGENDE[LEGENDE.length - 1];
+    varianti.find((testo) => testo.length + 2 <= larghezza) ?? varianti[varianti.length - 1];
 
   const pagina = [
     arancioneForte(taglia(T.cartelle.titolo, larghezza)),
     arancione(taglia(`  ${modo}`, larghezza)),
-    '',
   ];
+
+  if (conProfili) {
+    pagina.push(
+      arancione(taglia(`  ${T.cartelle.conProfilo(profilo ?? T.albero.profiloBase)}`, larghezza)),
+    );
+  }
+  pagina.push('');
 
   for (let i = inizio; i < Math.min(righe.length, inizio + visibili); i += 1) {
     const riga = righe[i];
@@ -243,6 +262,16 @@ export function applicaAzione(stato, azione) {
     case 'modo':
       stato.ripresa = !stato.ripresa;
       break;
+    case 'profilo': {
+      // Come `r` per il modo: si scorrono i profili in intestazione invece di
+      // aprire una schermata sopra questa. Sono pochi e la riga si legge da
+      // sola, quindi un elenco a parte sarebbe un passo in piu' per niente.
+      const profili = stato.profili ?? [];
+      if (profili.length < 2) break; // nessun profilo configurato: niente da alternare
+      const attuale = profili.indexOf(stato.profilo ?? null);
+      stato.profilo = profili[(attuale + 1) % profili.length];
+      break;
+    }
     case 'conferma':
       return { esito: 'conferma' };
     case 'annulla':
@@ -264,11 +293,13 @@ const cartellaDellaRiga = (riga) => (riga.cartella ? riga.percorso : path.dirnam
 // opzioni.radice: cartella dei progetti (default: radicePredefinita)
 // opzioni.cwd: cartella corrente, da cui dipende la selezione iniziale
 // opzioni.ripresa: modo iniziale (true = l'utente ha scritto "claude -r")
-// ritorna: Promise<{ percorso, ripresa } | null> — null se annullato con Esc
+// opzioni.profilo: profilo attivo all'apertura, o null per l'ambiente di partenza
+// ritorna: Promise<{ percorso, ripresa, profilo } | null> — null se annullato
 export function selezionaCartella({
   radice = radicePredefinita(),
   cwd = process.cwd(),
   ripresa = false,
+  profilo = null,
   ingresso = process.stdin,
   uscita = process.stdout,
 } = {}) {
@@ -278,7 +309,9 @@ export function selezionaCartella({
     0,
     righe.findIndex((r) => r.percorso === contesto.selezione),
   );
-  const stato = { contesto, righe, indice, ripresa };
+  // I profili si leggono all'apertura: qui si sceglie con cosa far girare Claude
+  // prima ancora di sapere dove, ed e' il momento in cui la scelta costa meno.
+  const stato = { contesto, righe, indice, ripresa, profili: elencoProfili(leggiProfili()), profilo };
 
   return new Promise((risolvi) => {
     const ridisegna = () =>
@@ -302,6 +335,7 @@ export function selezionaCartella({
           return chiudi({
             percorso: cartellaDellaRiga(stato.righe[stato.indice]),
             ripresa: stato.ripresa,
+            profilo: stato.profilo,
           });
         }
       }

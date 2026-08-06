@@ -7,6 +7,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+// Il selettore legge i profili dalle impostazioni: vanno dirottate su un file di
+// prova, o queste prove direbbero cose diverse a seconda di quanti profili ha
+// configurato chi le esegue — verdi qui e rosse altrove.
+process.env.CB_IMPOSTAZIONI = path.join(os.tmpdir(), 'cb-prove-cartelle-impostazioni.json');
+fs.rmSync(process.env.CB_IMPOSTAZIONI, { force: true });
 import { EventEmitter } from 'node:events';
 import { azioniNavigazione } from './tasti.js';
 import {
@@ -238,6 +244,44 @@ const statoDiProva = (indice = 2) => {
 }
 
 {
+  // Senza profili configurati del profilo non si parla: una riga in piu' toglie
+  // una cartella all'elenco, e non si paga per una funzione che non si usa.
+  const senza = disegna(statoDiProva(), 12, 80);
+  assert.doesNotMatch(senza, /profilo:/, 'nessuna riga del profilo');
+  assert.doesNotMatch(senza, /m profilo/, 'e la legenda non lo nomina');
+
+  // Con almeno un profilo la riga compare, e la legenda annuncia il tasto.
+  const stato = { ...statoDiProva(), profili: [null, 'gateway'], profilo: null };
+  const con = disegna(stato, 12, 80);
+  assert.match(con, /profilo: Claude, come l'hai lanciato/, 'parte dall ambiente di partenza');
+  assert.match(con, /m profilo/, 'e la legenda lo annuncia');
+
+  assert.match(
+    disegna({ ...stato, profilo: 'gateway' }, 12, 80),
+    /profilo: gateway/,
+    'e mostra quello scelto',
+  );
+}
+
+{
+  // `m` scorre i profili in intestazione, come `r` fa col modo: sono pochi, e
+  // una schermata a parte sarebbe un passo in piu' per niente.
+  const stato = { ...statoDiProva(), profili: [null, 'gateway', 'lavoro'], profilo: null };
+
+  applicaAzione(stato, 'profilo');
+  assert.equal(stato.profilo, 'gateway', 'primo giro');
+  applicaAzione(stato, 'profilo');
+  assert.equal(stato.profilo, 'lavoro', 'secondo giro');
+  applicaAzione(stato, 'profilo');
+  assert.equal(stato.profilo, null, 'e si torna all ambiente di partenza');
+
+  // Senza profili il tasto non deve fare niente, nemmeno inventare un valore.
+  const nudo = { ...statoDiProva(), profili: [null], profilo: null };
+  applicaAzione(nudo, 'profilo');
+  assert.equal(nudo.profilo, null, 'senza profili configurati m non cambia niente');
+}
+
+{
   // Schermo basso: la finestra scorre e tiene dentro la selezione.
   const contesto = contestoBase([base, radice, alfa]);
   const righe = componiRighe(contesto);
@@ -274,7 +318,11 @@ function terminaleFinto() {
   ingresso.emit('data', Buffer.from('r')); // passa alla ripresa
   ingresso.emit('data', Buffer.from('\r'));
   const scelta = await attesa;
-  assert.deepEqual(scelta, { percorso: alfa, ripresa: true }, 'invio conferma cartella e modo');
+  assert.deepEqual(
+    scelta,
+    { percorso: alfa, ripresa: true, profilo: null },
+    'invio conferma cartella, modo e profilo',
+  );
   assert.match(uscita.scritto, /\x1b\[\?1049h/, 'la pagina va sullo schermo alternativo');
   assert.match(uscita.scritto, /\x1b\[\?1049l/, 'e all\'uscita il terminale torna com\'era');
 }

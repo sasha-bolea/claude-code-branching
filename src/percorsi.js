@@ -88,13 +88,70 @@ export async function sessioniDellaFamiglia(percorso) {
   return famiglia;
 }
 
+// Istante del primo messaggio di un transcript, cioe' quando quella
+// conversazione e' cominciata.
+//
+// Si legge dal contenuto e non dal filesystem: su Windows la data di creazione
+// **mente**. Cancellando e ricreando un file con lo stesso nome entro pochi
+// secondi, il sistema gli rimette la data vecchia (file tunneling) — verificato,
+// e basta a far sembrare vecchio un file appena nato. Il timestamp del primo
+// record lo scrive Claude, e non dipende da come il disco tratta i nomi.
+//
+// Vale anche meglio nel merito: una sessione troncata da cb copia i record di
+// quella di partenza, quindi e' un file nuovo con una conversazione **vecchia**.
+// La data di nascita direbbe "appena creato", il primo record dice il vero.
+//
+// percorso: file .jsonl
+// ritorna: millisecondi, o null se il file non ha record con un orario
+function inizioConversazione(percorso) {
+  let testa;
+  try {
+    // I primi record stanno all'inizio: non serve leggere tutto il file, che per
+    // una conversazione lunga sono megabyte.
+    const descrittore = fs.openSync(percorso, 'r');
+    try {
+      const buffer = Buffer.alloc(8192);
+      const letti = fs.readSync(descrittore, buffer, 0, buffer.length, 0);
+      testa = buffer.toString('utf8', 0, letti);
+    } finally {
+      fs.closeSync(descrittore);
+    }
+  } catch {
+    return null;
+  }
+
+  for (const riga of testa.split('\n')) {
+    if (!riga.trim()) continue;
+    let record;
+    try {
+      record = JSON.parse(riga);
+    } catch {
+      continue; // ultima riga tagliata dalla lettura parziale, o scrittura in corso
+    }
+    const istante = Date.parse(record?.timestamp ?? '');
+    if (!Number.isNaN(istante)) return istante;
+  }
+  return null;
+}
+
 // Transcript modificato piu' di recente in una cartella di lavoro.
 // Serve quando l'id della sessione lo decide Claude (avvio con --resume o
 // --continue) e non lo conosciamo in anticipo.
+//
+// `cominciataDopo` distingue due situazioni che sul disco si somigliano: dopo un
+// /clear la conversazione nuova **comincia** mentre cb e' gia' in esecuzione,
+// mentre quella di un'altra finestra aperta sulla stessa cartella era gia'
+// cominciata da prima. Guardando solo l'ultima scrittura sono identiche —
+// l'altro file e' piu' recente in entrambi i casi — e cb saltava sulla
+// conversazione di un'altra finestra (misurato: due volte in una mattina, vedi
+// diagnosi.log).
+//
 // cartella: cwd in cui gira Claude
-// dopo: timestamp (ms) prima del quale ignorare i file
+// dopo: timestamp (ms) prima del quale ignorare i file, per ultima scrittura
+// cominciataDopo: se dato, si tengono solo i transcript il cui **primo
+//   messaggio** e' successivo a questo istante
 // ritorna: { percorso, sessionId } oppure null
-export function transcriptPiuRecente(cartella, dopo = 0) {
+export function transcriptPiuRecente(cartella, dopo = 0, cominciataDopo = null) {
   const cartellaProgetto = path.join(CARTELLA_PROGETTI, slugProgetto(cartella));
 
   let file;
@@ -114,6 +171,12 @@ export function transcriptPiuRecente(cartella, dopo = 0) {
       continue;
     }
     if (stat.size === 0 || stat.mtimeMs < dopo) continue;
+    if (cominciataDopo !== null) {
+      // Un transcript senza orari non si puo' giudicare: si lascia passare
+      // invece di scartarlo, cioe' ci si comporta come prima di questo filtro.
+      const inizio = inizioConversazione(percorso);
+      if (inizio !== null && inizio < cominciataDopo) continue;
+    }
     if (!migliore || stat.mtimeMs > migliore.mtimeMs) {
       migliore = { percorso, sessionId: path.basename(nome, '.jsonl'), mtimeMs: stat.mtimeMs };
     }

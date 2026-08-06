@@ -6,10 +6,15 @@ import { trovaEseguibileClaude } from './eseguibile.js';
 // verrebbero concatenati e rispezzati, troncando i prompt con spazi.
 // argomenti: argomenti da passare a Claude
 // cwd: cartella di lavoro
+// ambiente: variabili con cui lanciarlo, o null per quelle di cb
 // ritorna: Promise col codice di uscita
-function avvia(argomenti, cwd) {
+function avvia(argomenti, cwd, ambiente = null) {
   return new Promise((risolvi, rifiuta) => {
-    const processo = spawn(trovaEseguibileClaude(), argomenti, { stdio: 'inherit', cwd });
+    const processo = spawn(trovaEseguibileClaude(), argomenti, {
+      stdio: 'inherit',
+      cwd,
+      ...(ambiente ? { env: ambiente } : {}),
+    });
     processo.on('error', rifiuta);
     processo.on('close', risolvi);
   });
@@ -38,9 +43,12 @@ export function argomentiRipresa({ sessionId, daUuid = null, fork = true, nome =
 // di controllo e ritorni a capo.
 // argomenti: argomenti da passare a Claude
 // cwd: cartella di lavoro
+// ambiente: variabili del profilo scelto, se ce n'e' uno. Va passato anche qui:
+//   cb si fa da parte sull'interfaccia, non sulla scelta del provider, e
+//   ignorarlo in silenzio manderebbe la richiesta all'endpoint sbagliato.
 // ritorna: Promise col codice di uscita
-export function lanciaClaudeDiretto(argomenti, cwd = process.cwd()) {
-  return avvia(argomenti, cwd);
+export function lanciaClaudeDiretto(argomenti, cwd = process.cwd(), ambiente = null) {
+  return avvia(argomenti, cwd, ambiente);
 }
 
 // Lancia Claude Code cedendogli il terminale.

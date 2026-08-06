@@ -165,6 +165,8 @@ function rigaConversazione(famiglia, larghezza, scelta) {
 //   modo: 'lista' (↑↓ cambiano conversazione), 'albero' (↑↓←→ muovono il cursore)
 //     o 'menu' (si sceglie cosa riportare indietro dal punto selezionato)
 //   menu: indice della voce del menu di ripristino selezionata
+//   daRimandare: se il prompt scelto torna nella barra di input invece di
+//     restare inviato con la risposta che ha avuto
 // opzioni.colonne, opzioni.altezza: dimensioni del terminale
 // ritorna: array di righe pronte da scrivere
 export function disegnaConversazioni(
@@ -176,6 +178,7 @@ export function disegnaConversazioni(
     selezione,
     modo = 'lista',
     menu = 0,
+    daRimandare = false,
     ripristinaCodice = true,
   },
   { colonne = 120, altezza = 30 } = {},
@@ -192,6 +195,12 @@ export function disegnaConversazioni(
       titolo: testoLeggibile(famiglie[indice]?.titolo ?? '').slice(0, 60) || 'conversazione',
       esc: { lunga: T.albero.escElencoLunga, corta: T.albero.escElencoCorta },
       menu: modo === 'menu' ? menu : null,
+      daRimandare,
+      // La scelta sul prompt si fa anche da qui, ma vale per questa volta: si
+      // riparte sempre da «resta inviato», e non c'e' la casella che la salva.
+      // Una preferenza ricordata qui deciderebbe come si riapre una conversazione
+      // scelta mesi fa, che e' proprio il momento in cui non te ne ricordi.
+      ricordabile: false,
     });
   }
 
@@ -351,9 +360,12 @@ function origineDi(caricata, uuid) {
 // caricata: risultato di caricaFamiglia
 // uuid: nodo scelto
 // modo: cosa riportare indietro ('entrambi' | 'conversazione' | 'codice')
-// ritorna: { percorso, albero, alberi, voce, riprendi, modo } — riprendi
-//          valorizzato solo quando basta riprendere la sessione senza tagliarla
-export function esitoScelta(caricata, uuid, modo = 'entrambi') {
+// daRimandare: se il prompt scelto esce dalla conversazione e torna nella barra
+//   di input invece di restare inviato con la risposta che ha avuto
+// ritorna: { percorso, albero, alberi, voce, riprendi, modo, daRimandare } —
+//          riprendi valorizzato solo quando basta riprendere la sessione senza
+//          tagliarla
+export function esitoScelta(caricata, uuid, modo = 'entrambi', daRimandare = false) {
   const origine = origineDi(caricata, uuid);
   const alberoOrigine = caricata.alberi.get(origine.percorso) ?? caricata.albero;
   const nodo = alberoOrigine.nodi.get(uuid);
@@ -369,6 +381,7 @@ export function esitoScelta(caricata, uuid, modo = 'entrambi') {
       voce: caricata.albero.nodi.get(uuid),
       riprendi: sessioneDaPercorso(caricata.percorso),
       modo,
+      daRimandare,
     };
   }
 
@@ -377,8 +390,12 @@ export function esitoScelta(caricata, uuid, modo = 'entrambi') {
     albero: caricata.albero,
     alberi: caricata.alberi,
     voce: caricata.albero.nodi.get(uuid),
-    riprendi: fine && alberoOrigine.ultimoNodo === fine ? origine.sessionId : null,
+    // Col prompt da rimandare non c'e' scorciatoia: anche se il punto scelto e'
+    // gia' la punta, riprendere la sessione com'e' lascerebbe dentro il turno
+    // che invece deve tornare nella barra.
+    riprendi: !daRimandare && fine && alberoOrigine.ultimoNodo === fine ? origine.sessionId : null,
     modo,
+    daRimandare,
   };
 }
 
@@ -405,6 +422,10 @@ export async function selezionaConversazione({
     selezione: null,
     modo: 'lista',
     menu: 0,
+    // Sempre da «resta inviato», mai da quello che si era scelto un'altra volta:
+    // riaprendo una conversazione vecchia, una preferenza ricordata deciderebbe
+    // per te proprio quando non te ne ricordi.
+    daRimandare: false,
     ripristinaCodice,
   };
 
@@ -458,24 +479,30 @@ export async function selezionaConversazione({
       // Nel menu servono anche le cifre, che la navigazione dell'albero scarta:
       // si decodifica con azioniTastiera, come fa il wrapper nello stesso punto.
       if (stato.modo === 'menu') {
+        const esito = (indice) =>
+          esitoScelta(
+            stato.caricata,
+            stato.selezione,
+            VOCI_RIPRISTINO[indice].modo,
+            stato.daRimandare,
+          );
+
         for (const azione of azioniTastiera(dati)) {
           if (azione.tipo === 'annulla') {
             stato.modo = 'albero';
             break;
           }
-          if (azione.tipo === 'invio') {
-            return chiudi(esitoScelta(stato.caricata, stato.selezione, VOCI_RIPRISTINO[stato.menu].modo));
-          }
+          if (azione.tipo === 'invio') return chiudi(esito(stato.menu));
           if (azione.tipo === 'cifra') {
             const scelto = Number.parseInt(azione.valore, 10) - 1;
-            if (scelto >= 0 && scelto < VOCI_RIPRISTINO.length) {
-              return chiudi(esitoScelta(stato.caricata, stato.selezione, VOCI_RIPRISTINO[scelto].modo));
-            }
+            if (scelto >= 0 && scelto < VOCI_RIPRISTINO.length) return chiudi(esito(scelto));
             continue;
           }
           if (azione.tipo === 'freccia') {
             if (azione.valore === 'su') stato.menu = (stato.menu + VOCI_RIPRISTINO.length - 1) % VOCI_RIPRISTINO.length;
             else if (azione.valore === 'giu') stato.menu = (stato.menu + 1) % VOCI_RIPRISTINO.length;
+            // Due soli stati: destra e sinistra passano tutt'e due all'altro.
+            else stato.daRimandare = !stato.daRimandare;
           }
         }
         return ridisegna();

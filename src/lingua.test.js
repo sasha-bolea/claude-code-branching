@@ -63,7 +63,12 @@ function testVariantiInOrdine() {
     const scale = [
       ['albero.legenda', tabella.albero.legenda],
       ['albero.legendaMenu', tabella.albero.legendaMenu],
+      ['albero.legendaProfili', tabella.albero.legendaProfili],
+      ['albero.promptInviato', tabella.albero.promptInviato],
+      ['albero.promptDaRimandare', tabella.albero.promptDaRimandare],
+      ['albero.ricordaScelta', tabella.albero.ricordaScelta],
       ['cartelle.legende', tabella.cartelle.legende],
+      ['cartelle.legendeConProfilo', tabella.cartelle.legendeConProfilo],
       ['conversazioni.legende[0]', tabella.conversazioni.legende[0]],
       ['conversazioni.legende[1]', tabella.conversazioni.legende[1]],
       ['conversazioni.legendaVuota', tabella.conversazioni.legendaVuota],
@@ -83,7 +88,8 @@ function testVariantiInOrdine() {
 }
 
 // Il menu del ripristino ha tre voci in tutte e due le lingue: il wrapper le
-// abbina per posizione ai tre modi ('entrambi', 'conversazione', 'codice').
+// abbina per posizione ai tre modi ('entrambi', 'conversazione', 'codice'). Dove
+// finisce il prompt e' una scelta a parte, non una quarta voce.
 function testTreVociDiRipristino() {
   assert.equal(EN.albero.vociRipristino.length, 3);
   assert.equal(IT.albero.vociRipristino.length, 3);

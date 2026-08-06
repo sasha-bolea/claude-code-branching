@@ -95,15 +95,47 @@ compare l'albero dei rami. Ti muovi con le frecce, premi invio e scegli **cosa r
 indietro**:
 
 ```
-riporta indietro:
-▸ 1. conversazione e codice
+cosa riporto indietro?
+▸ 1. la conversazione e i file
   2. solo la conversazione (i file restano come sono)
-  3. solo il codice (la conversazione resta dov'è)
+  3. solo i file (la conversazione resta dov'è)
+
+  ←→  il prompt che hai scelto resta inviato, con la risposta che ha avuto
+   r  [ ] ricordati questa scelta per le prossime volte
 ```
 
-Le prime due ripartono in un ramo nuovo senza uscire dalla sessione; la terza non riavvia
-nemmeno Claude, riporta solo i file. Accanto all'ora del prompt vedi quanto codice quel
-turno ha cambiato (`+42 -7`).
+`↑↓` scelgono la voce (o le cifre `1-3`), invio conferma. Le prime due ripartono in un ramo
+nuovo senza uscire dalla sessione; la terza non riavvia nemmeno Claude, riporta solo i file.
+Accanto all'ora del prompt vedi quanto codice quel turno ha cambiato (`+42 -7`).
+
+`←→` decidono una cosa a parte, che vale insieme a tutt'e tre: **dove finisce il prompt che
+hai scelto**.
+
+- *resta inviato, con la risposta che ha avuto* — il taglio cade dopo quel turno: riparti da
+  lì con la risposta già data. È il modo di sempre.
+- *torna nella barra, ancora da inviare* — il taglio cade **prima** del prompt: quel turno
+  esce dalla conversazione, i file tornano a com'erano prima che partisse, e il testo ti
+  ricompare nella barra di input da correggere e rimandare. È quello che fa il ripristino
+  nativo di Claude (Esc Esc). Con «solo i file» vale solo la seconda metà, cioè se le
+  modifiche di quel turno restano o se ne vanno.
+
+`r` accende «ricordati questa scelta»: confermando, la preferenza finisce in
+`~/.claude/cb/impostazioni.json` (`promptDaRimandare`) e il menu si apre già così le volte
+dopo.
+
+Riprendendo una conversazione da fuori (`cb -r`, `cb --scegli`, i tasti `c`/`p`) la scelta
+sul prompt si fa lo stesso, frecce comprese: sparisce solo la casella. Lì vale per quella
+volta, e si riparte **sempre** da «resta inviato» — una preferenza ricordata deciderebbe per
+te proprio riaprendo una conversazione di mesi fa, cioè quando non te ne ricordi.
+
+```
+cosa riporto indietro?
+▸ 1. la conversazione e i file
+  2. solo la conversazione (i file restano come sono)
+  3. solo i file (la conversazione resta dov'è)
+
+  ←→  il prompt che hai scelto resta inviato, con la risposta che ha avuto
+```
 
 ⚠️ Il ripristino dei file sovrascrive il lavoro non salvato successivo a quel messaggio.
 Con `--senza-file` la voce preselezionata diventa «solo la conversazione».
@@ -113,6 +145,7 @@ cb                      Claude avvolto: Esc Esc apre l'albero
 cb --scegli             prima chiede cartella e conversazione (vedi sotto)
 cb --tasto f2           altra scorciatoia ("f2", "esc esc", "ctrl+shift+b")
 cb --senza-file         cambiando ramo NON ripristina i file, solo la conversazione
+cb --profilo <nome>     lancia con un profilo di variabili (vedi «Profili»)
 cb --tasti              stampa i byte dei tasti premuti (diagnosi)
 cb ls [filtro]          elenca le sessioni di tutti i progetti
 cb tree <sessione>      albero dei rami di una sessione
@@ -149,7 +182,8 @@ Con `cb --scegli` cb mette due schermate davanti a Claude: l'albero delle cartel
 home (radice da `CB_RADICE`), dove `r` alterna avvio normale e ripresa, e —
 in ripresa — l'elenco delle conversazioni di quella cartella, ognuna con il suo albero in
 cima. `↑↓` scorrono le conversazioni, invio entra nell'albero, dove si sceglie il punto da
-cui ripartire.
+cui ripartire. Nel menu che compare lì la scelta su dove finisce il prompt c'è, ma parte
+sempre da «resta inviato» e non si può far ricordare: vale per quella volta.
 
 Perché non il selettore di `claude -r`: quello elenca i **file** di sessione, e siccome un
 fork ne crea uno nuovo, i rami della stessa conversazione compaiono come conversazioni
@@ -166,7 +200,10 @@ lancia cb può leggerla all'uscita e spostarcisi (un processo figlio non può ca
 cartella corrente di chi lo ha lanciato).
 
 Un tasto singolo (`f2`) scatta subito. Una scorciatoia ripetuta (`esc esc`) costa 300 ms
-di ritardo sulla prima pressione, il tempo di capire se ne arriva una seconda.
+di ritardo sulla prima pressione, il tempo di capire se ne arriva una seconda. Le due
+pressioni contano come scorciatoia se arrivano **entro un secondo**: passato quel tempo il
+primo Esc è già stato inoltrato e vale come interruzione. Il rovescio è che due interruzioni
+distinte, battute a meno di un secondo l'una dall'altra, aprono l'albero.
 
 **Quale tasto scegliere.** I tasti funzione sono la scelta sicura: Claude Code non li usa,
 e non li usa nemmeno l'editing da riga di comando. Evita `f10` e `f11`, che il terminale
@@ -342,6 +379,118 @@ proposito, essendo la scelta più esplicita.
 
 Nota: il titolo della tab viene mantenuto (ConPTY lo sovrascriverebbe col percorso di
 `claude.exe` a ogni avvio di processo, quindi a ogni cambio ramo).
+
+## Usarlo insieme ad altri strumenti
+
+cb possiede il terminale e legge i file di Claude Code. Che un altro strumento gli conviva
+accanto dipende da **dove si mette**:
+
+```
+cb            ← sopra: possiede il terminale (pty, tasti, albero, transcript)
+  claude      ← il CLI vero, invariato
+    un proxy  ← sotto: intercetta le chiamate HTTP e sceglie il provider
+```
+
+**Sotto Claude Code** — proxy e router delle API (OmniRoute, claude-code-router, LiteLLM, un
+gateway tuo). Funzionano senza cambiare niente. cb non fa nessuna chiamata di rete e passa
+l'ambiente intero al pty, quindi `ANTHROPIC_BASE_URL` e il token arrivano al CLI intatti:
+
+```powershell
+$env:ANTHROPIC_BASE_URL = "http://localhost:20128/v1"
+$env:ANTHROPIC_AUTH_TOKEN = "<il token del gateway>"
+cb
+```
+
+L'albero, il taglio e il ripristino dei file continuano a funzionare anche se il turno l'ha
+risposto un altro modello: il transcript `.jsonl`, i diff in `structuredPatch` e le copie in
+`~/.claude/file-history/` li scrive il CLI, non chi ha risposto. Due cose da sapere: un router
+con provider gratuiti «keyless» manda i tuoi prompt — e il codice che ci sta dentro — a terzi
+che non hai scelto uno per uno; e un proxy che comprime le richieste significa che il contesto
+che Claude ha davvero visto può essere meno di quello che l'albero mostra. Se un ramo sembra
+smemorato, la causa sta lì, non in cb.
+
+**Sopra Claude Code** — wrapper di terminale, TUI, multiplexer di sessioni. Di solito
+confliggono, perché a cb servono tre cose in esclusiva:
+
+1. **Lo stdin e il pty.** cb legge i tasti prima di Claude; due wrapper che vogliono lo stdin
+   non convivono.
+2. **L'eseguibile nativo.** cb cerca `claude.exe`, mai lo shim npm: node-pty non lancia i
+   `.ps1`/`.cmd`. Uno strumento che espone solo uno shim o una funzione di shell non è
+   lanciabile da cb.
+3. **I transcript veri** in `~/.claude/projects/`. Uno strumento che reimplementa il client, o
+   che tiene la conversazione in un formato suo, toglie a cb l'unica cosa che legge.
+
+**Sopra cb** — questo invece è previsto: è così che funziona la funzione `claude` qui sopra.
+Il contratto è il codice di uscita. **78** vuol dire che cb non è partito e il chiamante deve
+ripiegare su Claude diretto; qualsiasi altro codice è l'uscita di Claude e non va rilanciato.
+
+### Profili: cambiare provider senza perdere la conversazione
+
+Impostare le variabili prima di lanciare cb funziona, ma per cambiarle bisogna uscire. Un
+**profilo** è un insieme di variabili con un nome, e cb sa rilanciare Claude con un altro
+profilo **senza muovere la conversazione**. È l'unica cosa che dalla shell non si può fare:
+le variabili le legge il processo all'avvio, e il processo lo possiede cb.
+
+In `~/.claude/cb/impostazioni.json`:
+
+```json
+{
+  "profili": {
+    "gateway": {
+      "ANTHROPIC_BASE_URL": "http://localhost:20128",
+      "ANTHROPIC_MODEL": "un-modello-del-gateway"
+    },
+    "diretto": {
+      "ANTHROPIC_BASE_URL": null
+    }
+  }
+}
+```
+
+`null` (o `""`) **toglie** la variabile invece di sovrascriverla: serve quando è l'ambiente
+di partenza ad avere qualcosa che il profilo deve rimuovere.
+
+Dall'albero, `m` apre l'elenco:
+
+```
+con quale profilo?
+    Claude, come l'hai lanciato
+  ▸ gateway
+    diretto
+
+  la conversazione resta dov'è: riparte solo il processo
+```
+
+Confermando, cb chiude Claude e lo riapre sulla **stessa** sessione con l'ambiente nuovo.
+Nessun taglio, nessun ripristino di file: la conversazione continua dov'era. Per partire già
+con un profilo: `cb --profilo gateway`.
+
+Lo si sceglie anche negli altri due punti in cui l'albero non c'è:
+
+- **prima del primo scambio**, dalla schermata che avvisa che il transcript non esiste ancora
+  — è anzi il momento migliore, perché non c'è una conversazione da portarsi dietro;
+- **nel navigatore delle cartelle**, dove `m` alterna i profili in intestazione come `r`
+  alterna ripresa e avvio normale. Lì decidi dove lavorare e con cosa nello stesso passo, e
+  Claude parte già configurato.
+
+Ogni processo nasce dalla fotografia dell'ambiente che cb aveva all'avvio, con sopra il
+profilo attivo. Per questo tornare a «Claude, come l'hai lanciato» rimette esattamente le
+condizioni di partenza, e le variabili aggiunte da un profilo spariscono da sole.
+
+Due cose da sapere:
+
+- **I valori stanno in chiaro in un file di configurazione.** Per i segreti conviene lasciarli
+  alla shell e mettere nel profilo solo ciò che non è una credenziale. cb non scrive mai i
+  valori nel log: del cambio di profilo registra solo il nome.
+- **Cambiare provider a conversazione lunga può fallire subito**, se il nuovo ha una finestra
+  di contesto più piccola di quanto è già occupato. cb non può prevederlo, ma se il processo
+  rilanciato muore entro pochi secondi te lo dice invece di sparire.
+
+Senza `profili` nel file, `m` non apre niente: chi non li configura non vede la funzione.
+
+Per verificare una configurazione in fretta, `cb ls` e `cb tree <sessione>` leggono solo il
+disco: dopo qualche turno ti dicono subito se i transcript sono ancora quelli che cb si
+aspetta.
 
 ## Commit automatici (opzionale, Windows)
 

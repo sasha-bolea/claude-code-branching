@@ -6,6 +6,14 @@ import { Wrapper } from './wrapper.js';
 import { leggiTranscript } from './transcript.js';
 import { CARTELLA_PROGETTI, slugProgetto } from './percorsi.js';
 
+// Il menu del ripristino legge e scrive un'impostazione (dove finisce il prompt
+// scelto): va dirottata su un file temporaneo, o le prove dipenderebbero da come
+// ha configurato cb chi le esegue — e la casella «ricordati questa scelta»
+// gliela cambierebbe. Basta farlo qui: il percorso si risolve a ogni lettura,
+// non all'import (vedi percorsoImpostazioni in src/impostazioni.js).
+process.env.CB_IMPOSTAZIONI = path.join(os.tmpdir(), 'cb-prove-overlay-impostazioni.json');
+fs.rmSync(process.env.CB_IMPOSTAZIONI, { force: true });
+
 // Crea un transcript finto nella posizione in cui Claude lo scriverebbe, per
 // provare l'overlay senza lanciare Claude.
 // sessionId: id della sessione
@@ -21,13 +29,16 @@ function creaTranscript(sessionId, cartella, record) {
 }
 
 // Record di messaggio minimo.
-function msg(uuid, parentUuid, tipo, testo, istante) {
+// istante: minuto di comodo, per avere orari crescenti e leggibili a schermo
+// quando: orario vero (ISO), per le prove che distinguono le conversazioni da
+//   **quando sono cominciate** — li' una data fissa nel passato non basta
+function msg(uuid, parentUuid, tipo, testo, istante, quando = null) {
   return {
     type: tipo,
     uuid,
     parentUuid,
     sessionId: 'sess-overlay',
-    timestamp: `2026-07-30T10:0${istante}:00.000Z`,
+    timestamp: quando ?? `2026-07-30T10:0${istante}:00.000Z`,
     cwd: 'C:\\finta',
     message: { content: [{ type: 'text', text: testo }] },
   };
@@ -58,12 +69,13 @@ function wrapperFinto(sessionId, cartella, opzioni = {}) {
       });
     },
   };
-  wrapper.avviaClaude = ({ riprendi } = {}) => {
+  wrapper.avviaClaude = ({ riprendi, prompt } = {}) => {
     wrapper.ramoAvviato = true;
     wrapper.sessioneRipresa = riprendi;
+    wrapper.promptNellaBarra = prompt ?? null;
   };
-  wrapper.ripristinaFile = async (albero, uuid, percorsoOrigine) => {
-    ripristini.push({ uuid, percorso: percorsoOrigine, albero });
+  wrapper.ripristinaFile = async (albero, uuid, percorsoOrigine, prima) => {
+    ripristini.push({ uuid, percorso: percorsoOrigine, albero, prima });
     return opzioni.esitoRipristino ?? { ok: true, riassunto: '2 file ripristinati' };
   };
 
@@ -86,6 +98,12 @@ const ANNULLA = esc;
 const ENTRAMBI = '1';
 const SOLO_CONVERSAZIONE = '2';
 const SOLO_CODICE = '3';
+
+// Dove finisce il prompt scelto e' una scelta a parte, non una voce del menu:
+// le frecce orizzontali alternano i due stati, `r` accende la casella che se lo
+// fa ricordare.
+const ALTRO_PROMPT = SINISTRA;
+const RICORDA = 'r';
 
 // Preme una sequenza di tasti, cedendo il controllo fra uno e l'altro: dopo ogni
 // tasto l'overlay ridisegna e riattacca l'ascoltatore, e senza la pausa il tasto
@@ -281,14 +299,21 @@ async function testSeguelaSessioneDopoUnClear() {
   const primaDelClear = '00000000-0000-4000-8000-0000000c1ea1';
   const dopoIlClear = '00000000-0000-4000-8000-0000000c1ea2';
 
+  // Un clear vero: tutt'e due le conversazioni cominciano **dopo** l'avvio di
+  // cb, prima quella che poi viene azzerata e poi la nuova. E' questo a
+  // distinguere il caso da due finestre aperte sulla stessa cartella, dove la
+  // conversazione accanto era gia' cominciata (vedi la prova dopo).
+  const avviatoIl = Date.now() - 60_000;
+  const dopoAvvio = (secondi) => new Date(avviatoIl + secondi * 1000).toISOString();
+
   const vecchio = creaTranscript(primaDelClear, CARTELLA, [
-    msg('v1', null, 'user', 'prima del clear', 1),
+    msg('v1', null, 'user', 'prima del clear', 1, dopoAvvio(5)),
     { type: 'last-prompt', leafUuid: 'v1', sessionId: primaDelClear },
   ]);
   const nuovo = creaTranscript(dopoIlClear, CARTELLA, [
     // Radice diversa: dopo un clear le due sessioni non sono parenti, quindi
     // l'albero non le unisce e l'una non puo' comparire dentro l'altra.
-    msg('n1', null, 'user', 'dopo il clear', 1),
+    msg('n1', null, 'user', 'dopo il clear', 1, dopoAvvio(30)),
     { type: 'last-prompt', leafUuid: 'n1', sessionId: dopoIlClear },
   ]);
 
@@ -300,7 +325,7 @@ async function testSeguelaSessioneDopoUnClear() {
 
   // Lo stato in cui cb si trovava: l'id della sessione di prima del clear.
   const { wrapper, schermo } = wrapperFinto(primaDelClear, CARTELLA);
-  wrapper.avviatoIl = 0;
+  wrapper.avviatoIl = avviatoIl;
 
   const attesa = wrapper.mostraOverlay();
   await attendiPrompt(schermo);
@@ -310,6 +335,76 @@ async function testSeguelaSessioneDopoUnClear() {
   assert.match(schermo(), /dopo il clear/, 'mostra la conversazione viva');
   assert.doesNotMatch(schermo(), /prima del clear/, 'e non quella di prima del clear');
   assert.equal(wrapper.sessionId, dopoIlClear, 'e da qui in poi forka la sessione giusta');
+}
+
+async function testUnAltraFinestraNonSiRubaLaSessione() {
+  // Due finestre aperte sulla stessa cartella danno lo stesso quadro di un
+  // clear: il nostro file fermo perche' non stiamo scrivendo, l'altro che
+  // cresce. Guardando solo l'ultima scrittura cb saltava sulla conversazione
+  // dell'altra finestra — successo davvero (diagnosi.log del 2026-08-06,
+  // "sessione cambiata: c343c768… -> 7c8ca487…" dopo 41 minuti di inattivita').
+  // Poi bastava invio per biforcare la conversazione di un'altra finestra.
+  const nostra = '00000000-0000-4000-8000-00000000f1a1';
+  const altraFinestra = '00000000-0000-4000-8000-00000000f1a2';
+
+  const avviatoIl = Date.now() - 60_000;
+
+  // L'altra finestra aveva gia' cominciato la sua conversazione quando cb e'
+  // partito: e' questo, non l'ultima scrittura, a distinguerla da un clear.
+  const dellAltra = creaTranscript(altraFinestra, CARTELLA, [
+    msg('a1', null, 'user', 'conversazione di un altra finestra', 1, '2026-08-06T09:00:00.000Z'),
+    { type: 'last-prompt', leafUuid: 'a1', sessionId: altraFinestra },
+  ]);
+
+  const laNostra = creaTranscript(nostra, CARTELLA, [
+    msg('n1', null, 'user', 'la nostra conversazione', 1, new Date(avviatoIl + 5000).toISOString()),
+    { type: 'last-prompt', leafUuid: 'n1', sessionId: nostra },
+  ]);
+
+  // L'altra finestra continua a lavorare, la nostra e' ferma da un pezzo: e'
+  // esattamente lo stato in cui cb saltava.
+  const adesso = Date.now() / 1000;
+  fs.utimesSync(laNostra, adesso - 600, adesso - 600);
+  fs.utimesSync(dellAltra, adesso, adesso);
+
+  const { wrapper, schermo } = wrapperFinto(nostra, CARTELLA);
+  wrapper.avviatoIl = avviatoIl;
+
+  const attesa = wrapper.mostraOverlay();
+  await attendiPrompt(schermo);
+  premi(ANNULLA);
+  await attesa;
+
+  assert.match(schermo(), /la nostra conversazione/, 'resta sulla nostra');
+  assert.doesNotMatch(schermo(), /un altra finestra/, 'e non salta su quella accanto');
+  assert.equal(wrapper.sessionId, nostra, 'e invio forkerebbe la sessione giusta');
+}
+
+async function testSenzaIlNostroFileNonSiPrendeQuelloDiUnAltraFinestra() {
+  // Il secondo modo in cui succedeva: prima che Claude scriva il nostro file,
+  // cb prendeva il piu' recente della cartella — cioe' l'altra finestra — e
+  // mostrava il suo albero. Senza un file nostro non c'e' niente da mostrare, e
+  // dirlo e' meglio che mostrare la conversazione di qualcun altro.
+  const nostra = '00000000-0000-4000-8000-00000000f1a3';
+  const altraFinestra = '00000000-0000-4000-8000-00000000f1a4';
+
+  creaTranscript(altraFinestra, CARTELLA, [
+    msg('a1', null, 'user', 'conversazione di un altra finestra', 1, '2026-08-06T09:00:00.000Z'),
+    { type: 'last-prompt', leafUuid: 'a1', sessionId: altraFinestra },
+  ]);
+
+  // La nostra sessione non ha ancora scritto niente: nessun file col nostro id.
+  const { wrapper, schermo } = wrapperFinto(nostra, CARTELLA);
+  wrapper.avviatoIl = Date.now() - 60_000;
+
+  const attesa = wrapper.mostraOverlay();
+  await attendiPrompt(schermo);
+  premi('\r');
+  await attesa;
+
+  assert.doesNotMatch(schermo(), /un altra finestra/, 'non mostra la conversazione accanto');
+  assert.match(schermo(), /non ha ancora un transcript/, 'dice che non c e ancora niente');
+  assert.equal(wrapper.sessionId, nostra, 'e la sessione resta la nostra');
 }
 
 // Il rovescio della medaglia del test qui sopra: i file di una famiglia stanno
@@ -383,7 +478,7 @@ async function testOverlayDisegnaAlberoEScegliRamo() {
   await attesa;
 
   const testo = schermo();
-  assert.match(testo, /riporta indietro/, 'invio chiede prima cosa riportare indietro');
+  assert.match(testo, /cosa riporto indietro/, 'invio chiede prima cosa riportare indietro');
   assert.match(testo, /riparto da/, 'conferma la ripartenza');
   assert.equal(wrapper.ramoAvviato, true, 'viene lanciato un nuovo processo Claude');
 
@@ -725,7 +820,7 @@ async function testEscNelMenuTornaAllAlbero() {
   await attendiPrompt(contesto.schermo);
 
   await premiTasti(INVIO);
-  assert.match(contesto.schermo(), /riporta indietro/, 'invio apre il menu');
+  assert.match(contesto.schermo(), /cosa riporto indietro/, 'invio apre il menu');
 
   // Esc nel menu non chiude l'overlay: riporta all'albero, dove si puo'
   // cambiare punto e riprovare.
@@ -1006,6 +1101,283 @@ async function testPuntoIntermedioTagliaLaConversazione() {
   fs.unlinkSync(creata);
 }
 
+async function testPromptDaRimandareTagliaPrimaDelTurno() {
+  // Le frecce orizzontali nel menu: il prompt scelto non torna gia' inviato con
+  // la sua risposta, torna nella barra di input da rimandare. Il taglio cade
+  // quindi PRIMA del prompt, e i file tornano a com'erano prima di quel turno.
+  const sessionId = '00000000-0000-4000-8000-000000000a02';
+  const percorso = creaTranscript(sessionId, CARTELLA, [
+    msg('r1', null, 'user', 'ciao', 1),
+    msg('r2', 'r1', 'assistant', 'ciao a te', 2),
+    msg('r3', 'r2', 'user', 'cosa fai?', 3),
+    msg('r4', 'r3', 'assistant', 'sono Claude', 4),
+    msg('r5', 'r4', 'user', 'test', 5),
+    msg('r6', 'r5', 'assistant', 'ricevuto', 6),
+    { type: 'last-prompt', leafUuid: 'r6', lastPrompt: 'test', sessionId },
+  ]);
+
+  const contesto = wrapperFinto(sessionId, CARTELLA);
+  const { wrapper } = contesto;
+
+  const attesa = wrapper.mostraOverlay();
+  await attendiPrompt(contesto.schermo);
+  // Catena unica: il cursore parte da "test", sinistra risale a "cosa fai?".
+  // Nel menu la stessa freccia passa all'altro stato del prompt, poi invio
+  // conferma la voce preselezionata ("la conversazione e i file").
+  await premiTasti(SINISTRA, INVIO, ALTRO_PROMPT, INVIO);
+  await attesa;
+
+  assert.equal(wrapper.promptNellaBarra, 'cosa fai?', 'il prompt scelto torna nella barra');
+  assert.equal(contesto.ripristini[0].prima, true, 'i file tornano a prima di quel turno');
+
+  const creata = path.join(
+    CARTELLA_PROGETTI,
+    slugProgetto(CARTELLA),
+    `${wrapper.sessioneRipresa}.jsonl`,
+  );
+  const ramo = await leggiTranscript(creata);
+  const prompt = [...ramo.nodi.values()].filter((n) => n.isPromptUtente).map((n) => n.testo);
+
+  assert.deepEqual(prompt, ['ciao'], 'la conversazione finisce prima del prompt scelto');
+  assert.equal(ramo.nodi.has('r3'), false, 'il prompt scelto non e nel transcript');
+  assert.equal(ramo.nodi.has('r4'), false, 'nemmeno la risposta che gli era stata data');
+  assert.equal(ramo.leafAttivo, 'r2', 'la catena termina col turno precedente');
+
+  fs.unlinkSync(percorso);
+  fs.unlinkSync(creata);
+}
+
+async function testPromptDaRimandareSulPrimoPromptRiparteDaZero() {
+  // Prima del primo prompt non c'e' nessun turno da riprendere: la conversazione
+  // ricomincia da vuota, col solo prompt nella barra. Senza questo caso a parte
+  // il taglio cadrebbe su un uuid che non esiste.
+  const sessionId = '00000000-0000-4000-8000-000000000a03';
+  const percorso = creaTranscript(sessionId, CARTELLA, [
+    msg('r1', null, 'user', 'ciao', 1),
+    msg('r2', 'r1', 'assistant', 'ciao a te', 2),
+    msg('r3', 'r2', 'user', 'cosa fai?', 3),
+    { type: 'last-prompt', leafUuid: 'r3', lastPrompt: 'cosa fai?', sessionId },
+  ]);
+
+  const contesto = wrapperFinto(sessionId, CARTELLA);
+  const { wrapper } = contesto;
+
+  const attesa = wrapper.mostraOverlay();
+  await attendiPrompt(contesto.schermo);
+  await premiTasti(SINISTRA, INVIO, ALTRO_PROMPT, INVIO);
+  await attesa;
+
+  assert.equal(wrapper.promptNellaBarra, 'ciao', 'il primo prompt torna nella barra');
+  assert.equal(wrapper.sessioneRipresa, null, 'e non si riprende nessuna sessione');
+  assert.equal(wrapper.ramoAvviato, true, 'Claude riparte comunque');
+
+  fs.unlinkSync(percorso);
+}
+
+async function testLaSceltaDelPromptSiFaRicordare() {
+  // Senza `r` la scelta vale per questa volta sola; con `r` finisce nelle
+  // impostazioni, e il menu successivo si apre gia' cosi'.
+  const sessionId = '00000000-0000-4000-8000-000000000a04';
+  const percorso = creaTranscript(sessionId, CARTELLA, [
+    msg('r1', null, 'user', 'ciao', 1),
+    msg('r2', 'r1', 'assistant', 'ciao a te', 2),
+    msg('r3', 'r2', 'user', 'cosa fai?', 3),
+    msg('r4', 'r3', 'assistant', 'sono Claude', 4),
+    { type: 'last-prompt', leafUuid: 'r4', lastPrompt: 'cosa fai?', sessionId },
+  ]);
+
+  fs.rmSync(process.env.CB_IMPOSTAZIONI, { force: true });
+
+  // Primo giro: cambio lo stato del prompt ma NON lo faccio ricordare.
+  const primo = wrapperFinto(sessionId, CARTELLA);
+  const attesaPrimo = primo.wrapper.mostraOverlay();
+  await attendiPrompt(primo.schermo);
+
+  // Appena aperto il menu mostra lo stato salvato: ricordarlo non cambierebbe
+  // niente, quindi la casella non c'e'.
+  const primaDelMenu = primo.schermo().length;
+  await premiTasti(INVIO);
+  assert.doesNotMatch(
+    primo.schermo().slice(primaDelMenu),
+    /ricordati questa scelta/,
+    'sullo stato gia salvato la casella non compare',
+  );
+
+  // Cambiando stato c'e' qualcosa da salvare, e la casella appare.
+  const primaDellaFreccia = primo.schermo().length;
+  await premiTasti(ALTRO_PROMPT);
+  assert.match(
+    primo.schermo().slice(primaDellaFreccia),
+    /ricordati questa scelta/,
+    'cambiando stato la casella compare',
+  );
+
+  // E tornando indietro sparisce di nuovo.
+  const primaDelRitorno = primo.schermo().length;
+  await premiTasti(ALTRO_PROMPT);
+  assert.doesNotMatch(
+    primo.schermo().slice(primaDelRitorno),
+    /ricordati questa scelta/,
+    'tornando sullo stato salvato la casella sparisce',
+  );
+
+  await premiTasti(ALTRO_PROMPT, INVIO);
+  await attesaPrimo;
+
+  assert.equal(primo.wrapper.promptNellaBarra, 'cosa fai?', 'la scelta vale per questa volta');
+  assert.equal(fs.existsSync(process.env.CB_IMPOSTAZIONI), false, 'ma non viene salvata');
+
+  // Secondo giro: stessa cosa, ma con `r` prima di confermare.
+  pulisciCartella();
+  creaTranscript(sessionId, CARTELLA, [
+    msg('r1', null, 'user', 'ciao', 1),
+    msg('r2', 'r1', 'assistant', 'ciao a te', 2),
+    msg('r3', 'r2', 'user', 'cosa fai?', 3),
+    msg('r4', 'r3', 'assistant', 'sono Claude', 4),
+    { type: 'last-prompt', leafUuid: 'r4', lastPrompt: 'cosa fai?', sessionId },
+  ]);
+
+  const secondo = wrapperFinto(sessionId, CARTELLA);
+  const attesaSecondo = secondo.wrapper.mostraOverlay();
+  await attendiPrompt(secondo.schermo);
+  await premiTasti(INVIO, ALTRO_PROMPT, RICORDA, INVIO);
+  await attesaSecondo;
+
+  const salvate = JSON.parse(fs.readFileSync(process.env.CB_IMPOSTAZIONI, 'utf8'));
+  assert.equal(salvate.promptDaRimandare, true, 'con r la scelta finisce nelle impostazioni');
+
+  // Terzo giro: il menu si apre gia' sullo stato salvato, senza toccare le
+  // frecce. E' questo che rende utile la casella.
+  pulisciCartella();
+  creaTranscript(sessionId, CARTELLA, [
+    msg('r1', null, 'user', 'ciao', 1),
+    msg('r2', 'r1', 'assistant', 'ciao a te', 2),
+    msg('r3', 'r2', 'user', 'cosa fai?', 3),
+    msg('r4', 'r3', 'assistant', 'sono Claude', 4),
+    { type: 'last-prompt', leafUuid: 'r4', lastPrompt: 'cosa fai?', sessionId },
+  ]);
+
+  const terzo = wrapperFinto(sessionId, CARTELLA);
+  const attesaTerzo = terzo.wrapper.mostraOverlay();
+  await attendiPrompt(terzo.schermo);
+  await premiTasti(INVIO, INVIO);
+  await attesaTerzo;
+
+  assert.equal(terzo.wrapper.promptNellaBarra, 'cosa fai?', 'la volta dopo parte gia da li');
+
+  fs.rmSync(process.env.CB_IMPOSTAZIONI, { force: true });
+  fs.rmSync(percorso, { force: true });
+}
+
+async function testIlProfiloRilanciaLaStessaConversazione() {
+  // `m` rilancia Claude con altre variabili d'ambiente senza muovere la
+  // conversazione: e' l'unica cosa che dalla shell non si puo' fare, perche' le
+  // variabili le legge il processo all'avvio e il processo lo possiede cb.
+  const sessionId = '00000000-0000-4000-8000-000000000a05';
+  const percorso = creaTranscript(sessionId, CARTELLA, [
+    msg('r1', null, 'user', 'ciao', 1),
+    msg('r2', 'r1', 'assistant', 'ciao a te', 2),
+    { type: 'last-prompt', leafUuid: 'r2', lastPrompt: 'ciao', sessionId },
+  ]);
+
+  fs.writeFileSync(
+    process.env.CB_IMPOSTAZIONI,
+    JSON.stringify({
+      profili: {
+        gateway: { ANTHROPIC_BASE_URL: 'http://localhost:20128', CB_PROVA_PROFILO: 'acceso' },
+      },
+    }),
+    'utf8',
+  );
+
+  const contesto = wrapperFinto(sessionId, CARTELLA);
+  const { wrapper } = contesto;
+  wrapper.ambienteDiPartenza = { PATH: '/bin', ANTHROPIC_API_KEY: 'sk-mia' };
+
+  const attesa = wrapper.mostraOverlay();
+  await attendiPrompt(contesto.schermo);
+  await premiTasti('m', GIU, INVIO); // apre l'elenco, scende su "gateway", conferma
+  await attesa;
+
+  assert.equal(wrapper.profilo, 'gateway', 'il profilo scelto diventa quello attivo');
+  assert.equal(wrapper.sessioneRipresa, sessionId, 'e si riprende la stessa conversazione');
+
+  // L'ambiente del processo nuovo: la fotografia di partenza con sopra il profilo.
+  const ambiente = wrapper.ambiente();
+  assert.equal(ambiente.ANTHROPIC_BASE_URL, 'http://localhost:20128', 'il profilo si applica');
+  assert.equal(ambiente.ANTHROPIC_API_KEY, 'sk-mia', 'senza perdere il resto');
+  assert.equal(ambiente.CB_PROVA_PROFILO, 'acceso', 'con tutte le sue variabili');
+
+  // Tornando al profilo base le variabili aggiunte spariscono da sole: e' il
+  // motivo per cui si ricostruisce dalla fotografia e non si muta l'ambiente.
+  wrapper.profilo = null;
+  assert.equal(wrapper.ambiente().ANTHROPIC_BASE_URL, undefined, 'tornando indietro spariscono');
+
+  fs.rmSync(process.env.CB_IMPOSTAZIONI, { force: true });
+  fs.rmSync(percorso, { force: true });
+}
+
+async function testSenzaProfiliIlTastoSpiegaComeSiScrivono() {
+  // `m` e' annunciato nella barra dei tasti: premuto senza profili non puo'
+  // tacere, o da fuori sembra rotto. Spiega come si scrivono, e Esc torna
+  // all'albero senza aver toccato niente.
+  const sessionId = '00000000-0000-4000-8000-000000000a06';
+  const percorso = creaTranscript(sessionId, CARTELLA, [
+    msg('r1', null, 'user', 'ciao', 1),
+    msg('r2', 'r1', 'assistant', 'ciao a te', 2),
+    { type: 'last-prompt', leafUuid: 'r2', lastPrompt: 'ciao', sessionId },
+  ]);
+  fs.rmSync(process.env.CB_IMPOSTAZIONI, { force: true });
+
+  const contesto = wrapperFinto(sessionId, CARTELLA);
+  const { wrapper } = contesto;
+
+  const attesa = wrapper.mostraOverlay();
+  await attendiPrompt(contesto.schermo);
+
+  const primaDelTasto = contesto.schermo().length;
+  await premiTasti('m');
+  const dopoIlTasto = contesto.schermo().slice(primaDelTasto);
+
+  assert.match(dopoIlTasto, /Nessun profilo configurato/, 'dice che non ce ne sono');
+  assert.match(dopoIlTasto, /"profili"/, 'e mostra come si scrivono');
+  assert.match(dopoIlTasto, /impostazioni\.json/, 'dicendo anche dove');
+  assert.doesNotMatch(dopoIlTasto, /quale profilo/, 'nessun elenco vuoto da chiudere');
+
+  // Esc torna all'albero, non chiude l'overlay: non si e' scelto niente.
+  await premiTasti(ANNULLA);
+  assert.equal(wrapper.inOverlay, true, "l'albero resta aperto");
+  assert.equal(wrapper.ramoAvviato, undefined, 'e niente viene rilanciato');
+
+  premi(ANNULLA);
+  await attesa;
+  fs.rmSync(percorso, { force: true });
+}
+
+async function testIlPromptArrivaNellaBarraSenzaInvio() {
+  // Il testo va scritto quando l'output di Claude si ferma, non subito: prima
+  // che la prima schermata sia disegnata i byte si perderebbero. E non deve mai
+  // portarsi dietro un invio, o il prompt partirebbe da solo.
+  const wrapper = new Wrapper({ cwd: CARTELLA });
+  const scritti = [];
+  wrapper.processo = { write: (testo) => scritti.push(testo) };
+
+  wrapper.programmaBarra('prima riga\nseconda riga');
+  assert.deepEqual(scritti, [], 'niente viene scritto finche Claude puo ancora disegnare');
+
+  // Ogni blocco di output rimanda l'attesa: e' il segnale che l'avvio e in corso.
+  wrapper.attesaBarra();
+  await new Promise((r) => setTimeout(r, 300));
+  wrapper.attesaBarra();
+  assert.deepEqual(scritti, [], 'un output a meta attesa la fa ricominciare');
+
+  await new Promise((r) => setTimeout(r, 900));
+  assert.equal(scritti.length, 1, 'a output fermo il prompt viene scritto una volta sola');
+  assert.match(scritti[0], /prima riga\nseconda riga/, 'col testo del prompt');
+  assert.match(scritti[0], /\x1b\[200~/, 'su piu righe va incollato, o gli a capo invierebbero');
+  assert.doesNotMatch(scritti[0], /\r/, 'e senza nessun invio in coda');
+}
+
 // Dall'albero si esce anche verso un'altra conversazione o un'altra cartella,
 // senza chiudere Claude: qui si verifica che i due tasti arrivino, e con quale
 // richiesta. Cosa fanno poi i selettori e' provato in conversazioni.test.js e
@@ -1058,8 +1430,16 @@ const prove = [
   testEscNeiSelettoriTornaAllAlbero,
   testEscDalleConversazioniTornaAlleCartelle,
   testSeguelaSessioneDopoUnClear,
+  testUnAltraFinestraNonSiRubaLaSessione,
+  testSenzaIlNostroFileNonSiPrendeQuelloDiUnAltraFinestra,
   testUnParenteNonSiRubaLaSessione,
   testPuntoIntermedioTagliaLaConversazione,
+  testPromptDaRimandareTagliaPrimaDelTurno,
+  testPromptDaRimandareSulPrimoPromptRiparteDaZero,
+  testLaSceltaDelPromptSiFaRicordare,
+  testIlProfiloRilanciaLaStessaConversazione,
+  testSenzaProfiliIlTastoSpiegaComeSiScrivono,
+  testIlPromptArrivaNellaBarraSenzaInvio,
   testRamoDelPadreVisibileESelezionabile,
   testAlberoRestaDopoIlCambioRamo,
   testRiattivazioneSopravviveAScrittureInRitardo,

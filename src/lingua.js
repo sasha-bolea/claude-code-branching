@@ -96,9 +96,9 @@ with CB_LINGUA (en, it).
       `${VUOTO} restart here`,
     ],
     vociRipristino: [
-      'conversation and code',
-      'conversation only (files stay as they are)',
-      'code only (the conversation stays where it is)',
+      'the conversation and the files',
+      'the conversation only (files stay as they are)',
+      'the files only (the conversation stays where it is)',
     ],
     titolo: 'branches of the conversation',
     titoloCorto: 'tree',
@@ -110,11 +110,29 @@ with CB_LINGUA (en, it).
     promptDopo: (n) => `${n} prompts ahead →`,
     ripartiDaQui: 'restart here',
     precedenti: (n) => `earlier: ${n}`,
-    riportaIndietro: 'roll back:',
+    riportaIndietro: 'what do I roll back?',
+    // Il prompt scelto: due stati, e si mostra per intero quello attivo. E' una
+    // frase e non un'etichetta perche' deve dire cosa succedera', non nominare
+    // un'opzione.
+    promptInviato: [
+      'the prompt you picked stays sent, with the answer it got',
+      'the prompt stays sent, with its answer',
+      'the prompt stays sent',
+    ],
+    promptDaRimandare: [
+      'the prompt you picked comes back in the bar, still unsent',
+      'the prompt comes back in the bar, unsent',
+      'the prompt comes back in the bar',
+    ],
+    ricordaScelta: [
+      'remember this for next time',
+      'remember this choice',
+      'remember',
+    ],
     legendaMenu: [
-      '↑↓ pick   1-3 direct choice   enter confirm   esc back to tree',
-      '↑↓ pick   enter confirm   esc tree',
-      '↑↓ enter esc',
+      '↑↓ pick   ←→ the prompt   1-3 direct choice   enter confirm   esc tree',
+      '↑↓ pick   ←→ prompt   enter confirm   esc tree',
+      '↑↓ ←→ enter esc',
     ],
     invioConFile: 'enter = restart (restores files too)',
     invioSenzaFile: 'enter = restart (files stay as they are)',
@@ -128,8 +146,17 @@ with CB_LINGUA (en, it).
     barraMinima: (esc) => `←→↑↓ move  enter restart  esc ${esc}`,
     // Tasti in piu' disponibili solo dentro la sessione, e nome dell'uscita
     // quando l'albero e' stato aperto dal selettore delle conversazioni.
-    extraLunga: 'c/p = folder and conversation',
-    extraCorta: 'c/p other conv.',
+    extraLunga: 'c/p = folder and conversation   m = profile',
+    extraCorta: 'c/p other conv.   m profile',
+    // Profili: si vedono solo se ne hai configurato almeno uno.
+    qualeProfilo: 'which profile?',
+    profiloBase: "Claude, the way you launched it",
+    profiloResta: 'the conversation stays where it is: only the process restarts',
+    legendaProfili: [
+      '↑↓ pick   enter confirm   esc back to tree',
+      '↑↓ pick   enter   esc tree',
+      '↑↓ enter esc',
+    ],
     escElencoLunga: 'back to the list',
     escElencoCorta: 'list',
   },
@@ -147,6 +174,13 @@ with CB_LINGUA (en, it).
     nomiLingua: { it: 'italiano', en: 'English' },
     scegliCartella: 'enter to type it',
     consigliata: 'recommended',
+    // Avviso su "esc esc": e' anche la scorciatoia di Claude, e cb la copre solo
+    // se i due Esc arrivano entro la finestra.
+    avvisoEscEsc: (ms) => [
+      `esc esc is Claude's own rewind too: cb takes it over if the two arrive`,
+      `within ${ms / 1000}s. Slower, and Claude's menu opens instead of the tree.`,
+      'Two separate interrupts closer than that open the tree as well.',
+    ],
     nonEsiste: 'this folder does not exist',
     legende: [
       '↑↓ pick the setting   ←→ change   enter acts on the row   esc keep these',
@@ -168,9 +202,17 @@ with CB_LINGUA (en, it).
       '↑↓ →←   r mode   enter ok   esc cancel',
       '↑↓ →← r enter esc',
     ],
+    // Con almeno un profilo configurato: `m` lo alterna, come `r` fa col modo.
+    legendeConProfilo: [
+      '↑↓ scroll   →← open/close   r switch mode   m profile   enter confirm   esc cancel',
+      '↑↓ scroll   →← open/close   r mode   m profile   enter ok   esc cancel',
+      '↑↓ →←   r mode   m profile   enter ok   esc cancel',
+      '↑↓ →← r m enter esc',
+    ],
     titolo: '  Working folder for Claude',
     modoRipresa: 'resume a conversation (-r)',
     modoNormale: 'normal start',
+    conProfilo: (nome) => `profile: ${nome}`,
   },
 
   // src/conversazioni.js — selettore delle conversazioni passate
@@ -200,6 +242,8 @@ with CB_LINGUA (en, it).
   wrapper: {
     invioPerTornare: 'enter to go back to Claude',
     tastiAvviso: 'c or p  pick folder and conversation      enter or esc  back to Claude',
+    tastiAvvisoConProfilo:
+      'c or p  folder and conversation      m  profile      enter or esc  back to Claude',
     senzaTranscript: (scorciatoia, sessione) => [
       'This conversation has no transcript on disk yet.',
       '',
@@ -208,6 +252,9 @@ with CB_LINGUA (en, it).
       '',
       'Or start somewhere else: c and p open the folder navigator, where "r"',
       'switches between resuming a conversation and starting a new one.',
+      '',
+      'm picks the profile to run Claude under — here is the best moment,',
+      'with no conversation to carry over yet.',
       '',
       `session: ${sessione}`,
     ],
@@ -221,6 +268,27 @@ with CB_LINGUA (en, it).
       `transcript: ${transcript}`,
     ],
     ripartoDa: (testo) => `restarting from: ${testo}`,
+    profiloAttivo: (nome) => `restarting with: ${nome}`,
+    // Premuto senza profili configurati, `m` taceva: un tasto che non risponde e
+    // un tasto rotto sono la stessa cosa, da fuori. Meglio spiegare.
+    senzaProfili: (percorso) => [
+      'No profiles configured.',
+      '',
+      'A profile is a named set of environment variables. It lets you relaunch',
+      'Claude somewhere else — a local gateway, another key — without leaving',
+      'the conversation you are in.',
+      '',
+      `They live in ${percorso}:`,
+      '',
+      '  "profili": {',
+      '    "gateway": { "ANTHROPIC_BASE_URL": "http://localhost:20128" },',
+      '    "direct":  { "ANTHROPIC_BASE_URL": null }',
+      '  }',
+      '',
+      'null (or "") removes the variable instead of overriding it.',
+    ],
+    profiloSconosciuto: (nome, noti) =>
+      `cb: no profile named "${nome}". Configured: ${noti || '(none)'}`,
     ramoDiSessione: (sessione) => `(branch of session ${sessione})`,
     ripristinoFile: 'restoring the files to that point…',
     fileNonRipristinati: (riassunto) => `files NOT restored: ${riassunto}`,
@@ -327,9 +395,9 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
       `${VUOTO} riparti da qui`,
     ],
     vociRipristino: [
-      'conversazione e codice',
+      'la conversazione e i file',
       'solo la conversazione (i file restano come sono)',
-      "solo il codice (la conversazione resta dov'è)",
+      "solo i file (la conversazione resta dov'è)",
     ],
     titolo: 'rami di questa conversazione',
     titoloCorto: 'rami',
@@ -341,11 +409,29 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     promptDopo: (n) => `${n} prompt dopo →`,
     ripartiDaQui: 'riparti da qui',
     precedenti: (n) => `precedenti: ${n}`,
-    riportaIndietro: 'riporta indietro:',
+    riportaIndietro: 'cosa riporto indietro?',
+    // Il prompt scelto: due stati, e si mostra per intero quello attivo. E' una
+    // frase e non un'etichetta perche' deve dire cosa succedera', non nominare
+    // un'opzione.
+    promptInviato: [
+      'il prompt che hai scelto resta inviato, con la risposta che ha avuto',
+      'il prompt resta inviato, con la sua risposta',
+      'il prompt resta inviato',
+    ],
+    promptDaRimandare: [
+      'il prompt che hai scelto torna nella barra, ancora da inviare',
+      'il prompt torna nella barra, da inviare',
+      'il prompt torna nella barra',
+    ],
+    ricordaScelta: [
+      'ricordati questa scelta per le prossime volte',
+      'ricordati questa scelta',
+      'ricordala',
+    ],
     legendaMenu: [
-      '↑↓ scegli   1-3 scelta diretta   invio conferma   esc torna all albero',
-      '↑↓ scegli   invio conferma   esc albero',
-      '↑↓ invio esc',
+      '↑↓ scegli   ←→ il prompt   1-3 scelta diretta   invio conferma   esc albero',
+      '↑↓ scegli   ←→ il prompt   invio conferma   esc albero',
+      '↑↓ ←→ invio esc',
     ],
     invioConFile: 'invio = riparti (ripristina anche i file)',
     invioSenzaFile: 'invio = riparti (i file restano come sono)',
@@ -357,8 +443,17 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     frecceCorte: '↑↓ ws',
     invioRiparti: 'invio = riparti',
     barraMinima: (esc) => `←→↑↓ muovi  invio riparti  esc ${esc}`,
-    extraLunga: 'c/p = cartella e conversazione',
-    extraCorta: 'c/p altra conv.',
+    extraLunga: 'c/p = cartella e conversazione   m = profilo',
+    extraCorta: 'c/p altra conv.   m profilo',
+    // Profili: si vedono solo se ne hai configurato almeno uno.
+    qualeProfilo: 'con quale profilo?',
+    profiloBase: "Claude, come l'hai lanciato",
+    profiloResta: "la conversazione resta dov'è: riparte solo il processo",
+    legendaProfili: [
+      "↑↓ scegli   invio conferma   esc torna all'albero",
+      '↑↓ scegli   invio   esc albero',
+      '↑↓ invio esc',
+    ],
     escElencoLunga: "torna all'elenco",
     escElencoCorta: 'elenco',
   },
@@ -375,6 +470,13 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     nomiLingua: { it: 'italiano', en: 'English' },
     scegliCartella: 'invio per scriverla',
     consigliata: 'consigliata',
+    // Avviso su "esc esc": e' anche la scorciatoia di Claude, e cb la copre solo
+    // se i due Esc arrivano entro la finestra.
+    avvisoEscEsc: (ms) => [
+      'esc esc è anche il ripristino di Claude: cb la copre se i due arrivano',
+      `entro ${ms / 1000}s. Più lenti, e si apre il suo menu invece dell'albero.`,
+      "Anche due interruzioni distinte, se più vicine di così, aprono l'albero.",
+    ],
     nonEsiste: 'questa cartella non esiste',
     legende: [
       "↑↓ scegli l'impostazione   ←→ cambia   invio agisce sulla riga   esc tieni queste",
@@ -395,9 +497,17 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
       '↑↓ →←   r modo   invio ok   esc annulla',
       '↑↓ →← r invio esc',
     ],
+    // Con almeno un profilo configurato: `m` lo alterna, come `r` fa col modo.
+    legendeConProfilo: [
+      '↑↓ scorri   →← apri/chiudi   r cambia modo   m profilo   invio conferma   esc annulla',
+      '↑↓ scorri   →← apri/chiudi   r modo   m profilo   invio ok   esc annulla',
+      '↑↓ →←   r modo   m profilo   invio ok   esc annulla',
+      '↑↓ →← r m invio esc',
+    ],
     titolo: '  Cartella di lavoro per Claude',
     modoRipresa: 'ripresa della conversazione (-r)',
     modoNormale: 'avvio normale',
+    conProfilo: (nome) => `profilo: ${nome}`,
   },
 
   conversazioni: {
@@ -425,6 +535,8 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
   wrapper: {
     invioPerTornare: 'invio per tornare a Claude',
     tastiAvviso: 'c o p  scegli cartella e conversazione      invio o esc  torna a Claude',
+    tastiAvvisoConProfilo:
+      'c o p  cartella e conversazione      m  profilo      invio o esc  torna a Claude',
     senzaTranscript: (scorciatoia, sessione) => [
       'Questa conversazione non ha ancora un transcript su disco.',
       '',
@@ -434,6 +546,9 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
       'Oppure riparti da un altro punto: c e p aprono il navigatore delle',
       'cartelle, dove "r" alterna la ripresa di una conversazione e l\'avvio',
       'di una nuova.',
+      '',
+      'm sceglie il profilo con cui far girare Claude — qui è il momento',
+      'migliore, perché non c\'è ancora una conversazione da portarsi dietro.',
       '',
       `sessione: ${sessione}`,
     ],
@@ -447,6 +562,27 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
       `transcript: ${transcript}`,
     ],
     ripartoDa: (testo) => `riparto da: ${testo}`,
+    profiloAttivo: (nome) => `riparto con: ${nome}`,
+    // Premuto senza profili configurati, `m` taceva: un tasto che non risponde e
+    // un tasto rotto sono la stessa cosa, da fuori. Meglio spiegare.
+    senzaProfili: (percorso) => [
+      'Nessun profilo configurato.',
+      '',
+      "Un profilo è un insieme di variabili d'ambiente con un nome. Serve a",
+      'rilanciare Claude altrove — un gateway locale, un\'altra chiave — senza',
+      'uscire dalla conversazione in cui sei.',
+      '',
+      `Si scrivono in ${percorso}:`,
+      '',
+      '  "profili": {',
+      '    "gateway": { "ANTHROPIC_BASE_URL": "http://localhost:20128" },',
+      '    "diretto": { "ANTHROPIC_BASE_URL": null }',
+      '  }',
+      '',
+      'null (o "") toglie la variabile invece di sovrascriverla.',
+    ],
+    profiloSconosciuto: (nome, noti) =>
+      `cb: nessun profilo di nome «${nome}». Configurati: ${noti || '(nessuno)'}`,
     ramoDiSessione: (sessione) => `(ramo della sessione ${sessione})`,
     ripristinoFile: 'ripristino i file a quel punto…',
     fileNonRipristinati: (riassunto) => `file NON ripristinati: ${riassunto}`,

@@ -12,14 +12,23 @@ import {
 } from './percorsi.js';
 import { leggiTranscript, unisciAlberi } from './transcript.js';
 import { testoLeggibile } from './albero.js';
-import { componiVista, schermata, muovi, puntaRamoAttivo, VOCI_RIPRISTINO } from './vista.js';
+import {
+  componiVista,
+  schermata,
+  muovi,
+  puntaRamoAttivo,
+  primaCheEntra,
+  VOCI_RIPRISTINO,
+} from './vista.js';
+import { arancioneForte, grigio, normale } from './stile.js';
 import { attivaRamoDi, fineDelTurno } from './attiva.js';
 import { ripristinaA, riassumiRipristino } from './codice.js';
 import { ripiegoDaiCommit } from './commit.js';
 import { senzaTitolo, sequenzaTitolo } from './titolo.js';
-import { impostazione } from './impostazioni.js';
+import { impostazione, salvaImpostazione, percorsoImpostazioni } from './impostazioni.js';
 import { T } from './lingua.js';
 import { creaSessioneTroncata } from './ramo.js';
+import { leggiProfili, elencoProfili, ambienteConProfilo } from './profili.js';
 import {
   tokenizza,
   contaInTesta,
@@ -27,6 +36,8 @@ import {
   soloRilasci,
   azioniTastiera,
   azioniNavigazione,
+  ATTESA_DOPPIO_ESC,
+  FINESTRA_SCORCIATOIA,
 } from './tasti.js';
 
 // Sequenze ANSI usate dall'overlay. Nominate perche' scritte come caratteri di
@@ -62,11 +73,15 @@ const RE_MODO_MOUSE = new RegExp(`\\x1b\\[\\?(${MODI_MOUSE.join('|')})([hl])`, '
 // blocchi di output viene riconosciuta lo stesso.
 const CODA_MOUSE = 9;
 
-// Millisecondi di attesa dopo il primo Esc per capire se ne arriva un secondo.
-// Trattenere il primo Esc e' necessario: se lo inoltrassimo subito, Claude
-// aprirebbe il proprio menu di ripristino prima che il secondo arrivi.
-// Il costo e' questo ritardo su un Esc singolo (interruzione).
-const ATTESA_DOPPIO_ESC = 300;
+// Marcatori di "incolla" (bracketed paste): il testo che sta in mezzo arriva
+// alla TUI come un blocco solo, e i suoi a capo non valgono come invio.
+const INIZIO_INCOLLA = '\x1b[200~';
+const FINE_INCOLLA = '\x1b[201~';
+
+// Millisecondi di silenzio dell'output dopo cui Claude e' considerato pronto a
+// ricevere tasti, e limite oltre il quale si scrive comunque (vedi programmaBarra).
+const QUIETE_AVVIO = 600;
+const ATTESA_MASSIMA_AVVIO = 8000;
 
 // Millisecondi di calma prima di ridisegnare l'overlay dopo un ridimensionamento.
 // Trascinando il bordo della finestra gli eventi arrivano a decine al secondo:
@@ -130,6 +145,7 @@ function navigazioneDa(comando) {
   if (comando === 'annulla') return { tipo: 'annulla' };
   if (comando === 'conversazione') return { tipo: 'conversazione' };
   if (comando === 'progetto') return { tipo: 'progetto' };
+  if (comando === 'profilo') return { tipo: 'profilo' };
   return null;
 }
 
@@ -148,6 +164,8 @@ export class Wrapper {
   //   scelto (attivo per default: senza, il codice resta quello di adesso)
   // opzioni.diagnostica: stampa i byte ricevuti dalla tastiera, per capire come
   //   il terminale codifica i tasti quando la scorciatoia non risponde
+  // opzioni.profilo: nome di un profilo di variabili d'ambiente con cui lanciare
+  //   Claude (vedi src/profili.js). null = l'ambiente com'e'.
   constructor({
     cwd = process.cwd(),
     argomentiExtra = [],
@@ -155,6 +173,7 @@ export class Wrapper {
     ripristinaCodice = true,
     titolo = null,
     diagnostica = false,
+    profilo = null,
   } = {}) {
     this.cwd = cwd;
     // Titolo della tab: per difetto il nome della cartella di lavoro.
@@ -180,12 +199,23 @@ export class Wrapper {
     this.mouseAcceso = new Set(); // modi mouse che Claude ha chiesto, per rimetterli
     this.codaMouse = ''; // fine dell'ultimo blocco, per le sequenze spezzate
     this.timerEsc = null;
-    this.pressioniInAttesa = 0; // pressioni della scorciatoia gia' viste
+    this.pressioniInAttesa = 0; // pressioni della scorciatoia ancora trattenute
+    // Pressioni viste nell'ultimo secondo, comprese quelle gia' inoltrate a
+    // Claude: e' quello che permette di riconoscere una coppia battuta piano.
+    this.pressioniRecenti = 0;
+    this.ultimaPressione = null;
     this.byteTrattenuti = null; // byte da inoltrare se la sequenza non si completa
     this.uscitaVolontaria = false; // distingue il kill nostro dall'uscita utente
     this.azioniInAttesa = []; // tasti di navigazione arrivati in gruppo
     this.ridisegnaOverlay = null; // come ridisegnare l'overlay aperto, se c'e'
     this.timerRidimensiona = null;
+    this.attesaBarra = null; // prompt da rimettere nella barra appena Claude e' pronto
+
+    // Fotografia dell'ambiente di partenza. Ogni processo Claude nasce da questa,
+    // non dall'ambiente corrente: e' cio' che fa sparire da sole le variabili di
+    // un profilo quando si torna indietro, senza doversele ricordare.
+    this.ambienteDiPartenza = { ...process.env };
+    this.profilo = profilo;
   }
 
   // Scrive sul terminale reale.
@@ -216,15 +246,27 @@ export class Wrapper {
       cols: process.stdout.columns || 120,
       rows: process.stdout.rows || 30,
       cwd: this.cwd,
-      env: process.env,
+      env: this.ambiente(),
     });
+  }
+
+  // Ambiente con cui lanciare Claude: quello di partenza, con sopra le variabili
+  // del profilo attivo. Senza profilo e' la fotografia e basta, cioe' l'ambiente
+  // che cb ha ricevuto — il comportamento di sempre.
+  // ritorna: oggetto da passare a pty.spawn
+  ambiente() {
+    if (!this.profilo) return this.ambienteDiPartenza;
+    return ambienteConProfilo(this.ambienteDiPartenza, leggiProfili().get(this.profilo));
   }
 
   // Lancia un processo Claude.
   // riprendi: id di una sessione da riprendere (creata da cb, gia' tagliata al
   //   punto scelto). Se assente, parte una sessione nuova.
-  avviaClaude({ riprendi = null } = {}) {
+  // prompt: testo da rimettere nella barra di input senza inviarlo (modo
+  //   'prompt' del menu di ripristino). Assente negli altri modi.
+  avviaClaude({ riprendi = null, prompt = null } = {}) {
     this.sessionId = riprendi ?? randomUUID();
+    this.attesaBarra = null; // il processo e' nuovo: l'attesa di quello vecchio non vale piu'
     const argomenti = [];
 
     // `riprendi` e' una sessione che cb ha appena creato, gia' tagliata al punto
@@ -267,8 +309,11 @@ export class Wrapper {
 
     this.processo.onData((dati) => {
       this.osservaMouse(dati);
+      this.attesaBarra?.(); // finche' Claude disegna, il prompt da rimettere aspetta
       if (!this.inOverlay) this.scrivi(senzaTitolo(dati));
     });
+
+    this.programmaBarra(prompt);
 
     this.processo.onExit(({ exitCode }) => {
       if (this.uscitaVolontaria) {
@@ -293,6 +338,47 @@ export class Wrapper {
       }
       this.chiudi(exitCode ?? 0);
     });
+  }
+
+  // Rimette un prompt nella barra di input di Claude, senza inviarlo.
+  //
+  // E' quello che fa il ripristino nativo (Esc Esc): la conversazione e' gia'
+  // stata tagliata PRIMA del prompt scelto, e il testo torna dove l'utente
+  // l'aveva scritto, pronto da correggere e mandare di nuovo.
+  //
+  // Il momento in cui scrivere non si deduce da quello che c'e' a schermo — cb
+  // non legge l'output di Claude, che cambia a ogni versione del CLI — ma da
+  // quando l'output smette di arrivare: e' li' che la prima schermata e' finita
+  // e l'ascoltatore dello stdin e' installato. I byte scritti prima si perdono.
+  //
+  // testo: prompt da rimettere nella barra; senza testo non fa niente
+  programmaBarra(testo) {
+    if (!testo) return;
+
+    let quiete = null;
+    let scritto = false;
+
+    const scrivi = () => {
+      if (scritto) return;
+      scritto = true;
+      clearTimeout(quiete);
+      clearTimeout(limite);
+      this.attesaBarra = null;
+      // Su piu' righe va incollato: un a capo grezzo verrebbe letto come invio,
+      // cioe' proprio la cosa che questo modo esiste per non fare.
+      const daScrivere = testo.includes('\n') ? `${INIZIO_INCOLLA}${testo}${FINE_INCOLLA}` : testo;
+      this.processo?.write(daScrivere);
+      this.registra(`prompt rimesso nella barra (${testo.length} caratteri)`);
+    };
+
+    // Rete di sicurezza: se l'output non si fermasse mai (ridisegni periodici) il
+    // prompt va scritto lo stesso, o la barra resterebbe vuota e il testo perso.
+    const limite = setTimeout(scrivi, ATTESA_MASSIMA_AVVIO);
+    this.attesaBarra = () => {
+      clearTimeout(quiete);
+      quiete = setTimeout(scrivi, QUIETE_AVVIO);
+    };
+    this.attesaBarra();
   }
 
   // Forza Claude a ridisegnare l'interfaccia dopo che l'overlay l'ha coperta.
@@ -374,8 +460,12 @@ export class Wrapper {
   // un albero da mostrare, cioe' prima del primo prompt, l'unica cosa che si
   // poteva fare era tornare indietro.
   // righe: testo da mostrare
-  // ritorna: Promise<'selettori' | null> — null se si torna a Claude
-  mostraAvviso(righe) {
+  // conProfilo: se `m` deve valere anche qui. Serve sulle schermate che
+  //   sostituiscono l'albero — senza, proprio quando l'albero non c'e' il tasto
+  //   annunciato nella barra smetterebbe di funzionare. Non sulla schermata dei
+  //   profili stessa, che altrimenti si riaprirebbe da sola.
+  // ritorna: Promise<'selettori' | 'profilo' | null> — null se si torna a Claude
+  mostraAvviso(righe, { conProfilo = false } = {}) {
     this.inOverlay = true;
     this.mouse(false); // schermo nostro: il mouse torni a selezionare il testo
     // Registrato come ridisegno cosi' anche questa schermata segue il
@@ -397,7 +487,7 @@ export class Wrapper {
       // riga che dice come si esce.
       const pronta = pagina.slice(0, spazio);
       while (pronta.length < spazio) pronta.push('');
-      pronta.push(`  ${T.wrapper.tastiAvviso}`);
+      pronta.push(`  ${conProfilo ? T.wrapper.tastiAvvisoConProfilo : T.wrapper.tastiAvviso}`);
 
       this.scrivi(MOSTRA_CURSORE + PULISCI_SCHERMO);
       this.scrivi(pronta.join('\r\n'));
@@ -411,6 +501,10 @@ export class Wrapper {
           if (comando === 'conversazione' || comando === 'progetto') {
             process.stdin.off('data', ascoltatore);
             return risolvi('selettori');
+          }
+          if (conProfilo && comando === 'profilo') {
+            process.stdin.off('data', ascoltatore);
+            return risolvi('profilo');
           }
           if (comando === 'conferma' || comando === 'annulla') {
             process.stdin.off('data', ascoltatore);
@@ -440,10 +534,23 @@ export class Wrapper {
   // un'altra sessione **strettamente piu' recente**. Dopo un clear e' proprio
   // cosi' — il nostro smette di crescere e il nuovo continua — mentre i parenti
   // di una famiglia restano fermi e non ce lo rubano.
+  //
+  // Ma "piu' recente" da solo non basta: due finestre aperte sulla stessa
+  // cartella danno lo stesso quadro di un clear — il nostro file fermo perche'
+  // non stiamo scrivendo, l'altro che cresce — e cb saltava sulla conversazione
+  // dell'altra finestra (successo due volte in una mattina, vedi diagnosi.log:
+  // "sessione cambiata: c343c768… -> 7c8ca487…" dopo 41 minuti di inattivita').
+  // Le due situazioni si distinguono da **quando la conversazione e' cominciata**:
+  // dopo un clear il primo messaggio e' successivo all'avvio di cb, quello di
+  // un'altra finestra e' di prima.
+  //
+  // Il filtro vale solo quando sappiamo chi siamo: con `--resume`/`--continue`
+  // l'id lo sceglie Claude e la conversazione da trovare e' per forza vecchia.
   // ritorna: percorso del .jsonl, o null se non esiste ancora
   trovaTranscript() {
     const nostro = this.sessionId ? percorsoTranscript(this.sessionId, this.cwd) : null;
-    const recente = transcriptPiuRecente(this.cwd, this.avviatoIl ?? 0);
+    const cominciataDopo = this.sessionId ? (this.avviatoIl ?? 0) : null;
+    const recente = transcriptPiuRecente(this.cwd, this.avviatoIl ?? 0, cominciataDopo);
 
     if (nostro && recente && recente.sessionId !== this.sessionId) {
       if (scrittoDopo(recente.percorso, nostro)) {
@@ -460,7 +567,11 @@ export class Wrapper {
     if (nostro) return nostro;
 
     // Nessun file nostro: la sessione l'ha scelta Claude (--resume, --continue) e
-    // si scopre dal disco.
+    // si scopre dal disco. Con un id nostro `recente` e' gia' filtrato per
+    // inizio conversazione, quindi qui non puo' arrivare quella di un'altra
+    // finestra —
+    // era il secondo modo in cui cb mostrava l'albero della conversazione
+    // sbagliata, prima che Claude scrivesse il nostro file.
     if (recente) {
       if (recente.sessionId !== this.sessionId) {
         this.registra(`sessione scoperta dal disco: ${recente.sessionId}`);
@@ -487,7 +598,15 @@ export class Wrapper {
     if (!percorso) {
       const scelta = await this.mostraAvviso(
         T.wrapper.senzaTranscript(this.descrizioneScorciatoia, this.sessionId),
+        { conProfilo: true },
       );
+      // Il profilo si cambia anche da qui: prima del primo scambio e' proprio il
+      // momento in cui conviene, perche' non c'e' ancora una conversazione da
+      // portarsi dietro.
+      if (scelta === 'profilo') {
+        if (await this.scegliProfilo(null, null)) return;
+        return this.mostraOverlay();
+      }
       if (scelta !== 'selettori') {
         this.chiudiOverlay();
         return;
@@ -534,7 +653,13 @@ export class Wrapper {
 
     if (vista.nodi.length === 0) {
       this.inOverlay = false;
-      const scelta = await this.mostraAvviso(T.wrapper.senzaMessaggi(this.sessionId, percorso));
+      const scelta = await this.mostraAvviso(T.wrapper.senzaMessaggi(this.sessionId, percorso), {
+        conProfilo: true,
+      });
+      if (scelta === 'profilo') {
+        if (await this.scegliProfilo(null, null)) return;
+        return this.mostraOverlay();
+      }
       if (scelta !== 'selettori') {
         this.chiudiOverlay();
         return;
@@ -546,7 +671,7 @@ export class Wrapper {
 
     let selezione = puntaRamoAttivo(vista);
     let voce = null;
-    let modo = null;
+    let scelta = null;
 
     // Ciclo di navigazione: disegna, aspetta un tasto, ridisegna.
     for (;;) {
@@ -564,10 +689,18 @@ export class Wrapper {
       if (azione.tipo === 'conferma') {
         // Invio non riparte piu' subito: prima si sceglie cosa riportare
         // indietro. Esc nel menu torna all'albero, non chiude l'overlay.
-        modo = await this.scegliModoRipristino(vista, selezione);
-        if (!modo) continue;
+        scelta = await this.scegliModoRipristino(vista, selezione);
+        if (!scelta) continue;
         voce = vista.perUuid.get(selezione);
         break;
+      }
+      // Rilancia la stessa conversazione con altre variabili d'ambiente. Non
+      // apre niente se non ci sono profili configurati: e' una funzione che chi
+      // non la usa non deve nemmeno vedere.
+      if (azione.tipo === 'profilo') {
+        const cambiato = await this.scegliProfilo(vista, selezione);
+        if (cambiato) return;
+        continue;
       }
       // Da qui si esce dalla conversazione corrente: si sceglie un'altra
       // conversazione della stessa cartella, o prima un'altra cartella.
@@ -583,38 +716,69 @@ export class Wrapper {
     }
 
     this.registra(
-      `scelta uuid=${voce.uuid} modo=${modo} testo="${testoLeggibile(voce.testo).slice(0, 40)}"`,
+      `scelta uuid=${voce.uuid} modo=${scelta.modo} daRimandare=${scelta.daRimandare} ` +
+        `testo="${testoLeggibile(voce.testo).slice(0, 40)}"`,
     );
-    await this.cambiaRamo(percorso, albero, voce, modo);
+    await this.cambiaRamo(percorso, albero, voce, scelta.modo, scelta.daRimandare);
   }
 
-  // Chiede cosa riportare indietro dal punto scelto: la conversazione, il codice
+  // Chiede cosa riportare indietro dal punto scelto: la conversazione, i file
   // o tutti e due. Sono le stesse tre voci del menu nativo di Claude.
   //
+  // Insieme si sceglie dove finisce il prompt: resta inviato con la risposta che
+  // ha avuto (↑↓ scelgono la voce, ←→ questo), oppure torna nella barra di input
+  // ancora da mandare. E' una scelta a parte e non una quarta voce perche' vale
+  // insieme a tutt'e tre. Con `r` la si fa ricordare per le prossime volte.
+  //
   // Si legge con azioniTastiera e non con leggiNavigazione perche' qui servono
-  // anche le cifre, che la navigazione dell'albero scarta.
+  // anche le cifre e le lettere, che la navigazione dell'albero scarta.
   //
   // vista: risultato di componiVista
   // selezione: uuid del nodo su cui sta il cursore
-  // ritorna: Promise<'entrambi'|'conversazione'|'codice'|null> — null se si torna
-  //          all'albero con Esc
+  // ritorna: Promise<{ modo, daRimandare } | null> — null se si torna all'albero
+  //          con Esc
   scegliModoRipristino(vista, selezione) {
     // Preselezione: il caso normale, o "solo la conversazione" se l'utente ha
     // chiesto di non toccare i file (--senza-file).
     let indice = this.ripristinaCodice ? 0 : 1;
+    // Il prompt parte da com'era stato lasciato l'ultima volta, se lo si era
+    // fatto ricordare; altrimenti da "resta inviato", che e' il modo di sempre.
+    const salvato = Boolean(impostazione('promptDaRimandare', false));
+    let daRimandare = salvato;
+    let ricorda = false;
+
+    const esito = () => {
+      if (ricorda) {
+        try {
+          salvaImpostazione('promptDaRimandare', daRimandare);
+        } catch (errore) {
+          // Un'impostazione non salvata non e' un motivo per non ripartire.
+          this.registra(`scelta non ricordata: ${errore.message}`);
+        }
+      }
+      return { modo: VOCI_RIPRISTINO[indice].modo, daRimandare };
+    };
 
     // Tasti rimasti in coda dalla navigazione dell'albero: due invii battuti in
     // fretta arrivano in una lettura sola, e il secondo finisce li'. Senza
     // consumarlo il menu resterebbe aperto ad aspettare un tasto gia' premuto.
     const inCoda = this.azioniInAttesa.splice(0);
     if (inCoda.some((azione) => azione.tipo === 'conferma')) {
-      return Promise.resolve(VOCI_RIPRISTINO[indice].modo);
+      return Promise.resolve(esito());
     }
 
     return new Promise((risolvi) => {
       // Anche il menu va ridisegnato su ridimensionamento: il ridisegno passa
       // sempre dallo stesso appiglio, che qui punta alla schermata col menu.
-      const ridisegna = () => this.disegnaSchermata(vista, selezione, indice);
+      // La casella compare solo quando lo stato mostrato non e' gia' quello
+      // salvato: se coincidono non c'e' niente da ricordare.
+      const ridisegna = () =>
+        this.disegnaSchermata(vista, selezione, {
+          menu: indice,
+          daRimandare,
+          ricorda,
+          ricordabile: daRimandare !== salvato,
+        });
       this.ridisegnaOverlay = ridisegna;
       ridisegna();
 
@@ -627,16 +791,35 @@ export class Wrapper {
       const ascoltatore = (dati) => {
         for (const azione of azioniTastiera(dati)) {
           if (azione.tipo === 'annulla') return concludi(null);
-          if (azione.tipo === 'invio') return concludi(VOCI_RIPRISTINO[indice].modo);
+          if (azione.tipo === 'invio') return concludi(esito());
           if (azione.tipo === 'cifra') {
             const scelto = Number.parseInt(azione.valore, 10) - 1;
-            if (scelto >= 0 && scelto < VOCI_RIPRISTINO.length) return concludi(VOCI_RIPRISTINO[scelto].modo);
+            if (scelto >= 0 && scelto < VOCI_RIPRISTINO.length) {
+              indice = scelto;
+              return concludi(esito());
+            }
+            continue;
+          }
+          if (azione.tipo === 'lettera') {
+            // `r` vale solo mentre la casella si vede: altrove e' un tasto che
+            // non c'e', e accenderlo di nascosto salverebbe a sorpresa.
+            if (azione.valore !== 'r' || daRimandare === salvato) continue;
+            ricorda = !ricorda;
+            ridisegna();
             continue;
           }
           if (azione.tipo === 'freccia') {
             if (azione.valore === 'su') indice = (indice + VOCI_RIPRISTINO.length - 1) % VOCI_RIPRISTINO.length;
             else if (azione.valore === 'giu') indice = (indice + 1) % VOCI_RIPRISTINO.length;
-            else continue; // destra e sinistra qui non muovono niente
+            // Due soli stati: destra e sinistra fanno la stessa cosa, cioe'
+            // passare all'altro. Chiedere quale sia "avanti" sarebbe una domanda
+            // senza risposta.
+            else {
+              daRimandare = !daRimandare;
+              // Tornati sullo stato salvato la casella sparisce: deve sparire
+              // anche la spunta, o resterebbe accesa in una casella invisibile.
+              if (daRimandare === salvato) ricorda = false;
+            }
             ridisegna();
           }
         }
@@ -646,18 +829,154 @@ export class Wrapper {
     });
   }
 
+  // Chiede con quale profilo rilanciare Claude, e lo rilancia.
+  //
+  // La conversazione non si muove: si riprende la sessione corrente com'e', con
+  // un ambiente diverso. E' l'unica cosa che dalla shell non si puo' fare, perche'
+  // le variabili le legge il processo all'avvio e il processo lo possiede cb.
+  //
+  // Senza profili configurati spiega come si scrivono, invece di non fare niente:
+  // il tasto e' annunciato nella barra, e un tasto annunciato che tace e' un tasto
+  // rotto per chi lo preme.
+  //
+  // vista: risultato di componiVista, o null quando l'albero non c'e' — prima
+  //   del primo scambio si arriva qui dall'avviso, e l'elenco si disegna da solo
+  // selezione: uuid del nodo su cui sta il cursore, o null insieme a `vista`
+  // ritorna: Promise<boolean> — true se Claude e' stato rilanciato (o se si e'
+  //          usciti verso i selettori, cioe' l'albero non va piu' ridisegnato)
+  async scegliProfilo(vista, selezione) {
+    const profili = leggiProfili();
+    if (profili.size === 0) {
+      this.registra('nessun profilo configurato: mostro come si scrivono');
+      const scelta = await this.mostraAvviso(T.wrapper.senzaProfili(percorsoImpostazioni()));
+      if (scelta !== 'selettori') return false; // si torna all'albero
+      if ((await this.cambiaConversazione()) === 'indietro') await this.mostraOverlay();
+      return true;
+    }
+
+    const elenco = elencoProfili(profili);
+    // Si parte da quello attivo, cosi' invio senza pensarci non cambia niente.
+    let indice = Math.max(0, elenco.indexOf(this.profilo ?? null));
+
+    // Con l'albero a schermo l'elenco ne prende il posto in fondo; senza — prima
+    // del primo scambio — si disegna da solo, o non ci sarebbe niente su cui
+    // appoggiarlo.
+    this.inOverlay = true;
+    const scelto = await new Promise((risolvi) => {
+      const ridisegna = () =>
+        vista
+          ? this.disegnaSchermata(vista, selezione, { profili: { elenco, indice } })
+          : this.disegnaProfili(elenco, indice);
+      this.ridisegnaOverlay = ridisegna;
+      ridisegna();
+
+      const concludi = (valore) => {
+        process.stdin.off('data', ascoltatore);
+        this.ridisegnaOverlay = vista ? () => this.disegnaSchermata(vista, selezione) : null;
+        risolvi(valore);
+      };
+
+      const ascoltatore = (dati) => {
+        for (const azione of azioniTastiera(dati)) {
+          if (azione.tipo === 'annulla') return concludi(undefined);
+          if (azione.tipo === 'invio') return concludi(elenco[indice]);
+          if (azione.tipo === 'freccia') {
+            if (azione.valore === 'su') indice = (indice + elenco.length - 1) % elenco.length;
+            else if (azione.valore === 'giu') indice = (indice + 1) % elenco.length;
+            else continue; // destra e sinistra qui non muovono niente
+            ridisegna();
+          }
+        }
+      };
+
+      process.stdin.on('data', ascoltatore);
+    });
+
+    if (scelto === undefined) return false; // Esc: si torna all'albero
+    if (scelto === this.profilo) {
+      this.chiudiOverlay();
+      return true; // gia' quello: niente da rilanciare, ma l'overlay si chiude
+    }
+
+    return this.cambiaProfilo(scelto);
+  }
+
+  // Rilancia Claude sulla conversazione corrente con un altro profilo.
+  //
+  // Niente taglio e niente ripristino dei file: la conversazione resta esattamente
+  // dov'e'. Cambia solo l'ambiente del processo, e per farlo il processo va
+  // rifatto — le variabili si leggono all'avvio.
+  //
+  // nome: nome del profilo, o null per l'ambiente di partenza
+  // ritorna: Promise<boolean> — true se Claude e' ripartito
+  async cambiaProfilo(nome) {
+    const percorso = this.trovaTranscript();
+    // Senza transcript la sessione non ha ancora niente da riprendere: si riparte
+    // da zero, che e' comunque quello che l'utente vedrebbe.
+    const riprendi = percorso ? sessioneDaPercorso(percorso) : null;
+
+    this.registra(`cambio profilo: ${this.profilo ?? '(base)'} -> ${nome ?? '(base)'}`);
+    this.scrivi(`\r\n  ${T.wrapper.profiloAttivo(nome ?? T.albero.profiloBase)}\r\n`);
+
+    await this.chiudiProcesso();
+    this.profilo = nome;
+    this.inOverlay = false;
+    this.scrivi(PULISCI_SCHERMO);
+
+    this.avviaClaude({ riprendi });
+    return true;
+  }
+
+  // Disegna l'elenco dei profili da solo, senza albero sopra.
+  //
+  // Serve prima del primo scambio, quando l'albero non c'e': la stessa scelta
+  // deve restare raggiungibile, ed e' anzi il momento in cui conviene di piu' —
+  // non c'e' ancora una conversazione da portarsi dietro. Come le altre
+  // schermate, la legenda sta in fondo allo schermo e non sotto l'elenco.
+  // elenco: nomi dei profili, con null in testa per l'ambiente di partenza
+  // indice: voce selezionata
+  disegnaProfili(elenco, indice) {
+    const altezza = process.stdout.rows || 30;
+    const colonne = process.stdout.columns || 120;
+    const pagina = ['  cb', '', `  ${T.albero.qualeProfilo}`];
+
+    elenco.forEach((nome, i) => {
+      const etichetta = nome ?? T.albero.profiloBase;
+      const riga = `  ${i === indice ? '▸' : ' '} ${etichetta}`;
+      pagina.push(i === indice ? arancioneForte(riga) : normale(riga));
+    });
+
+    const spazio = Math.max(1, altezza - 1);
+    const pronta = pagina.slice(0, spazio);
+    while (pronta.length < spazio) pronta.push('');
+    pronta.push(`  ${grigio(primaCheEntra(T.albero.legendaProfili, colonne - 4))}`);
+
+    this.scrivi(MOSTRA_CURSORE + PULISCI_SCHERMO);
+    this.scrivi(pronta.join('\r\n'));
+  }
+
   // Disegna l'overlay. La composizione sta in vista.js: qui si scrive soltanto,
   // con i ritorni a capo che vuole il terminale in raw mode.
   // vista: risultato di componiVista
   // selezione: uuid del nodo su cui sta il cursore
-  // menu: indice della voce del menu di ripristino, o null se si naviga l'albero
-  disegnaSchermata(vista, selezione, menu = null) {
+  // stato: { menu, daRimandare, ricorda } del menu di ripristino, oppure
+  //   { profili } per la scelta del profilo; senza nessuno dei due si sta
+  //   navigando l'albero
+  disegnaSchermata(
+    vista,
+    selezione,
+    { menu = null, daRimandare = false, ricorda = false, ricordabile = false, profili = null } = {},
+  ) {
     const righe = schermata(vista, selezione, {
       colonne: process.stdout.columns || 120,
       altezza: process.stdout.rows || 30,
       ripristinaCodice: this.ripristinaCodice,
       extra: { lunga: T.albero.extraLunga, corta: T.albero.extraCorta },
       menu,
+      daRimandare,
+      ricorda,
+      ricordabile,
+      profili,
     });
 
     this.scrivi(PULISCI_SCHERMO);
@@ -738,9 +1057,19 @@ export class Wrapper {
       // Il ciclo e' il "torna indietro": uscendo dall'elenco delle conversazioni
       // si ricomincia dalle cartelle invece di chiudere tutto.
       while (!conversazione) {
-        const scelta = await this.apriCartelle({ cwd: cartella, ripresa: true });
+        const scelta = await this.apriCartelle({
+          cwd: cartella,
+          ripresa: true,
+          profilo: this.profilo,
+        });
         if (!scelta) return 'indietro'; // esc sul primo passo: decide chi ci ha chiamato
         cartella = scelta.percorso;
+        // Il profilo scelto nel navigatore vale per il processo che nascera' da
+        // qui: si applica prima di lanciarlo, non dopo.
+        if (scelta.profilo !== this.profilo) {
+          this.registra(`profilo dal navigatore: ${this.profilo ?? '(base)'} -> ${scelta.profilo ?? '(base)'}`);
+          this.profilo = scelta.profilo;
+        }
 
         // "Avvio normale" nel navigatore vuol dire non riprendere niente: si
         // comincia una conversazione nuova in quella cartella, senza passare
@@ -797,6 +1126,7 @@ export class Wrapper {
             conversazione.albero,
             conversazione.voce.uuid,
             conversazione.percorso,
+            conversazione.daRimandare,
           );
           this.registra(`ripristino solo codice da selettore: ${esito.riassunto}`);
           this.scrivi(`  ${esito.riassunto}\r\n`);
@@ -811,6 +1141,7 @@ export class Wrapper {
         conversazione.albero,
         conversazione.voce,
         conversazione.modo ?? 'entrambi',
+        conversazione.daRimandare,
       );
       // Il messaggio d'errore l'ha gia' scritto cambiaRamo: qui resta da non
       // lasciare l'utente senza Claude.
@@ -827,8 +1158,12 @@ export class Wrapper {
   // albero: risultato di leggiTranscript
   // voce: nodo prompt scelto
   // modo: 'entrambi' | 'conversazione' | 'codice' — cosa riportare indietro
+  // daRimandare: se il prompt scelto esce dalla conversazione e torna nella barra
+  //   di input ancora da mandare. Sposta il taglio prima del prompt e riporta i
+  //   file a com'erano prima di quel turno; con 'codice' vale solo la seconda
+  //   meta', cioe' se le modifiche di quel turno restano o se ne vanno.
   // ritorna: true se Claude e' ripartito, false se qualcosa e' andato storto
-  async cambiaRamo(percorso, albero, voce, modo = 'entrambi') {
+  async cambiaRamo(percorso, albero, voce, modo = 'entrambi', daRimandare = false) {
     // Il nodo scelto puo' vivere solo nel file di una sessione antenata: in quel
     // caso si riparte da quella, non da quella corrente.
     const origine = this.scegliOrigine(albero, voce, percorso);
@@ -839,7 +1174,12 @@ export class Wrapper {
     // chiudere e niente da tagliare. Claude resta vivo e si limita a rileggere i
     // file la prossima volta che li apre.
     if (modo === 'codice') {
-      const esito = await this.ripristinaFile(alberoOrigine, voce.uuid, origine.percorso);
+      const esito = await this.ripristinaFile(
+        alberoOrigine,
+        voce.uuid,
+        origine.percorso,
+        daRimandare,
+      );
       this.registra(`ripristino solo codice uuid=${voce.uuid} esito=${esito.riassunto}`);
       this.chiudiOverlay();
       this.lampeggia(`cb: ${esito.riassunto}`);
@@ -866,7 +1206,11 @@ export class Wrapper {
       this.lampeggia(`cb: ${T.wrapper.messaggioAltrove}`);
       return false;
     }
-    this.fineTurno = fineDelTurno(nodoOrigine).uuid;
+    // Col prompt da rimandare il taglio cade PRIMA del prompt scelto: quel turno
+    // esce dalla conversazione e il suo testo torna nella barra di input, non
+    // inviato. Senza padre il prompt era il primo della conversazione, e prima
+    // di lui non c'e' niente da riprendere.
+    this.fineTurno = daRimandare ? nodoOrigine.parentUuid : fineDelTurno(nodoOrigine).uuid;
 
     // Il rewind dei file cerca il messaggio nella catena attiva della sessione di
     // partenza: se il ramo era in disparte va prima riattivato.
@@ -883,7 +1227,12 @@ export class Wrapper {
     // si limita a suggerire il comando da lanciare a mano.
     if (modo !== 'conversazione') {
       this.scrivi(`  ${T.wrapper.ripristinoFile}\r\n`);
-      const esito = await this.ripristinaFile(alberoOrigine, voce.uuid, origine.percorso);
+      const esito = await this.ripristinaFile(
+        alberoOrigine,
+        voce.uuid,
+        origine.percorso,
+        daRimandare,
+      );
       this.registra(`ripristino file ok=${esito.ok} esito=${esito.riassunto}`);
 
       const messaggio = esito.ok
@@ -895,14 +1244,20 @@ export class Wrapper {
 
     // Il taglio della conversazione lo fa cb, creando una sessione che finisce
     // al turno scelto: in interattivo il CLI ignora i flag di troncamento.
-    let ramo;
-    try {
-      ramo = await creaSessioneTroncata(origine.percorso, this.fineTurno);
-      this.registra(`sessione troncata creata: ${ramo.sessionId} fino a ${this.fineTurno}`);
-    } catch (errore) {
-      this.inOverlay = false;
-      this.lampeggia(`cb: ${T.wrapper.ramoNonCreato(errore.message)}`);
-      return false;
+    // Niente da tagliare quando il taglio cade prima del primo prompt: la
+    // conversazione ricomincia da zero, col solo prompt nella barra.
+    let ramo = null;
+    if (this.fineTurno && alberoOrigine.nodi.has(this.fineTurno)) {
+      try {
+        ramo = await creaSessioneTroncata(origine.percorso, this.fineTurno);
+        this.registra(`sessione troncata creata: ${ramo.sessionId} fino a ${this.fineTurno}`);
+      } catch (errore) {
+        this.inOverlay = false;
+        this.lampeggia(`cb: ${T.wrapper.ramoNonCreato(errore.message)}`);
+        return false;
+      }
+    } else {
+      this.registra(`nessun turno prima di ${voce.uuid}: si riparte da una sessione nuova`);
     }
 
     this.inOverlay = false;
@@ -913,7 +1268,10 @@ export class Wrapper {
     this.percorsoOrigine = origine.percorso;
     this.uuidRipreso = voce.uuid;
 
-    this.avviaClaude({ riprendi: ramo.sessionId });
+    this.avviaClaude({
+      riprendi: ramo?.sessionId ?? null,
+      prompt: daRimandare ? nodoOrigine.testo : null,
+    });
     return true;
   }
 
@@ -1000,11 +1358,14 @@ export class Wrapper {
   // albero: albero della sessione che contiene il nodo
   // uuid: uuid del prompt scelto
   // percorsoOrigine: transcript di quella sessione, se la famiglia non e' nota
+  // prima: riporta i file a com'erano PRIMA del turno invece che alla sua fine.
+  //   Serve al modo 'prompt', dove il turno esce dalla conversazione e il prompt
+  //   torna nella barra: le modifiche di quel turno non devono esserci piu'.
   // ritorna: Promise<{ ok, riassunto, esito }>
-  async ripristinaFile(albero, uuid, percorsoOrigine = null) {
+  async ripristinaFile(albero, uuid, percorsoOrigine = null, prima = false) {
     const nodo = albero.nodi.get(uuid);
-    const fine = nodo ? fineDelTurno(nodo) : null;
-    const istante = Date.parse(fine?.timestamp ?? nodo?.timestamp ?? '');
+    const riferimento = prima ? nodo : nodo ? fineDelTurno(nodo) : null;
+    const istante = Date.parse(riferimento?.timestamp ?? nodo?.timestamp ?? '');
     if (Number.isNaN(istante)) {
       return { ok: false, riassunto: T.wrapper.senzaOrario };
     }
@@ -1113,14 +1474,29 @@ export class Wrapper {
     }
 
     // Scorciatoia ripetuta (es. Esc Esc): le pressioni possono arrivare tutte
-    // nella stessa lettura oppure in letture separate, quindi conto anche quelle
-    // gia' trattenute.
+    // nella stessa lettura, in letture separate, o **a cavallo dell'attesa** —
+    // cioe' quando la prima e' gia' stata inoltrata a Claude perche' il timer e'
+    // scattato. Il conteggio dura un secondo intero e non si azzera all'inoltro:
+    // e' cosi' che una coppia battuta piano resta di cb invece di arrivare a
+    // Claude come due Esc separati, che lui rimetterebbe insieme.
+    if (pressioni > 0) {
+      const adesso = Date.now();
+      const scaduta =
+        this.ultimaPressione === null || adesso - this.ultimaPressione > FINESTRA_SCORCIATOIA;
+      this.pressioniRecenti = (scaduta ? 0 : this.pressioniRecenti) + pressioni;
+      this.ultimaPressione = adesso;
+    }
+
     const inAttesa = this.pressioniInAttesa ?? 0;
-    if (pressioni > 0 && inAttesa + pressioni >= richieste) {
+    if (pressioni > 0 && Math.max(inAttesa + pressioni, this.pressioniRecenti) >= richieste) {
       clearTimeout(this.timerEsc);
       this.timerEsc = null;
       this.pressioniInAttesa = 0;
       this.byteTrattenuti = null; // scartati: erano parte della scorciatoia
+      // Le pressioni sono state spese: senza azzerare, il prossimo Esc singolo
+      // riaprirebbe l'albero da solo.
+      this.pressioniRecenti = 0;
+      this.ultimaPressione = null;
 
       const coda = token.slice(consumati);
       if (coda.length > 0) this.inoltra(Buffer.concat(coda.map((t) => t.bytes)));
@@ -1206,10 +1582,14 @@ export class Wrapper {
       // Ogni file della famiglia va riattivato con il proprio albero, non con
       // quello unito: e' il vincolo di riattivaConVerifica.
       this.alberiFamiglia = ripartenza.alberi;
+      // Il modo scelto nel selettore va passato: senza, ogni ripresa da fuori
+      // ricadeva su 'entrambi' e ignorava la voce scelta nel menu.
       const ripartito = await this.cambiaRamo(
         ripartenza.percorso,
         ripartenza.albero,
         ripartenza.voce,
+        ripartenza.modo,
+        ripartenza.daRimandare,
       );
       // Se il ripristino non e' riuscito il messaggio l'ha gia' scritto
       // cambiaRamo: qui resta da non lasciare l'utente senza Claude.

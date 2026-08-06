@@ -13,10 +13,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { azioniNavigazione, azioniTesto } from './tasti.js';
-import { arancioneForte, grigio, normale, rosso } from './stile.js';
+import { azioniNavigazione, azioniTesto, FINESTRA_SCORCIATOIA } from './tasti.js';
+import { arancione, arancioneForte, grigio, normale, rosso } from './stile.js';
 import { radicePredefinita } from './cartelle.js';
-import { LINGUE, SCORCIATOIE, impostazione, scriviImpostazioni } from './impostazioni.js';
+import { LINGUE, SCORCIATOIE, impostazione, aggiornaImpostazioni } from './impostazioni.js';
 import { T } from './lingua.js';
 
 // Righe della schermata, nell'ordine in cui si presentano. 'fatto' non e'
@@ -213,6 +213,20 @@ export function disegnaImpostazioni(stato, altezza = 30, larghezza = 100) {
     righe.push(scelta && !scrivendo ? arancioneForte(taglia(testo)) : normale(taglia(testo)));
   });
 
+  // "esc esc" e' anche la scorciatoia di ripristino di Claude, e cb la copre
+  // solo se i due Esc arrivano dentro la finestra: piu' lenti, e si apre il menu
+  // di Claude. Va detto qui — nel punto in cui la si sceglie — perche' da fuori
+  // sembra che cb non risponda, e non che si sia stati lenti.
+  //
+  // Si mostra ogni volta che quel valore e' scelto, non solo con la riga
+  // selezionata: e' una conseguenza della scelta, non un aiuto per la riga.
+  if (!scrivendo && stato.valori.scorciatoia === 'esc esc') {
+    righe.push('');
+    for (const riga of T.configura.avvisoEscEsc(FINESTRA_SCORCIATOIA)) {
+      righe.push(arancione(taglia(`  ${riga}`)));
+    }
+  }
+
   // Una cartella che non c'e' non e' un errore da bloccare — puo' nascere dopo —
   // ma tacerla lascerebbe l'utente con un selettore vuoto e nessuna spiegazione.
   if (!scrivendo && !fs.existsSync(stato.valori.radice)) {
@@ -250,7 +264,12 @@ export function configura({ ingresso = process.stdin, uscita = process.stdout } 
       if (ingresso.isTTY) ingresso.setRawMode(false);
       ingresso.pause();
       uscita.write('\x1b[?25h\x1b[?1049l');
-      scriviImpostazioni(stato.valori);
+      // Solo le tre voci di questa schermata: quello che si configura a mano
+      // (`profili`, `promptDaRimandare`, `giorniPulizia`) resta dov'e'. Scrivendo
+      // l'oggetto intero si cancellava, ed e' una perdita silenziosa — te ne
+      // accorgi la volta dopo, quando il tasto che avevi configurato non fa piu'
+      // niente.
+      aggiornaImpostazioni(stato.valori);
       risolvi(stato.valori);
     };
 

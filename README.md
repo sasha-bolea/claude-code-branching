@@ -95,15 +95,49 @@ Run `cb` where you would run `claude`. You work as usual; when you press the sho
 branch tree appears. You move with the arrows, press enter, and choose **what to roll back**:
 
 ```
-roll back:
-▸ 1. conversation and code
-  2. conversation only (files stay as they are)
-  3. code only (the conversation stays where it is)
+what do I roll back?
+▸ 1. the conversation and the files
+  2. the conversation only (files stay as they are)
+  3. the files only (the conversation stays where it is)
+
+  ←→  the prompt you picked stays sent, with the answer it got
+   r  [ ] remember this for next time
 ```
 
-The first two restart on a new branch without leaving the session; the third does not even
-restart Claude, it only brings the files back. Next to the prompt's time you see how much
-code that turn changed (`+42 -7`).
+`↑↓` pick the entry (or the digits `1-3`), enter confirms. The first two restart on a new
+branch without leaving the session; the third does not even restart Claude, it only brings
+the files back. Next to the prompt's time you see how much code that turn changed
+(`+42 -7`).
+
+`←→` decide a separate thing, which applies to all three: **where the prompt you picked
+ends up**.
+
+- *stays sent, with the answer it got* — the cut lands after that turn: you restart from
+  there with the answer already given. This is the way it has always worked.
+- *comes back in the bar, still unsent* — the cut lands **before** the prompt: that turn
+  leaves the conversation, the files go back to how they were before it ran, and the text
+  reappears in the input bar for you to edit and send again. It is what Claude's own rewind
+  (Esc Esc) does. With "the files only" just the second half applies, i.e. whether that
+  turn's edits stay or go.
+
+`r` ticks "remember this for next time": on confirm the preference lands in
+`~/.claude/cb/impostazioni.json` (`promptDaRimandare`) and the menu opens that way from then
+on.
+
+When you resume a conversation from outside (`cb -r`, `cb --scegli`, the `c`/`p` keys) the
+prompt choice is still there, arrows included: only the checkbox goes. There it holds for
+that one time, and it **always** starts from "stays sent" — a remembered preference would
+decide for you exactly when you reopen a months-old conversation, which is when you no longer
+remember it.
+
+```
+what do I roll back?
+▸ 1. the conversation and the files
+  2. the conversation only (files stay as they are)
+  3. the files only (the conversation stays where it is)
+
+  ←→  the prompt you picked stays sent, with the answer it got
+```
 
 ⚠️ Restoring files overwrites unsaved work made after that message. With `--senza-file` the
 preselected entry becomes "conversation only".
@@ -113,6 +147,7 @@ cb                      Claude wrapped: Esc Esc opens the tree
 cb --scegli             ask for folder and conversation first (see below)
 cb --tasto f2           another shortcut ("f2", "esc esc", "ctrl+shift+b")
 cb --senza-file         on a branch switch, do NOT restore files
+cb --profilo <name>     launch under a profile of variables (see "Profiles")
 cb --tasti              print the bytes of the keys pressed (diagnostics)
 cb ls [filter]          list the sessions of every project
 cb tree <session>       branch tree of a session
@@ -149,7 +184,8 @@ With `cb --scegli` cb puts two screens in front of Claude: the tree of the folde
 your home (root configurable with `CB_RADICE`), where `r` toggles between a normal start and
 a resume, and — on resume — the list of that folder's conversations, each with its own tree
 on top. `↑↓` scroll the conversations, enter goes into the tree, where you pick the point to
-restart from.
+restart from. In the menu that shows up there the prompt choice is available, but it always
+starts from "stays sent" and cannot be remembered: it holds for that one time.
 
 Why not the `claude -r` picker: that one lists session **files**, and since a fork creates a
 new one, the branches of the same conversation show up as different conversations. Here
@@ -165,7 +201,10 @@ launched cb can read it on exit and move there (a child process cannot change th
 folder of its parent).
 
 A single key (`f2`) fires immediately. A repeated shortcut (`esc esc`) costs 300 ms of delay
-on the first press, the time needed to see whether a second one is coming.
+on the first press, the time needed to see whether a second one is coming. The two presses
+count as the shortcut if they arrive **within one second**: after that the first Esc has
+already been forwarded and counts as an interrupt. The flip side is that two separate
+interrupts pressed less than a second apart open the tree.
 
 **Which key to pick.** Function keys are the safe choice: Claude Code does not use them, and
 neither does command-line editing. Avoid `f10` and `f11`, which the terminal grabs for the
@@ -339,6 +378,119 @@ being the most explicit choice.
 
 Note: the tab title is preserved (ConPTY would overwrite it with the path of `claude.exe`
 at every process start, so at every branch switch).
+
+## Using it alongside other tools
+
+cb owns the terminal and reads Claude Code's own files. Whether another tool coexists with
+it depends on **where that tool sits**:
+
+```
+cb            ← above: owns the terminal (pty, keys, tree, transcripts)
+  claude      ← the real CLI, untouched
+    a proxy   ← below: intercepts the HTTP calls and picks a provider
+```
+
+**Below Claude Code** — API proxies and routers (OmniRoute, claude-code-router, LiteLLM, a
+self-hosted gateway). These work with no changes at all. cb makes no network calls of its
+own and passes the whole environment to the pty, so `ANTHROPIC_BASE_URL` and the auth token
+reach the CLI untouched:
+
+```powershell
+$env:ANTHROPIC_BASE_URL = "http://localhost:20128/v1"
+$env:ANTHROPIC_AUTH_TOKEN = "<your gateway token>"
+cb
+```
+
+The tree, the cut and the file restore keep working even when another model answered the
+turn: the `.jsonl` transcript, the `structuredPatch` diffs and the backup copies under
+`~/.claude/file-history/` are written by the CLI, not by whoever answered. Two things worth
+knowing: a router with free "keyless" providers sends your prompts — and the code in them —
+to third parties you did not pick one by one; and a proxy that compresses requests means the
+context Claude actually saw may be smaller than what the tree shows. If a branch seems
+forgetful, that is where to look, not in cb.
+
+**Above Claude Code** — terminal wrappers, TUIs, session multiplexers. These usually clash,
+because cb needs three things exclusively:
+
+1. **stdin and the pty.** cb reads the keys before Claude does; two wrappers wanting stdin do
+   not coexist.
+2. **The native executable.** cb looks for `claude.exe`, never the npm shim: node-pty cannot
+   launch `.ps1`/`.cmd` files. A tool that only exposes a shim or a shell function cannot be
+   launched by cb.
+3. **The real transcripts** under `~/.claude/projects/`. A tool that reimplements the client,
+   or keeps the conversation in its own format, takes away the only thing cb reads.
+
+**Above cb** — this one is supported: it is how the `claude` function above works. The
+contract is the exit code. **78** means cb did not start and the caller should fall back to
+plain Claude; any other code is Claude's own exit and must not be relaunched.
+
+### Profiles: switching provider without losing the conversation
+
+Setting the variables before launching cb works, but changing them means quitting. A
+**profile** is a named set of variables, and cb can relaunch Claude under a different profile
+**without moving the conversation**. That is the one thing the shell cannot do: the variables
+are read by the process at startup, and the process belongs to cb.
+
+In `~/.claude/cb/impostazioni.json`:
+
+```json
+{
+  "profili": {
+    "gateway": {
+      "ANTHROPIC_BASE_URL": "http://localhost:20128",
+      "ANTHROPIC_MODEL": "some-gateway-model"
+    },
+    "direct": {
+      "ANTHROPIC_BASE_URL": null
+    }
+  }
+}
+```
+
+`null` (or `""`) **removes** the variable instead of overriding it: you need that when it is
+the starting environment that has something the profile must get rid of.
+
+From the tree, `m` opens the list:
+
+```
+which profile?
+    Claude, the way you launched it
+  ▸ gateway
+    direct
+
+  the conversation stays where it is: only the process restarts
+```
+
+On confirm, cb closes Claude and reopens it on the **same** session with the new environment.
+No cut, no file restore: the conversation carries on where it was. To start on a profile
+right away: `cb --profilo gateway`.
+
+You can also pick one in the two places where there is no tree:
+
+- **before the first exchange**, from the screen telling you the transcript does not exist
+  yet — the best moment, in fact, with no conversation to carry over;
+- **in the folder navigator**, where `m` cycles the profiles in the header just like `r`
+  toggles resume and normal start. There you decide where to work and with what in one step,
+  and Claude starts already configured.
+
+Every process is built from the snapshot of the environment cb had at startup, with the
+active profile on top. That is why going back to "Claude, the way you launched it" restores
+the starting conditions exactly, and a profile's added variables disappear on their own.
+
+Two things worth knowing:
+
+- **The values sit in plain text in a config file.** For secrets, leave them to the shell and
+  keep only non-credentials in the profile. cb never writes the values to its log: of a
+  profile switch it records the name only.
+- **Switching provider on a long conversation can fail immediately**, if the new one has a
+  smaller context window than what is already used. cb cannot predict that, but if the
+  relaunched process dies within seconds it tells you instead of vanishing.
+
+With no `profili` in the file, `m` opens nothing: if you do not configure them, the feature
+is not there.
+
+To check a setup quickly, `cb ls` and `cb tree <session>` only read from disk, so after a few
+turns they tell you straight away whether the transcripts are still the ones cb expects.
 
 ## Automatic commits (optional, Windows)
 

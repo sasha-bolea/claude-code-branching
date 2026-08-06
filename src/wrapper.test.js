@@ -31,6 +31,45 @@ const win32 = (vk, uc, kd = 1, cs = 32) =>
 const ESC_GIU = win32(27, 27, 1);
 const ESC_SU = win32(27, 27, 0);
 
+async function testDoppioEscBattutoPiano() {
+  // Il caso segnalato: due Esc premuti piu' lenti dell'attesa. Il primo e' gia'
+  // stato inoltrato — deve esserlo, o si perderebbe l'interruzione — ma se il
+  // conteggio si azzerasse li', il secondo partirebbe da capo e finirebbe anche
+  // lui a Claude: due Esc a distanza, che lui rimette insieme e apre il **suo**
+  // menu di ripristino. Cioe' quello che cb esiste per sostituire.
+  const { wrapper, inoltrati, stato } = wrapperFinto();
+
+  wrapper.gestisciInput(Buffer.from([ESC]));
+  await attendi(400); // scade l'attesa: il primo Esc parte verso Claude
+  assert.equal(inoltrati.length, 1, 'il primo Esc raggiunge Claude, come deve');
+  assert.equal(stato.overlay, 0, 'e da solo non apre niente');
+
+  wrapper.gestisciInput(Buffer.from([ESC]));
+  assert.equal(stato.overlay, 1, 'il secondo, seppur tardivo, apre l albero');
+
+  await attendi(400);
+  assert.equal(inoltrati.length, 1, 'e non viene inoltrato: Claude ne ha visto uno solo');
+}
+
+async function testDueEscLontaniRestanoDueInterruzioni() {
+  // Il rovescio: oltre la finestra sono due interruzioni distinte, e l'albero
+  // non deve aprirsi. Senza questo limite un Esc premuto adesso e uno fra un
+  // minuto aprirebbero l'albero a sorpresa.
+  const { wrapper, inoltrati, stato } = wrapperFinto();
+
+  wrapper.gestisciInput(Buffer.from([ESC]));
+  await attendi(400);
+  // Finestra scaduta a mano: aspettare un secondo vero allungherebbe le prove
+  // di un secondo per una cosa che si verifica cosi'.
+  wrapper.ultimaPressione = Date.now() - 5000;
+
+  wrapper.gestisciInput(Buffer.from([ESC]));
+  assert.equal(stato.overlay, 0, 'l albero non si apre');
+
+  await attendi(400);
+  assert.equal(inoltrati.length, 2, 'e tutt e due gli Esc arrivano a Claude');
+}
+
 async function testDoppioEscInLettureSeparate() {
   const { wrapper, inoltrati, stato } = wrapperFinto();
 
@@ -305,6 +344,8 @@ const prove = [
   testSenzaRipresa,
   testCambioRamoNonRiapreIlSelettore,
   testDoppioEscInLettureSeparate,
+  testDoppioEscBattutoPiano,
+  testDueEscLontaniRestanoDueInterruzioni,
   testDoppioEscNellaStessaLettura,
   testDoppioEscWin32,
   testDoppioEscWin32NellaStessaLettura,

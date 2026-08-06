@@ -259,6 +259,46 @@ function testLaSchermataDiceTutto() {
   console.log('ok  testLaSchermataDiceTutto');
 }
 
+function testAvvisoSuEscEsc() {
+  // "esc esc" e' anche la scorciatoia di ripristino di Claude, e cb la copre
+  // solo se i due Esc arrivano vicini: premendoli piano si apre il menu di
+  // Claude, e da fuori sembra che cb non risponda. Va detto dove la si sceglie.
+  pulisci();
+  const stato = statoIniziale();
+  const nudo = (t) => t.replace(/\x1b\[[0-9;]*m/g, '');
+
+  stato.valori.scorciatoia = 'esc esc';
+  const conAvviso = nudo(disegnaImpostazioni(stato, 20, 100).join('\n'));
+  assert.match(conAvviso, /ripristino di Claude/, 'dice con cosa va a sovrapporsi');
+  assert.match(conAvviso, /1s/, "e quanto tempo si ha per il secondo Esc");
+
+  // L'avviso segue il valore, non la riga selezionata: e' una conseguenza della
+  // scelta, e vale anche col cursore altrove.
+  stato.indice = 0;
+  assert.match(
+    nudo(disegnaImpostazioni(stato, 20, 100).join('\n')),
+    /ripristino di Claude/,
+    'e resta visibile anche col cursore su un altra riga',
+  );
+
+  // Con un tasto funzione non c'e' niente da avvisare.
+  stato.valori.scorciatoia = 'f2';
+  assert.doesNotMatch(
+    nudo(disegnaImpostazioni(stato, 20, 100).join('\n')),
+    /ripristino di Claude/,
+    'con f2 l avviso non compare',
+  );
+
+  // Nemmeno l'avviso puo' sfondare la larghezza del terminale.
+  stato.valori.scorciatoia = 'esc esc';
+  for (const larghezza of [100, 60, 40]) {
+    for (const riga of disegnaImpostazioni(stato, 20, larghezza)) {
+      assert.ok(nudo(riga).length <= larghezza, `riga di ${nudo(riga).length} su ${larghezza}`);
+    }
+  }
+  console.log('ok  testAvvisoSuEscEsc');
+}
+
 // Il ciclo vero, con un terminale finto: alla chiusura le impostazioni devono
 // stare sul disco, o al prossimo avvio la schermata tornerebbe.
 async function testIlCicloSalvaSuDisco() {
@@ -283,6 +323,47 @@ async function testIlCicloSalvaSuDisco() {
   assert.deepEqual(leggiImpostazioni(), scelte, 'e contiene quello che ha restituito');
   assert.ok(LINGUE.includes(scelte.lingua), 'la lingua e una di quelle previste');
   console.log('ok  testIlCicloSalvaSuDisco');
+}
+
+// La schermata conosce tre voci; nel file ce ne sono altre, che si scrivono solo
+// a mano. Salvando l'oggetto intero le cancellava — perdita silenziosa, te ne
+// accorgi la volta dopo quando quello che avevi configurato non c'e' piu'.
+async function testChiudereNonCancellaLeAltreImpostazioni() {
+  pulisci();
+  scriviImpostazioni({
+    lingua: 'it',
+    radice: 'C:\\lavoro',
+    scorciatoia: 'f2',
+    giorniPulizia: 0,
+    promptDaRimandare: true,
+    profili: { gateway: { ANTHROPIC_BASE_URL: 'http://localhost:20128' } },
+  });
+
+  const ingresso = new EventEmitter();
+  ingresso.resume = () => {};
+  ingresso.pause = () => {};
+  const uscita = new EventEmitter();
+  uscita.write = () => {};
+  uscita.rows = 30;
+  uscita.columns = 100;
+
+  const attesa = configura({ ingresso, uscita });
+  for (const tasto of ['\x1b[B', '\x1b[B', '\x1b[B', '\r']) {
+    ingresso.emit('data', Buffer.from(tasto, 'latin1'));
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  await attesa;
+
+  const dopo = leggiImpostazioni();
+  assert.equal(dopo.giorniPulizia, 0, 'la soglia della pulizia resta');
+  assert.equal(dopo.promptDaRimandare, true, 'e la scelta sul prompt');
+  assert.deepEqual(
+    dopo.profili,
+    { gateway: { ANTHROPIC_BASE_URL: 'http://localhost:20128' } },
+    'e i profili, che si scrivono solo a mano',
+  );
+  assert.equal(dopo.scorciatoia, 'f2', 'mentre le tre voci della schermata sono salvate');
+  console.log('ok  testChiudereNonCancellaLeAltreImpostazioni');
 }
 
 // Il percorso digitato davvero, dai byte fino al file salvato. E' la prova che
@@ -331,9 +412,11 @@ testUnInvioCheArrivaDoppioNonRompeNiente();
 testTildeSiEspande();
 testEscTieneQuelloCheSiVede();
 testLaSchermataDiceTutto();
+testAvvisoSuEscEsc();
 await testIlCicloSalvaSuDisco();
+await testChiudereNonCancellaLeAltreImpostazioni();
 await testSiScriveDavveroDaTastiera();
 await testInvioDoppioDaiByte();
 
 pulisci();
-console.log('\n15 prove superate');
+console.log('\n17 prove superate');

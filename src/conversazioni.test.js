@@ -354,13 +354,53 @@ const respiro = () => new Promise((r) => setTimeout(r, 30));
 
   ingresso.emit('data', Buffer.from('\r')); // entra nell'albero
   ingresso.emit('data', Buffer.from('\r')); // apre il menu
-  assert.match(uscita.scritto, /riporta indietro/, 'il menu compare sopra l\'albero');
+  assert.match(uscita.scritto, /cosa riporto indietro/, 'il menu compare sopra l\'albero');
 
   ingresso.emit('data', Buffer.from('3')); // solo il codice
   const scelta = await attesa;
 
   assert.equal(scelta.modo, 'codice', 'la cifra sceglie la voce');
   assert.equal(scelta.riprendi, 'sess-figlia', 'la conversazione riparte dov\'era, senza tagli');
+}
+
+{
+  // Riprendendo una conversazione da fuori (`cb -r`) la scelta sul prompt si fa
+  // lo stesso, ma vale per quella volta: si parte sempre da «resta inviato» e
+  // non c'e' la casella che la salva.
+  const { ingresso, uscita } = terminaleFinto();
+  const attesa = selezionaConversazione({ cartella, famiglie, ingresso, uscita });
+  await respiro();
+
+  ingresso.emit('data', Buffer.from('\r')); // entra nell'albero
+  ingresso.emit('data', Buffer.from('\r')); // apre il menu
+
+  assert.match(uscita.scritto, /il prompt che hai scelto resta inviato/, 'si parte da inviato');
+  assert.doesNotMatch(uscita.scritto, /ricordati questa scelta/, 'e non c e la casella');
+
+  // La freccia cambia davvero lo stato.
+  const primaDellaFreccia = uscita.scritto.length;
+  ingresso.emit('data', Buffer.from('\x1b[D'));
+  assert.match(
+    uscita.scritto.slice(primaDellaFreccia),
+    /torna nella barra/,
+    'la freccia passa all altro stato',
+  );
+
+  // `r` invece non deve fare niente: qui non si ricorda.
+  const primaDellaErre = uscita.scritto.length;
+  ingresso.emit('data', Buffer.from('r'));
+  assert.doesNotMatch(
+    uscita.scritto.slice(primaDellaErre),
+    /ricordati questa scelta/,
+    'la casella non si accende con r',
+  );
+
+  ingresso.emit('data', Buffer.from('\r')); // conferma la voce preselezionata
+  const scelta = await attesa;
+
+  assert.equal(scelta.modo, 'entrambi', 'la voce preselezionata e ancora quella');
+  assert.equal(scelta.daRimandare, true, 'e la scelta sul prompt arriva al wrapper');
+  assert.equal(scelta.riprendi, null, 'col prompt da rimandare non c e la scorciatoia');
 }
 
 {

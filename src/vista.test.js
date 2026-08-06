@@ -729,17 +729,65 @@ function testMenuDelRipristino() {
   const disegno = schermata(vista, 'c', { colonne: 100, altezza: 30, menu: 0 });
   const testo = disegno.join('\n');
 
-  assert.match(testo, /riporta indietro/, 'annuncia la scelta');
-  assert.match(testo, /1\. conversazione e codice/, 'prima voce');
+  assert.match(testo, /cosa riporto indietro/, 'annuncia la scelta');
+  assert.match(testo, /1\. la conversazione e i file/, 'prima voce');
   assert.match(testo, /2\. solo la conversazione/, 'seconda voce');
-  assert.match(testo, /3\. solo il codice/, 'terza voce');
+  assert.match(testo, /3\. solo i file/, 'terza voce');
   assert.doesNotMatch(testo, /invio = riparti/, 'la barra dei tasti dell albero non c e piu');
   assert.match(testo, /rami di questa conversazione/, 'ma l albero resta a schermo');
+
+  // Dove finisce il prompt scelto e' una riga a parte, non una quarta voce: si
+  // vede lo stato attivo per intero, con accanto il tasto che lo cambia.
+  assert.match(testo, /←→ +il prompt che hai scelto resta inviato/, 'lo stato di partenza');
+  assert.match(testo, /r +\[ \] ricordati questa scelta/, 'e la casella, spenta');
+
+  const altro = schermata(vista, 'c', {
+    colonne: 100,
+    altezza: 30,
+    menu: 0,
+    daRimandare: true,
+    ricorda: true,
+  }).join('\n');
+  assert.match(altro, /il prompt che hai scelto torna nella barra/, 'l altro stato');
+  assert.match(altro, /\[×\] ricordati questa scelta/, 'e la casella accesa');
+
+  // Riprendendo una conversazione da fuori (`cb -r`) la scelta si fa lo stesso —
+  // frecce comprese — ma non si puo' far ricordare: sparisce solo la casella.
+  const senzaCasella = schermata(vista, 'c', {
+    colonne: 100,
+    altezza: 30,
+    menu: 0,
+    ricordabile: false,
+  }).join('\n');
+  assert.match(senzaCasella, /cosa riporto indietro/, 'il menu resta');
+  assert.match(senzaCasella, /←→ +il prompt che hai scelto resta inviato/, 'la scelta pure');
+  assert.match(senzaCasella, /←→ il prompt/, 'e la legenda continua a nominare le frecce');
+  assert.doesNotMatch(senzaCasella, /ricordati questa scelta/, 'ma la casella non c e');
+
+  // Anche accendendola per sbaglio: dove non si puo' ricordare non deve comparire.
+  const forzata = schermata(vista, 'c', {
+    colonne: 100,
+    altezza: 30,
+    menu: 0,
+    ricordabile: false,
+    ricorda: true,
+  }).join('\n');
+  assert.doesNotMatch(forzata, /ricordati questa scelta/, 'la casella non ricompare');
+
+  // L'altro stato si vede lo stesso: le frecce li' funzionano davvero.
+  const altroSenzaCasella = schermata(vista, 'c', {
+    colonne: 100,
+    altezza: 30,
+    menu: 0,
+    ricordabile: false,
+    daRimandare: true,
+  }).join('\n');
+  assert.match(altroSenzaCasella, /torna nella barra/, 'le frecce cambiano lo stato');
 
   // Il cursore del menu si vede: la voce selezionata e' l'unica marcata.
   const marcate = disegno.filter((riga) => riga.includes('▸'));
   assert.equal(marcate.length, 1, 'una sola voce selezionata');
-  assert.match(marcate[0], /conversazione e codice/, 'quella preselezionata e la prima');
+  assert.match(marcate[0], /la conversazione e i file/, 'quella preselezionata e la prima');
 
   const seconda = schermata(vista, 'c', { colonne: 100, altezza: 30, menu: 1 });
   assert.match(
@@ -752,6 +800,52 @@ function testMenuDelRipristino() {
   // sfaserebbe tutto il disegno.
   for (const colonne of [120, 80, 60, 40, 24]) {
     for (const riga of schermata(vista, 'c', { colonne, altezza: 24, menu: 2 })) {
+      const nudo = riga.replace(/\x1b\[[0-9;]*m/g, '');
+      assert.ok([...nudo].length <= colonne, `riga di ${[...nudo].length} colonne su ${colonne}`);
+    }
+  }
+}
+
+function testSceltaDelProfilo() {
+  // La scelta del profilo prende il posto della barra dei tasti come il menu, ma
+  // l'albero resta a schermo: la conversazione non si muove, cambia solo
+  // l'ambiente del processo — ed e' quello che la riga sotto l'elenco dice.
+  const albero = alberoFinto([['a', null, 'u'], ['b', 'a', 'a'], ['c', 'b', 'u']], 'c');
+  const vista = componiVista(albero);
+  const elenco = [null, 'gateway', 'lavoro'];
+
+  const disegno = schermata(vista, 'c', {
+    colonne: 100,
+    altezza: 30,
+    profili: { elenco, indice: 0 },
+  });
+  const testo = disegno.join('\n');
+
+  assert.match(testo, /con quale profilo/, 'annuncia la scelta');
+  assert.match(testo, /Claude, come l'hai lanciato/, 'il profilo base ha un nome leggibile');
+  assert.match(testo, /gateway/, 'e ci sono quelli configurati');
+  assert.match(testo, /la conversazione resta dov'è/, 'dice che la conversazione non si muove');
+  assert.match(testo, /rami di questa conversazione/, "e l'albero resta a schermo");
+  assert.doesNotMatch(testo, /invio = riparti/, 'la barra dei tasti dell albero non c e piu');
+
+  const marcate = disegno.filter((riga) => riga.includes('▸'));
+  assert.equal(marcate.length, 1, 'un solo profilo selezionato');
+  assert.match(marcate[0], /Claude, come l'hai lanciato/, 'e parte da quello attivo');
+
+  const secondo = schermata(vista, 'c', {
+    colonne: 100,
+    altezza: 30,
+    profili: { elenco, indice: 1 },
+  });
+  assert.match(
+    secondo.find((riga) => riga.includes('▸')),
+    /gateway/,
+    'l indice sposta il cursore',
+  );
+
+  // Nemmeno qui una riga puo' eccedere la larghezza del terminale.
+  for (const colonne of [120, 80, 60, 40, 24]) {
+    for (const riga of schermata(vista, 'c', { colonne, altezza: 24, profili: { elenco, indice: 2 } })) {
       const nudo = riga.replace(/\x1b\[[0-9;]*m/g, '');
       assert.ok([...nudo].length <= colonne, `riga di ${[...nudo].length} colonne su ${colonne}`);
     }
@@ -893,6 +987,7 @@ const prove = [
   testNessunaDiscesaAttraversaUnAltroRamo,
   testRigheCambiateNellIntestazione,
   testMenuDelRipristino,
+  testSceltaDelProfilo,
   testBarraETestateSiAccorcianoSuTerminaleStretto,
   testTaglioNonLasciaIlColoreAcceso,
   testGiunzioniAttraversateSiIlluminano,

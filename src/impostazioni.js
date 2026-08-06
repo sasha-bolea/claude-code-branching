@@ -61,6 +61,29 @@ export function scriviImpostazioni(impostazioni) {
   fs.writeFileSync(percorso, `${JSON.stringify(impostazioni, null, 2)}\n`, 'utf8');
 }
 
+// Cambia alcune impostazioni lasciando le altre come stanno.
+//
+// E' l'unico modo corretto di salvare da una schermata che non conosce tutte le
+// chiavi. `scriviImpostazioni` sostituisce il file intero: passandogli i soli
+// valori di una schermata, tutto il resto sparisce. E' successo davvero — la
+// schermata del primo avvio scriveva le sue tre voci e cancellava `profili`,
+// `promptDaRimandare` e `giorniPulizia`, cioe' tutto quello che si configura
+// solo a mano.
+//
+// parziali: le chiavi da cambiare
+export function aggiornaImpostazioni(parziali) {
+  scriviImpostazioni({ ...leggiImpostazioni(), ...parziali });
+}
+
+// Cambia una sola impostazione, lasciando le altre come stanno.
+// Serve alle caselle «ricordati questa scelta», che salvano una preferenza sola
+// senza sapere cosa altro c'e' nel file.
+// nome: chiave da scrivere
+// valore: valore da salvare
+export function salvaImpostazione(nome, valore) {
+  aggiornaImpostazioni({ [nome]: valore });
+}
+
 // Valore di un'impostazione, con la precedenza che conta:
 // variabile d'ambiente → file → predefinito.
 //

@@ -2,6 +2,32 @@ import { T } from './lingua.js';
 
 const ESC = 0x1b;
 
+// Millisecondi di attesa dopo il primo Esc per capire se ne arriva un secondo.
+// Trattenere il primo Esc e' necessario: se lo inoltrassimo subito, Claude
+// aprirebbe il proprio menu di ripristino prima che il secondo arrivi. Il costo
+// e' questo ritardo su un Esc singolo (interruzione), e il fatto che due Esc
+// battuti piu' lenti di cosi' non contino come scorciatoia.
+//
+// Sta qui e non nel wrapper perche' la schermata delle impostazioni lo nomina
+// nell'avviso su «esc esc», e il numero deve essere uno solo: importare il
+// wrapper da li' tirerebbe dentro node-pty per una costante.
+export const ATTESA_DOPPIO_ESC = 300;
+
+// Entro quanto una pressione vale ancora come parte della scorciatoia, **anche
+// se la precedente e' gia' stata inoltrata**.
+//
+// Scaduta l'attesa qui sopra, cb manda il primo Esc a Claude e per non perdere
+// l'interruzione deve farlo. Ma azzerando li' il conteggio, due Esc battuti piu'
+// piano diventavano due Esc singoli inoltrati a distanza — e Claude, che ha una
+// finestra sua piu' larga, li rimetteva insieme e apriva il **suo** menu. Cioe'
+// esattamente quello che cb esiste per sostituire.
+//
+// Contando le pressioni per un secondo intero, la coppia lenta la prende cb: il
+// secondo Esc non viene inoltrato, Claude ne ha visto uno solo e non apre
+// niente. Il prezzo e' che due interruzioni battute a meno di un secondo l'una
+// dall'altra aprono l'albero: chi le vuole davvero usa un tasto funzione.
+export const FINESTRA_SCORCIATOIA = 1000;
+
 // Esc in codifica kitty, con eventuali modificatori: ESC[27u, ESC[27;1u, …
 const RE_ESC_KITTY = /^\x1b\[27(;[0-9:]+)?u/;
 
@@ -299,7 +325,11 @@ export function azioniTesto(dati) {
 // 0x1b: leggere i byte grezzi farebbe scambiare per Esc anche il rilascio di un
 // tasto qualsiasi, e farebbe leggere come cifre le coordinate del mouse.
 // dati: Buffer letto da stdin
-// ritorna: array di { tipo: 'cifra'|'invio'|'cancella'|'annulla'|'freccia', valore? }
+// Le lettere che non sono direzioni escono come 'lettera': servono alle caselle
+// che si accendono con un tasto loro (la scelta ricordata, nel menu del
+// ripristino). Chi non le usa le ignora, come ogni altro tipo che non gli
+// riguarda.
+// ritorna: array di { tipo: 'cifra'|'invio'|'cancella'|'annulla'|'freccia'|'lettera', valore? }
 export function azioniTastiera(dati) {
   const azioni = [];
 
@@ -319,6 +349,15 @@ export function azioniTastiera(dati) {
         azioni.push({ tipo: 'freccia', valore: DIREZIONE_WASD[voce.tasto.carattere] });
       } else if (voce.tasto.carattere && /^[0-9]$/.test(voce.tasto.carattere)) {
         azioni.push({ tipo: 'cifra', valore: voce.tasto.carattere });
+      } else if (
+        // Stessa guardia delle direzioni: ctrl+d e alt+d sono scorciatoie di
+        // qualcun altro, non la lettera d.
+        !voce.tasto.ctrl &&
+        !voce.tasto.alt &&
+        voce.tasto.carattere &&
+        /^[a-z]$/.test(voce.tasto.carattere)
+      ) {
+        azioni.push({ tipo: 'lettera', valore: voce.tasto.carattere });
       }
       continue;
     }
@@ -336,8 +375,10 @@ export function azioniTastiera(dati) {
         // Le lettere di movimento valgono anche maiuscole (shift premuto). Le
         // versioni con Ctrl sono caratteri di controllo (0x01-0x1a), quindi qui
         // non arrivano mai e non c'e' da distinguerle.
-        const direzione = DIREZIONE_WASD[String.fromCharCode(byte).toLowerCase()];
+        const lettera = String.fromCharCode(byte).toLowerCase();
+        const direzione = DIREZIONE_WASD[lettera];
         if (direzione) azioni.push({ tipo: 'freccia', valore: direzione });
+        else if (/^[a-z]$/.test(lettera)) azioni.push({ tipo: 'lettera', valore: lettera });
       }
     }
   }
@@ -353,6 +394,7 @@ const COMANDI_LETTERA = {
   ' ': 'apri',
   c: 'conversazione', // cambia conversazione senza uscire da Claude
   p: 'progetto', // cambia cartella di lavoro
+  m: 'profilo', // rilancia la stessa conversazione con altre variabili d'ambiente
 };
 
 // Traduce i byte ricevuti in comandi per le schermate che si navigano: il

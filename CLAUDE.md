@@ -34,6 +34,7 @@ Sasha, singolo sviluppatore.
 | `src/stile.js` | Tavolozza dei colori, in un posto solo |
 | `src/lingua.js` | Tutti i testi a schermo, inglese e italiano; scelta con `CB_LINGUA` |
 | `src/impostazioni.js` | Lettura/scrittura di `~/.claude/cb/impostazioni.json`, precedenza dei valori |
+| `src/profili.js` | Insiemi di variabili d'ambiente con un nome: rilancia Claude altrove senza uscire dalla conversazione |
 | `src/pulizia.js` | I tre accumuli che non scadono: `cb prune` a mano, e la pulizia automatica |
 | `src/configura.js` | Schermata del primo avvio: lingua, cartella di lavoro, scorciatoia |
 | `src/prove.js` | Esecutore delle prove: un processo per file, lingua fissata a `it` |
@@ -107,6 +108,14 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   prima: `ESC[Vk;Sc;Uc;Kd;Cs;Rc_`, con eventi di rilascio inclusi (Esc premuto =
   `ESC[27;1;27;1;32;1_`). Mai confrontare i byte direttamente: usare `tokenizza` di
   `src/tasti.js`, che gestisce tutte e tre le codifiche.
+- **Inoltrare il primo Esc non deve azzerare il conteggio.** Scaduti i 300 ms cb manda il
+  primo Esc a Claude — e deve farlo, o si perde l'interruzione — ma azzerando lì le pressioni,
+  due Esc battuti più piano diventavano due Esc singoli inoltrati a distanza, e Claude, che ha
+  una finestra sua più larga, li rimetteva insieme aprendo il **suo** menu di ripristino: cioè
+  esattamente ciò che cb sostituisce. Le pressioni si contano per `FINESTRA_SCORCIATOIA`
+  (1 s, in `src/tasti.js`) indipendentemente da cosa è già stato inoltrato: così la coppia
+  lenta resta di cb, e Claude ne ha visto uno solo. Il prezzo, dichiarato nella schermata
+  delle impostazioni, è che due interruzioni a meno di un secondo aprono l'albero.
 - I tasti premuti in rapida successione **arrivano in un'unica lettura di stdin**: la
   logica deve tokenizzare il buffer, non trattarlo come un tasto solo. È l'errore che ha
   fatto passare `Esc Esc` a Claude aprendo il menu nativo.
@@ -146,6 +155,19 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   un'altra sessione _strettamente_ più recente**: dopo un clear il nostro smette di crescere e
   il nuovo continua, mentre i parenti restano fermi. A parità di istante vince quello che cb
   sta già seguendo.
+- **«Il più recente» non distingue un `/clear` da una seconda finestra.** Due finestre aperte
+  sulla stessa cartella danno lo stesso quadro di un clear — il nostro file fermo perché non
+  stiamo scrivendo, l'altro che cresce — e cb saltava sulla conversazione dell'altra finestra
+  (misurato: due volte in una mattina nel `diagnosi.log` del 2026-08-06, una dopo 41 minuti di
+  inattività). Poi bastava invio per biforcare la conversazione di qualcun altro. Le due
+  situazioni si distinguono da **quando la conversazione è cominciata**: il timestamp del
+  primo record (`inizioConversazione` in `src/percorsi.js`), non la data del filesystem.
+  **`birthtime` su Windows mente**: cancellando e ricreando un file con lo stesso nome entro
+  pochi secondi il sistema gli rimette la data vecchia (*file tunneling*, verificato) — e una
+  sessione troncata da cb copia record vecchi in un file nuovo, quindi la data di nascita
+  direbbe comunque la cosa sbagliata. Il filtro vale solo quando cb sa chi è: con
+  `--resume`/`--continue` l'id lo sceglie Claude e la conversazione da trovare è per forza
+  vecchia.
 - **`/clear` fa nascere un file di sessione nuovo**, non taglia dentro a quello corrente: le
   due sessioni hanno radici diverse, quindi non sono parenti e nel selettore compaiono come
   due conversazioni, che è giusto. Ma **l'id in mano al wrapper resta quello di prima**:
@@ -314,6 +336,12 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   README documenta sulle variabili continua a valere. `impostazioni.js` **non importa
   `lingua.js`**: è `lingua.js` a leggere di lì quale lingua è stata scelta, e importarsi a
   vicenda sarebbe un ciclo.
+- **Chi salva le impostazioni deve fondere, non sostituire.** `scriviImpostazioni` riscrive il
+  file intero: passandogli i valori di una schermata che ne conosce solo alcune, tutto il resto
+  spariva. La schermata del primo avvio cancellava così `profili`, `promptDaRimandare` e
+  `giorniPulizia` — cioè tutto quello che si configura a mano — a ogni passaggio da
+  `cb --impostazioni`, in silenzio e senza errori. Si salva con `aggiornaImpostazioni`, che
+  legge-fonde-scrive; `scriviImpostazioni` resta solo per la sostituzione integrale.
 - **Un flag nel profilo rende muta l'impostazione corrispondente.** `--tasto` vince sul file,
   ed è giusto — è la scelta più esplicita — ma lo snippet del README montava `--tasto f2`
   fisso, così chi sceglieva `esc esc` nella schermata continuava a vedere F2 e concludeva che
