@@ -46,9 +46,12 @@ const selezione = puntaRamoAttivo(vista);
 
 // Gli stessi tasti in piu' che annuncia l'overlay dentro la sessione: senza,
 // l'anteprima mostrerebbe una barra che nella realta' non si vede mai.
+// La schermata riempie l'altezza che le si dichiara: qui se ne tolgono due
+// righe per il riepilogo qui sotto, che altrimenti farebbe scorrere via
+// l'intestazione.
 const righe = schermata(vista, selezione, {
   colonne,
-  altezza,
+  altezza: Math.max(10, altezza - 2),
   extra: { lunga: T.albero.extraLunga, corta: T.albero.extraCorta },
   menu,
 });

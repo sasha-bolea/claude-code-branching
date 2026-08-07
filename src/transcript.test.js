@@ -312,6 +312,70 @@ async function testCompattazioneNonSpezzaLaConversazione() {
   fs.unlinkSync(file);
 }
 
+// I prompt che non vengono dalla tastiera non sono punti da cui ripartire.
+//
+// Il CLI scrive come record `user` anche le notifiche dei task in background, i
+// promemoria di sistema, le interruzioni e i comandi slash: nell'albero
+// occupavano un nodo a testa e coprivano i prompt veri (misurato a schermo: due
+// «notifica task» di fila fra due prompt scritti). La compattazione resta,
+// perche' dice dove la storia e' stata riassunta e ripartire da li' significa
+// qualcosa.
+async function testIlRumoreDiProtocolloNonEntraNellAlbero() {
+  const file = scriviTemporaneo([
+    msg('a', null, 'user', 'ciao, avvia il server'),
+    {
+      ...msg('t1', 'a', 'user', '[risultato tool]'),
+      toolUseResult: { structuredPatch: [{ lines: ['+una riga aggiunta'] }] },
+    },
+    msg('n1', 't1', 'user', '<task-notification>agente finito</task-notification>'),
+    msg('n2', 'n1', 'user', '<system-reminder>promemoria</system-reminder>'),
+    msg('c', 'n2', 'user', '<command-name>/clear</command-name>'),
+    msg('b', 'c', 'user', 'vedo tutto bianco'),
+  ]);
+
+  const albero = await leggiTranscript(file);
+  const { radici, perUuid } = alberoPrompt(albero);
+
+  assert.deepEqual([...perUuid.keys()], ['a', 'b'], 'restano solo i due prompt scritti');
+  assert.equal(radici.length, 1, 'e la conversazione resta una sola');
+  // Saltando quattro nodi in mezzo, il prompt vero deve riagganciarsi a quello
+  // prima: senza, si ritroverebbe senza padre e aprirebbe una radice sua.
+  assert.deepEqual(
+    radici[0].figli.map((f) => f.uuid),
+    ['b'],
+    'il prompt dopo le notifiche resta figlio di quello prima',
+  );
+  // Le righe cambiate dopo una notifica sono ancora del turno di chi ha scritto.
+  assert.equal(perUuid.get('a').aggiunte, 1, 'il turno conta il lavoro fatto');
+
+  fs.unlinkSync(file);
+}
+
+// L'interruzione non e' un punto da cui ripartire — si tornerebbe a un turno mai
+// finito — ma dice che la risposta del prompt che l'ha subita e' monca: va
+// segnata su quel prompt invece di occupare un nodo suo.
+async function testUnInterruzioneMarchiaIlPromptCheLHaSubita() {
+  const file = scriviTemporaneo([
+    msg('a', null, 'user', 'primo prompt'),
+    msg('r', 'a', 'assistant', 'risposta a meta'),
+    msg('i', 'r', 'user', '[Request interrupted by user]'),
+    msg('b', 'i', 'user', 'secondo prompt'),
+    msg('r2', 'b', 'assistant', 'risposta intera'),
+  ]);
+
+  const albero = await leggiTranscript(file);
+  const { radici, perUuid } = alberoPrompt(albero);
+
+  assert.deepEqual([...perUuid.keys()], ['a', 'b'], 'l interruzione non e un nodo');
+  assert.equal(perUuid.get('a').interrotto, true, 'ma marchia il prompt interrotto');
+  assert.equal(perUuid.get('b').interrotto, false, 'e solo quello');
+  // Il prompt dopo resta figlio di quello prima: l'interruzione in mezzo non
+  // deve spezzare la catena.
+  assert.deepEqual(radici[0].figli.map((f) => f.uuid), ['b'], 'la catena non si spezza');
+
+  fs.unlinkSync(file);
+}
+
 // Con --resume l'albero deve aprirsi sul ramo dove si e' lavorato per ultimo.
 //
 // L'id lo sceglie Claude e la famiglia arriva in ordine di cartella, quindi
@@ -358,6 +422,8 @@ async function testConResumeSiApreSulRamoPiuRecente() {
 const prove = [
   testConResumeSiApreSulRamoPiuRecente,
   testCompattazioneNonSpezzaLaConversazione,
+  testIlRumoreDiProtocolloNonEntraNellAlbero,
+  testUnInterruzioneMarchiaIlPromptCheLHaSubita,
   testAlberoConBiforcazione,
   testRigheCambiateDaiRisultatiTool,
   testUnioneRitrovaIlRamoDelPadre,

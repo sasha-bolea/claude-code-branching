@@ -11,13 +11,33 @@ export function alberoPrompt(albero) {
   const perUuid = new Map();
   const radici = [];
 
-  // Antenato prompt piu' vicino, risalendo parentUuid.
+  // Un prompt da cui abbia senso ripartire, cioe' scritto da chi sta davanti al
+  // terminale. Nel transcript sono record `user` anche le notifiche dei task in
+  // background, i promemoria di sistema, le interruzioni, i comandi slash e il
+  // loro output: occupavano un nodo a testa e coprivano i prompt veri.
+  //
+  // La compattazione resta, ed e' l'unica eccezione: non e' rumore di protocollo
+  // ma un fatto della conversazione — dice dove la storia e' stata riassunta — e
+  // ripartire da li' significa qualcosa.
+  const daMostrare = (nodo) =>
+    nodo.isPromptUtente &&
+    (nodo.isCompattazione === true || etichettaSpeciale((nodo.testo ?? '').trim()) === null);
+
+  // L'interruzione non e' un punto da cui ripartire — riprendendola si tornerebbe
+  // a un turno che non e' mai finito — ma dice qualcosa del prompt che l'ha
+  // subita: che la risposta e' monca. Va quindi segnata su quel prompt invece che
+  // occupare un nodo suo.
+  const eInterruzione = (nodo) =>
+    nodo.isPromptUtente && /^\[Request interrupted/.test((nodo.testo ?? '').trim());
+
+  // Antenato prompt piu' vicino, risalendo parentUuid. Salta anche i prompt che
+  // non si mostrano, o i figli di una notifica si ritroverebbero senza padre.
   const antenatoPrompt = (nodo) => {
     let corrente = nodo.parentUuid ? albero.nodi.get(nodo.parentUuid) : null;
     const visti = new Set();
     while (corrente && !visti.has(corrente.uuid)) {
       visti.add(corrente.uuid);
-      if (corrente.isPromptUtente) return corrente;
+      if (daMostrare(corrente)) return corrente;
       corrente = corrente.parentUuid ? albero.nodi.get(corrente.parentUuid) : null;
     }
     return null;
@@ -46,7 +66,10 @@ export function alberoPrompt(albero) {
       aggiunte += corrente.aggiunte ?? 0;
       rimozioni += corrente.rimozioni ?? 0;
       for (const figlio of figliDi.get(corrente.uuid) ?? []) {
-        if (!figlio.isPromptUtente) scendi(figlio);
+        // Il turno finisce al prompt successivo, e i prompt che non si mostrano
+        // non ne aprono uno: quello che Claude cambia dopo una notifica di task
+        // e' ancora roba del turno di chi ha scritto.
+        if (!daMostrare(figlio)) scendi(figlio);
       }
     };
 
@@ -55,7 +78,7 @@ export function alberoPrompt(albero) {
   };
 
   for (const nodo of albero.nodi.values()) {
-    if (!nodo.isPromptUtente) continue;
+    if (!daMostrare(nodo)) continue;
     perUuid.set(nodo.uuid, {
       uuid: nodo.uuid,
       // Il riassunto di una compattazione e' un record 'user' lungo migliaia di
@@ -64,6 +87,7 @@ export function alberoPrompt(albero) {
       // conversazione. Il punto va segnalato per quello che e'.
       testo: nodo.isCompattazione ? T.albero.compattazione : nodo.testo,
       isCompattazione: nodo.isCompattazione === true,
+      interrotto: false, // riempito sotto, dal prompt che l'interruzione ha subito
       timestamp: nodo.timestamp,
       ...cambiamentiDelTurno(nodo),
       figli: [],
@@ -71,7 +95,13 @@ export function alberoPrompt(albero) {
   }
 
   for (const nodo of albero.nodi.values()) {
-    if (!nodo.isPromptUtente) continue;
+    if (eInterruzione(nodo)) {
+      const subito = antenatoPrompt(nodo);
+      const voce = subito ? perUuid.get(subito.uuid) : null;
+      if (voce) voce.interrotto = true;
+      continue;
+    }
+    if (!daMostrare(nodo)) continue;
     const voce = perUuid.get(nodo.uuid);
     const padre = antenatoPrompt(nodo);
     const vocePadre = padre ? perUuid.get(padre.uuid) : null;

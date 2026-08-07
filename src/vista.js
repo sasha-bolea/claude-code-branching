@@ -1,5 +1,5 @@
 import { alberoPrompt, testoLeggibile, uuidRamoAttivo } from './albero.js';
-import { arancione, arancioneForte, grigio, normale, rosso, verde } from './stile.js';
+import { arancione, arancioneForte, bianco, grigio, normale, rosso, verde } from './stile.js';
 import { T } from './lingua.js';
 
 // Vista orizzontale dell'albero dei rami: i prompt scorrono da sinistra a
@@ -562,6 +562,55 @@ function tagliaVisibile(riga, massimo) {
   return tagliata && colorato ? `${risultato}\x1b[0m` : risultato;
 }
 
+// Colonne occupate a schermo da una riga gia' colorata: le sequenze ANSI non
+// contano. Serve a riempire il riquadro fino al bordo — misurando la stringa si
+// riempirebbe di meno per ogni sequenza contenuta, e il bordo destro
+// traballerebbe a ogni riga colorata diversamente.
+// riga: testo, colorato o no
+// ritorna: numero di caratteri visibili
+function lunghezzaVisibile(riga) {
+  return [...riga.replace(/\x1b\[[0-9;]*m/g, '')].length;
+}
+
+// Riga orizzontale a tutta larghezza, quella che separa le fasce dello schermo.
+// In grigio: un separatore non e' contenuto, e' il bordo fra due contenuti — a
+// piena luminosita' pesava quanto le righe che divide.
+// larghezza: colonne visibili da riempire
+const separatore = (larghezza) => `  ${grigio('─'.repeat(Math.max(10, larghezza)))}`;
+
+// Glifi del riquadro attorno al prompt scelto: angoli arrotondati come la barra
+// di stato di Claude Code, cosi' le due interfacce si somigliano invece di
+// contendersi lo schermo.
+const BOX = { alto: '╭', altoDestra: '╮', basso: '╰', bassoDestra: '╯', lato: '│' };
+
+// Tasti da colorare nella barra in fondo. Una voce e' fatta di tasti seguiti da
+// cosa fanno ("←→ ad avanti e indietro"), e le voci sono separate da due spazi o
+// piu': si colora la testa di ogni voce e ci si ferma alla prima parola che non
+// e' un tasto. Riconoscerli cosi' — invece di spezzare ogni stringa in due dentro
+// lingua.js — tiene le frasi leggibili in un pezzo solo a chi le traduce.
+const RE_TASTO = /^(?:[←→↑↓]+|ad|ws|invio|enter|esc|\d-\d|[a-z])$/;
+
+// Colora di arancione i tasti di una barra, lasciando al primo piano le
+// spiegazioni: e' quello che si cerca con l'occhio quando si vuole solo sapere
+// che cosa premere.
+// barra: testo gia' composto, senza colori
+// ritorna: lo stesso testo con i tasti vestiti
+function coloraTasti(barra) {
+  return barra
+    .split(/( {2,})/)
+    .map((voce) => {
+      if (/^ +$/.test(voce) || voce === '') return voce;
+      const parole = voce.split(' ');
+      let quanti = 0;
+      while (quanti < parole.length && RE_TASTO.test(parole[quanti])) quanti += 1;
+      if (quanti === 0) return normale(voce);
+      const tasti = parole.slice(0, quanti).join(' ');
+      const resto = parole.slice(quanti).join(' ');
+      return resto ? `${arancione(tasti)} ${normale(resto)}` : arancione(tasti);
+    })
+    .join('');
+}
+
 // Sceglie la prima delle varianti che sta nello spazio disponibile, dalla piu'
 // ricca alla piu' scarna. Se non entra nemmeno l'ultima la si taglia: meglio una
 // riga mozza che una che va a capo, perche' il capo sfasa tutto il disegno sotto.
@@ -571,6 +620,26 @@ function tagliaVisibile(riga, massimo) {
 export function primaCheEntra(varianti, spazio) {
   const scelta = varianti.find((testo) => testo.length <= spazio);
   return scelta ?? varianti[varianti.length - 1].slice(0, Math.max(0, spazio));
+}
+
+// Chiude la pagina tenendo l'ultima riga — barra dei tasti, legenda del menu o
+// dei profili — in fondo allo schermo e non subito sotto il contenuto: il testo
+// del prompt scelto e lo storico cambiano altezza a ogni spostamento del
+// cursore, e una barra che sale e scende si legge peggio di una ferma.
+// Il contenuto si taglia prima del riempimento, o a sparire sarebbe proprio la
+// riga che dice come si esce.
+// righe: pagina senza l'ultima riga
+// ultima: riga da tenere in fondo
+// altezza: righe del terminale
+// colonne: colonne del terminale
+// ritorna: array alto esattamente `altezza`, nessuna riga piu' larga di `colonne`
+function chiudiPagina(righe, ultima, altezza, colonne) {
+  // Due righe in fondo, non una: il separatore stacca la barra dal riempimento,
+  // altrimenti dopo una pagina corta sembra galleggiare in mezzo al vuoto.
+  const corpo = righe.slice(0, Math.max(0, altezza - 2));
+  while (corpo.length < altezza - 2) corpo.push('');
+  corpo.push(separatore(colonne - 4), ultima);
+  return corpo.map((riga) => tagliaVisibile(riga, colonne));
 }
 
 // Calcola una finestra di `quante` unita' su un totale di `totale`, tenendo
@@ -641,8 +710,19 @@ export function schermata(
   } = {},
 ) {
   const scelto = vista.perUuid.get(selezione);
-  const testoScelto = aCapo(scelto?.testo, colonne - 6, 3);
+  // Larghezza del riquadro e dello spazio scrivibile dentro: due colonne di
+  // rientro, i due lati, e uno spazio di respiro per parte.
+  const larghezzaBox = Math.max(10, colonne - 4);
+  const dentroBox = Math.max(6, larghezzaBox - 4);
+  const testoScelto = aCapo(scelto?.testo, dentroBox, 3);
   const posizione = vista.posizioni.get(selezione) ?? { riga: 0, colonna: 0 };
+
+  // Una riga dentro il riquadro: il contenuto arriva gia' colorato, quindi il
+  // riempimento fino al bordo si misura sulle colonne visibili.
+  const rigaBox = (contenuto) => {
+    const vuoto = ' '.repeat(Math.max(0, dentroBox - lunghezzaVisibile(contenuto)));
+    return `  ${arancione(BOX.lato)} ${contenuto}${vuoto} ${arancione(BOX.lato)}`;
+  };
 
   // Righe che non sono ne' albero ne' storico: intestazione, legenda, separatori,
   // il prompt selezionato, l'intestazione dello storico, la barra dei tasti e gli
@@ -655,7 +735,10 @@ export function schermata(
   let righeMenu = 0;
   if (menu !== null) righeMenu = VOCI_RIPRISTINO.length + 2 + (ricordabile ? 4 : 3);
   else if (profili) righeMenu = profili.elenco.length + 4;
-  const fisse = 13 + testoScelto.length + righeMenu;
+  // 17 e non 13: i due separatori attorno alla legenda in cima, quello sopra la
+  // barra in fondo e i due bordi del riquadro, meno il separatore fra albero e
+  // prompt che il riquadro ha sostituito.
+  const fisse = 17 + testoScelto.length + righeMenu;
   const disponibili = Math.max(4, altezza - fisse);
   const spazioAlbero = Math.min(vista.griglia.length, Math.max(3, Math.ceil(disponibili * 0.6)));
   const spazioStoria = Math.max(0, disponibili - spazioAlbero);
@@ -674,9 +757,13 @@ export function schermata(
 
   // La legenda e' l'unica riga in grigio: tutto il resto sta al primo piano del
   // terminale, cioe' alla massima luminosita' disponibile.
+  // La legenda sta fra due separatori: e' una fascia sua, staccata dal titolo
+  // sopra e dall'albero sotto, e si salta con l'occhio quando non serve.
   const righe = [
     `  ${arancioneForte('cb')}  ${normale(primaCheEntra([titolo, T.albero.titoloCorto], spazioColonne - 4))}`,
+    separatore(larghezzaBox),
     `  ${grigio(primaCheEntra(LEGENDA, spazioColonne))}`,
+    separatore(larghezzaBox),
     '',
   ];
 
@@ -695,14 +782,28 @@ export function schermata(
     righe.push(`  ${normale(`${prima}${' '.repeat(stacco)}${dopo}`.replace(/\s+$/, ''))}`);
   }
 
-  righe.push('', `  ${normale('─'.repeat(Math.max(10, colonne - 4)))}`);
+  // Il prompt scelto sta in un riquadro arancione, e non piu' sotto un
+  // separatore: e' il punto su cui si decide, e un bordo chiuso lo isola dal
+  // resto meglio di una riga che divide e basta. Il separatore fra albero e
+  // prompt e' sparito per questo — due stacchi di fila raddoppiavano il confine.
+  //
   // Fra l'ora e "riparti da qui" stanno le righe di codice cambiate in quel
   // turno: dice quanto pesa il punto su cui sta il cursore prima di sceglierlo.
   const cambiate = cambiamenti(scelto);
+  // L'interruzione sta qui e non fra i nodi: da un turno fermato a meta' non si
+  // riparte, ma sceglierlo porta indietro una risposta monca — e va saputo prima
+  // di premere invio, non dopo.
+  const interrotto = scelto?.interrotto ? `${normale(T.albero.interrotto)}  ` : '';
+  righe.push('', `  ${arancione(`${BOX.alto}${'─'.repeat(larghezzaBox - 2)}${BOX.altoDestra}`)}`);
   righe.push(
-    `  ${arancione(quando(scelto))}  ${cambiate ? `${cambiate}  ` : ''}${normale(T.albero.ripartiDaQui)}`,
+    rigaBox(
+      `${arancione(quando(scelto))}  ${cambiate ? `${cambiate}  ` : ''}${interrotto}${normale(T.albero.ripartiDaQui)}`,
+    ),
   );
-  for (const riga of testoScelto) righe.push(`  ${arancioneForte(riga)}`);
+  // Il testo in bianco: dentro un riquadro arancione, l'arancione di prima si
+  // confondeva con il bordo invece di staccarsene.
+  for (const riga of testoScelto) righe.push(rigaBox(bianco(riga)));
+  righe.push(`  ${arancione(`${BOX.basso}${'─'.repeat(larghezzaBox - 2)}${BOX.bassoDestra}`)}`);
 
   if (spazioStoria > 0) {
     const storia = antenati(vista, selezione);
@@ -711,7 +812,9 @@ export function schermata(
     const larghezzaTesto = spazioColonne - 4 - quando(null).length;
     for (const voce of storia.slice(0, spazioStoria)) {
       const testo = testoLeggibile(voce.testo).slice(0, Math.max(10, larghezzaTesto));
-      righe.push(`    ${normale(quando(voce))}  ${normale(testo)}`);
+      // L'ora in grigio, il testo no: in un elenco si scorre quello che c'e'
+      // scritto, e la colonna delle ore accanto pesava quanto i prompt.
+      righe.push(`    ${grigio(quando(voce))}  ${normale(testo)}`);
     }
   }
 
@@ -727,8 +830,12 @@ export function schermata(
       righe.push(indice === profili.indice ? arancioneForte(riga) : normale(riga));
     });
     righe.push('', `  ${grigio(T.albero.profiloResta.slice(0, spazioColonne))}`);
-    righe.push(`  ${grigio(primaCheEntra(T.albero.legendaProfili, spazioColonne))}`);
-    return righe.map((riga) => tagliaVisibile(riga, colonne));
+    return chiudiPagina(
+      righe,
+      `  ${coloraTasti(primaCheEntra(T.albero.legendaProfili, spazioColonne))}`,
+      altezza,
+      colonne,
+    );
   }
 
   // Scelta di cosa riportare indietro: prende il posto della barra dei tasti, con
@@ -759,8 +866,12 @@ export function schermata(
       );
     }
 
-    righe.push('', `  ${grigio(primaCheEntra(T.albero.legendaMenu, spazioColonne))}`);
-    return righe.map((riga) => tagliaVisibile(riga, colonne));
+    return chiudiPagina(
+      righe,
+      `  ${coloraTasti(primaCheEntra(T.albero.legendaMenu, spazioColonne))}`,
+      altezza,
+      colonne,
+    );
   }
 
   // Barra dei tasti, in tre lunghezze: su un terminale stretto si accorcia invece
@@ -772,33 +883,33 @@ export function schermata(
   const pezzi = (...voci) => voci.filter(Boolean).join('   ');
   const conExtra = extra.corta
     ? [
-        pezzi(T.albero.avantiIndietro, T.albero.cambiaRamo, cosaFaInvio, extra.lunga, `esc = ${esc.lunga}`),
-        pezzi(T.albero.avantiIndietro, T.albero.ramo, cosaFaInvio, extra.corta, `esc = ${esc.corta}`),
-        pezzi(T.albero.frecce, T.albero.ramo, cosaFaInvio, extra.corta, `esc = ${esc.corta}`),
-        pezzi(T.albero.frecce, T.albero.ramo, T.albero.invioRiparti, extra.corta, `esc = ${esc.corta}`),
+        pezzi(T.albero.avantiIndietro, T.albero.cambiaRamo, cosaFaInvio, extra.lunga, `esc ${esc.lunga}`),
+        pezzi(T.albero.avantiIndietro, T.albero.ramo, cosaFaInvio, extra.corta, `esc ${esc.corta}`),
+        pezzi(T.albero.frecce, T.albero.ramo, cosaFaInvio, extra.corta, `esc ${esc.corta}`),
+        pezzi(T.albero.frecce, T.albero.ramo, T.albero.invioRiparti, extra.corta, `esc ${esc.corta}`),
       ]
     : [];
 
-  righe.push(
-    '',
-    `  ${normale(
+  // La rete di sicurezza sulla larghezza la mette chiudiPagina: nessuna riga
+  // puo' eccedere le colonne del terminale, qualunque cosa la componga. Una riga
+  // piu' lunga verrebbe mandata a capo, e il capo sfasa tutto il disegno sotto.
+  return chiudiPagina(
+    righe,
+    `  ${coloraTasti(
       primaCheEntra(
         [
           ...conExtra,
-          pezzi(T.albero.avantiIndietro, T.albero.cambiaRamo, cosaFaInvio, `esc = ${esc.lunga}`),
-          pezzi(T.albero.avantiIndietroCorto, T.albero.ramo, cosaFaInvio, `esc = ${esc.corta}`),
-          pezzi(T.albero.frecce, T.albero.frecceCorte, T.albero.invioRiparti, `esc = ${esc.corta}`),
+          pezzi(T.albero.avantiIndietro, T.albero.cambiaRamo, cosaFaInvio, `esc ${esc.lunga}`),
+          pezzi(T.albero.avantiIndietroCorto, T.albero.ramo, cosaFaInvio, `esc ${esc.corta}`),
+          pezzi(T.albero.frecce, T.albero.frecceCorte, T.albero.invioRiparti, `esc ${esc.corta}`),
           T.albero.barraMinima(esc.corta),
         ],
         spazioColonne,
       ),
     )}`,
+    altezza,
+    colonne,
   );
-
-  // Rete di sicurezza: nessuna riga puo' eccedere la larghezza del terminale,
-  // qualunque cosa la componga. Una riga piu' lunga verrebbe mandata a capo, e il
-  // capo sfasa tutto il disegno da lì in giu'.
-  return righe.map((riga) => tagliaVisibile(riga, colonne));
 }
 
 // Manda a capo un testo su una larghezza data, spezzando fra le parole.

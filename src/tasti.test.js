@@ -4,7 +4,11 @@ import {
   contaInTesta,
   analizzaScorciatoia,
   azioniTastiera,
+  azioniNavigazione,
+  azioniCoda,
   VK_ESCAPE,
+  MODI_MOUSE,
+  SPEGNI_MODI_INPUT,
 } from './tasti.js';
 
 const ESC = 0x1b;
@@ -135,6 +139,93 @@ function testAzioniIgnoranoIlMouse() {
   // devono finire nel numero digitato.
   const mouse = testo(`${esc}[<35;74;20M`);
   assert.deepEqual(azioniTastiera(mouse), [], 'le coordinate del mouse non sono cifre');
+  // Un clic non muove il cursore: l'albero non ha un bersaglio da cliccare.
+  assert.deepEqual(azioniTastiera(testo(`${esc}[<0;74;20M`)), [], 'il clic non e un movimento');
+}
+
+// La rotella scorre la conversazione come le frecce sinistra e destra: l'albero
+// e' orizzontale, e sono i rami — non i turni — a stare uno sotto l'altro.
+function testRotellaScorreOrizzontalmente() {
+  const sinistra = [{ tipo: 'freccia', valore: 'sinistra' }];
+  const destra = [{ tipo: 'freccia', valore: 'destra' }];
+
+  // Codifica SGR (modo ?1006), quella che cb chiede.
+  assert.deepEqual(azioniTastiera(testo(`${esc}[<64;74;20M`)), sinistra, 'rotella su');
+  assert.deepEqual(azioniTastiera(testo(`${esc}[<65;74;20M`)), destra, 'rotella giu');
+  // Rotella orizzontale: trackpad e mouse con la rotella inclinabile.
+  assert.deepEqual(azioniTastiera(testo(`${esc}[<66;74;20M`)), sinistra, 'rotella a sinistra');
+  assert.deepEqual(azioniTastiera(testo(`${esc}[<67;74;20M`)), destra, 'rotella a destra');
+  // Con shift premuto il codice porta il bit 4: senza toglierlo non si
+  // riconoscerebbe piu' la rotella.
+  assert.deepEqual(azioniTastiera(testo(`${esc}[<68;74;20M`)), sinistra, 'shift+rotella su');
+  // Codifica storica: ESC[M e tre byte, con 32 sommato a ciascuno. La usa un
+  // terminale che non capisce ?1006.
+  assert.deepEqual(
+    azioniTastiera(buf(ESC, 0x5b, 0x4d, 64 + 32, 10 + 32, 5 + 32)),
+    sinistra,
+    'rotella su nella codifica vecchia',
+  );
+  // Due giri di rotella in una lettura sola sono due movimenti, non uno.
+  assert.deepEqual(
+    azioniTastiera(testo(`${esc}[<65;74;20M${esc}[<65;74;20M`)),
+    [...destra, ...destra],
+    'due scorrimenti nella stessa lettura',
+  );
+
+  // Anche l'albero dentro il selettore delle conversazioni si scorre con la
+  // rotella: legge con azioniNavigazione, che parla per stringhe.
+  assert.deepEqual(azioniNavigazione(testo(`${esc}[<64;74;20M`)), ['sinistra']);
+  assert.deepEqual(azioniNavigazione(testo(`${esc}[<65;74;20M`)), ['destra']);
+  assert.deepEqual(azioniNavigazione(testo(`${esc}[<0;74;20M`)), [], 'il clic non naviga');
+}
+
+// La coda dei prompt e' l'unica schermata dove si scrive testo **e** si naviga
+// un elenco: serve un decodificatore suo, perche' azioniTesto le frecce le
+// scarta e azioniTastiera mappa w/a/s/d sulle direzioni — che in un prompt
+// servono come lettere.
+function testAzioniDellaCoda() {
+  // Le maiuscole contano: un prompt e' testo, non una scorciatoia. In
+  // win32-input-mode `carattere` arriva gia' minuscolo, quindi si usa `grezzo`.
+  assert.deepEqual(azioniCoda(win32(65, 65)), [{ tipo: 'carattere', valore: 'A' }], 'la A resta A');
+  assert.deepEqual(azioniCoda(testo('Ciao')), [
+    { tipo: 'carattere', valore: 'C' },
+    { tipo: 'carattere', valore: 'i' },
+    { tipo: 'carattere', valore: 'a' },
+    { tipo: 'carattere', valore: 'o' },
+  ]);
+
+  // w/a/s/d sono lettere, non direzioni: e' la differenza con azioniTastiera.
+  assert.deepEqual(azioniCoda(testo('was')), [
+    { tipo: 'carattere', valore: 'w' },
+    { tipo: 'carattere', valore: 'a' },
+    { tipo: 'carattere', valore: 's' },
+  ]);
+
+  // Le frecce invece navigano l'elenco, in tutt'e due le codifiche.
+  assert.deepEqual(azioniCoda(testo(`${esc}[B`)), [{ tipo: 'freccia', valore: 'giu' }]);
+  assert.deepEqual(azioniCoda(win32(38, 0)), [{ tipo: 'freccia', valore: 'su' }]);
+
+  // Backspace cancella una lettera del testo che stai scrivendo: un tasto solo
+  // non puo' fare due cose a seconda di quanto hai scritto.
+  assert.deepEqual(azioniCoda(testo('\x7f')), [{ tipo: 'cancella' }]);
+
+  // Canc esce dall'interfaccia, qui come in ogni altra schermata: e' l'unico
+  // tasto che vale lo stesso ovunque, ed e' quello che lo rende utile. Togliere
+  // un prompt e' ctrl+canc — l'azione frequente paga il prezzo della coerenza.
+  assert.deepEqual(azioniCoda(testo(`${esc}[3~`)), [{ tipo: 'esci' }], 'canc in ANSI');
+  assert.deepEqual(azioniCoda(win32(46, 0)), [{ tipo: 'esci' }], 'e in win32');
+  // ESC[3;5~: il parametro e' 1 + i modificatori, e 4 e' ctrl.
+  assert.deepEqual(azioniCoda(testo(`${esc}[3;5~`)), [{ tipo: 'togli' }], 'ctrl+canc in ANSI');
+  assert.deepEqual(azioniCoda(win32(46, 0, 1, 8)), [{ tipo: 'togli' }], 'e in win32');
+  // Shift+canc non e' ctrl: non deve togliere per sbaglio.
+  assert.deepEqual(azioniCoda(testo(`${esc}[3;2~`)), [{ tipo: 'esci' }], 'shift+canc esce');
+
+  assert.deepEqual(azioniCoda(win32(27, 27)), [{ tipo: 'annulla' }]);
+  assert.deepEqual(azioniCoda(win32(65, 65, 0)), [], 'il rilascio non scrive niente');
+
+  // La rotella scorre l'elenco, che qui e' verticale: su e giu', non i lati.
+  assert.deepEqual(azioniCoda(testo(`${esc}[<64;10;5M`)), [{ tipo: 'freccia', valore: 'su' }]);
+  assert.deepEqual(azioniCoda(testo(`${esc}[<65;10;5M`)), [{ tipo: 'freccia', valore: 'giu' }]);
 }
 
 function testAzioniFrecce() {
@@ -232,6 +323,26 @@ function testAzioniByteGrezzi() {
   assert.deepEqual(azioniTastiera(buf(ESC)), [{ tipo: 'annulla' }]);
 }
 
+function testSpegneOgniModoDiInput() {
+  // Un modo dimenticato qui e' una shell inutilizzabile dopo un'uscita anomala:
+  // il terminale continua a mandare le sue sequenze e PowerShell le stampa.
+  // Aggiungendo un modo a MODI_MOUSE la prova cade da sola.
+  for (const modo of MODI_MOUSE) {
+    assert.ok(SPEGNI_MODI_INPUT.includes(`${esc}[?${modo}l`), `manca lo spegnimento di ?${modo}`);
+  }
+  assert.ok(SPEGNI_MODI_INPUT.includes(`${esc}[?9001l`), 'manca win32-input-mode');
+  assert.ok(SPEGNI_MODI_INPUT.includes(`${esc}[>u`), 'manca il protocollo kitty');
+  assert.ok(SPEGNI_MODI_INPUT.includes(`${esc}[?1004l`), 'manca il riporto del focus');
+  assert.ok(SPEGNI_MODI_INPUT.includes(`${esc}[?2004l`), 'manca il bracketed paste');
+  // L'unica cosa che la sequenza accende e' il cursore: qualsiasi altro `h`
+  // riaccenderebbe proprio cio' che si sta spegnendo.
+  assert.deepEqual(
+    SPEGNI_MODI_INPUT.match(/\x1b\[\?\d+h/g),
+    [`${esc}[?25h`],
+    'la sequenza non deve accendere altro che il cursore',
+  );
+}
+
 const prove = [
   testEscGrezzoSingolo,
   testDoppioEscGrezzoStessoBuffer,
@@ -251,10 +362,13 @@ const prove = [
   testAzioniIgnoranoIRilasci,
   testAzioniCifreEInvioWin32,
   testAzioniIgnoranoIlMouse,
+  testRotellaScorreOrizzontalmente,
+  testAzioniDellaCoda,
   testAzioniFrecce,
   testTastiFunzione,
   testAzioniWasd,
   testAzioniByteGrezzi,
+  testSpegneOgniModoDiInput,
 ];
 
 for (const prova of prove) {

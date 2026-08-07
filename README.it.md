@@ -123,7 +123,7 @@ hai scelto**.
 `~/.claude/cb/impostazioni.json` (`promptDaRimandare`) e il menu si apre già così le volte
 dopo.
 
-Riprendendo una conversazione da fuori (`cb -r`, `cb --scegli`, i tasti `c`/`p`) la scelta
+Riprendendo una conversazione da fuori (`cb -r`, `cb --scegli`, il tasto `c`) la scelta
 sul prompt si fa lo stesso, frecce comprese: sparisce solo la casella. Lì vale per quella
 volta, e si riparte **sempre** da «resta inviato» — una preferenza ricordata deciderebbe per
 te proprio riaprendo una conversazione di mesi fa, cioè quando non te ne ricordi.
@@ -190,9 +190,9 @@ fork ne crea uno nuovo, i rami della stessa conversazione compaiono come convers
 diverse. Qui le sessioni si raggruppano per uuid di radice, e una conversazione è tutto il
 suo albero.
 
-Le stesse due schermate si riaprono a sessione avviata premendo `c` o `p` — dall'albero, o
-dall'avviso che compare quando un transcript ancora non c'è. Portano tutt'e due al navigatore
-delle cartelle, e lì `r` alterna la ripresa di una conversazione e l'avvio di una nuova. Così
+Le stesse due schermate si riaprono a sessione avviata premendo `c` — dall'albero, o
+dall'avviso che compare quando un transcript ancora non c'è. Porta al navigatore delle
+cartelle, e lì `r` alterna la ripresa di una conversazione e l'avvio di una nuova. Così
 si cambia conversazione, si cambia progetto o si riparte da zero senza chiudere Claude.
 
 Se la variabile `CB_CARTELLA_SCELTA` punta a un file, cb ci scrive la cartella scelta: chi
@@ -222,28 +222,44 @@ storia che quel punto porta con sé fino alla radice.
 
 ```
   cb  rami di questa conversazione
-  ◯ riparti da qui   ┳ biforcazione   arancione = storia di questo punto
+  ──────────────────────────────────────────────────────────────────────
+  ◯ riparti da qui   ┳ biforcazione   © compattata
+  ──────────────────────────────────────────────────────────────────────
 
   ⬤━━━⬤━━━⬤━━━⬤━┳━⬤━━━⬤━━━⬤━━━⬤
                 ┗━⬤━┳━⬤━━━◯
                     ┗━⬤━━━⬤━━━⬤
 
-  ───────────────────────────────────────────────────────────────────
-  24-07 15:51  riparti da qui
-  l'app è diventata lentissima, il rendering della lista si blocca
+  ╭────────────────────────────────────────────────────────────────────╮
+  │ 24-07 15:51  +42 -7  riparti da qui                                │
+  │ l'app è diventata lentissima, il rendering della lista si blocca    │
+  ╰────────────────────────────────────────────────────────────────────╯
 
   precedenti: 3
     24-07 15:40  aggiungi il filtro per data
-    24-07 15:12  /login
+    24-07 15:12  rimetti l'ordinamento per nome
     24-07 15:10  facciamo la lista dei clienti
 
-  ←→ ad avanti e indietro   ↑↓ ws cambia ramo   invio = riparti   esc = torna a Claude
+  ──────────────────────────────────────────────────────────────────────
+  ←→ ad avanti e indietro   ↑↓ ws ramo   invio riparti   p coda   esc esci
 ```
+
+Nell'albero ci sono solo i prompt che hai scritto tu. Le notifiche dei task in background,
+i promemoria di sistema, i comandi slash e il loro output non diventano nodi: nel transcript
+sono record `user` come gli altri, ma non sono punti da cui abbia senso ripartire. Restano le
+compattazioni (`©`), che dicono dove la storia è stata riassunta. Un turno che hai interrotto
+non è un nodo a sé: il prompt che l'ha subita porta scritto `⎋ interrotto`, così sai che la
+risposta che ti porti dietro è monca.
 
 `←` `→` risalgono e scendono la conversazione, `↑` `↓` passano da un ramo all'altro della
 stessa biforcazione. In alternativa `a` `d` e `w` `s`, se la mano preferisce restare sulle
-lettere. Il cursore parte da dove sei adesso. Invio fa nascere un ramo nuovo da quel punto:
-quello di prima resta dov'è.
+lettere. La rotella del mouse scorre la conversazione come `←` `→`. Il cursore parte da dove
+sei adesso. Invio fa nascere un ramo nuovo da quel punto: quello di prima resta dov'è.
+
+**Due tasti per uscire, in ogni schermata di cb.** `esc` risale di un passo: dall'elenco delle
+conversazioni torni alle cartelle, dal menu del ripristino torni all'albero — sbagliare tasto
+non deve costarti l'uscita. `canc` invece esce da tutto e ti riporta dritto a Claude, da
+qualunque profondità, senza risalire le schermate una per una.
 
 I comandi da fuori (`cb tree`, `cb pick`, `cb open`) usano invece l'elenco verticale
 numerato, perché `cb open <sessione> 3` ha bisogno di un numero a cui riferirsi:
@@ -257,6 +273,55 @@ numerato, perché `cb open <sessione> 3` ha bisogno di un numero a cui riferirsi
 ```
 
 `●` ramo attivo · `○` ramo in disparte · `⑂n` biforcazione con n rami.
+
+### La coda dei prompt
+
+Un prompt mandato mentre Claude sta ancora rispondendo si accoda da solo, ma **quando** entra
+nel contesto lo decide Claude: te ne accorgi perché l'indicatore di caricamento resta sopra
+quello che hai appena scritto, e l'unico modo di forzarlo è Esc.
+
+Con `p` dall'albero si apre una coda che tieni tu. Scrivi i prossimi prompt, li vedi in
+elenco nell'ordine in cui partiranno, e ne parte **uno per turno**: ognuno vede il lavoro
+fatto da quello prima.
+
+```
+  cb  coda dei prompt
+  partono uno alla volta, quando Claude finisce un turno
+
+  3 prompt in attesa
+
+     1. sistemare il test che fallisce  il prossimo
+  ▸  2. aggiornare il README
+     3. fare il commit
+
+  > sto scrivendo il quarto█
+
+  ──────────────────────────────────────────────────────────────────────
+  invio accoda   ↑↓ scegli   ctrl+canc togli   esc albero   canc a Claude
+```
+
+Invio accoda quello che hai scritto e lascia il campo pronto per il prossimo. `↑` `↓`
+scelgono una riga dell'elenco e `ctrl+canc` la toglie — backspace resta per correggere quello
+che stai scrivendo. Esc torna all'albero, dove l'avevi lasciato.
+
+**Dentro cb non serve installare niente.** Il prompt lo scrive cb stesso nella barra di
+Claude, seguito da invio: esattamente come lo scriveresti tu, quindi diventa un prompt vero e
+un nodo dell'albero da cui puoi ripartire.
+
+Il momento non lo indovina leggendo lo schermo — cb non lo fa mai — ma dal **silenzio
+dell'output**: finché Claude lavora l'indicatore si anima e i byte continuano ad arrivare;
+quando l'output si ferma per un secondo e mezzo, la risposta è finita e parte il prossimo. Se
+Claude è già fermo quando accodi, il prompt parte appena chiudi la schermata.
+
+Finché stai digitando non viene iniettato niente: il testo si mescolerebbe a quello che stai
+scrivendo, e l'invio manderebbe il miscuglio.
+
+La coda è legata alla singola sessione, quindi due finestre aperte sulla stessa cartella non
+si rubano i prompt. Un `/clear` e i cambi di ramo cambiano l'id di sessione: cb sposta la coda
+da sola, e quello che avevi scritto ti segue.
+
+L'hook `hooks/cb-coda.ps1` (più sotto) serve solo a far funzionare la coda **fuori** da cb, in
+una sessione Claude lanciata a mano.
 
 ## Come funziona
 
@@ -521,6 +586,38 @@ Non metterlo `async`: girando in parallelo potrebbe leggere il working tree ment
 ramo lo sta riscrivendo.
 
 Non esiste ancora l'equivalente per macOS e Linux.
+
+## Coda dei prompt fuori da cb (opzionale, Windows)
+
+**Non serve se usi cb**: dentro il wrapper la coda parte da sola (vedi *La coda dei prompt*).
+`hooks/cb-coda.ps1` è l'hook `Stop` che la fa funzionare in una sessione Claude lanciata a
+mano: a fine turno prende il primo prompt in attesa, lo passa a Claude e lo toglie dall'elenco.
+
+L'hook e cb non si pestano i piedi: cb mette `CB_CODA_PTY=1` nell'ambiente di Claude, e l'hook
+la eredita e si fa da parte. Senza quella variabile — cioè fuori da cb — consegna lui.
+
+Installazione: aggiungi in `~/.claude/settings.json` sotto `hooks.Stop`, **prima** di
+`cb-commit.ps1` se hai anche quello — così il turno che il prompt farà proseguire viene
+salvato quando finisce davvero:
+
+```json
+{
+  "type": "command",
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"C:/percorso/di/cb/hooks/cb-coda.ps1\"",
+  "timeout": 15
+}
+```
+
+⚠️ L'hook gira su **ogni** sessione Claude: se per quella sessione non c'è una coda, esce
+subito senza scrivere niente.
+
+Consegna con `{"decision":"block","reason":"<prompt>"}`, che è l'unico modo che gli hook danno
+per far proseguire una conversazione. Il testo arriva quindi come motivo del blocco e **non**
+come un prompt digitato: per questa strada nell'albero non diventa un nodo. È la differenza
+con la consegna dentro cb, che invece lo scrive nella barra.
+
+Le code stanno in `~/.claude/cb/coda/<sessione>.json`. Non esiste ancora l'equivalente per
+macOS e Linux.
 
 ## Test
 

@@ -35,6 +35,7 @@ Sasha, singolo sviluppatore.
 | `src/lingua.js` | Tutti i testi a schermo, inglese e italiano; scelta con `CB_LINGUA` |
 | `src/impostazioni.js` | Lettura/scrittura di `~/.claude/cb/impostazioni.json`, precedenza dei valori |
 | `src/profili.js` | Insiemi di variabili d'ambiente con un nome: rilancia Claude altrove senza uscire dalla conversazione |
+| `src/coda.js` | La coda dei prompt: si scrivono mentre Claude lavora, ne parte uno per turno |
 | `src/pulizia.js` | I tre accumuli che non scadono: `cb prune` a mano, e la pulizia automatica |
 | `src/configura.js` | Schermata del primo avvio: lingua, cartella di lavoro, scorciatoia |
 | `src/prove.js` | Esecutore delle prove: un processo per file, lingua fissata a `it` |
@@ -46,6 +47,7 @@ Sasha, singolo sviluppatore.
 | `src/lancia.js` | Ripresa da fuori: spawn di `claude` con `stdio: 'inherit'` |
 | `bin/cb.js` | Entrypoint e sottocomandi |
 | `hooks/cb-commit.ps1` | Hook `Stop`: commit automatici su `refs/cb/<sid>/auto` |
+| `hooks/cb-coda.ps1` | Hook `Stop`: consegna un prompt della coda per turno |
 
 ## 5. Integrazione
 
@@ -71,6 +73,7 @@ node src/anteprima.js --menu[=n]  la stessa schermata con il menu del ripristino
 node src/cartelle.js              il selettore delle cartelle, da solo
 node src/configura.js             la schermata delle impostazioni (scrive su un file di prova)
 node src/conversazioni.js [dir]   il selettore delle conversazioni, da solo
+node src/coda.js [sessione]      la coda dei prompt, su una coda di prova
 node src/verifica-reale.js [file] verifica il parser su una sessione vera
 node bin/cb.js ls                 catalogo globale
 node bin/cb.js tree <sessione>    albero dei rami
@@ -128,6 +131,20 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   di dedurre dallo schermo: registra byte, interpretazione e decisioni dell'overlay.
 - Ogni cambio di ramo **riavvia il processo Claude**: non esiste modo di ricaricare una
   conversazione in un processo vivo.
+- **Canc esce da tutto, da ogni schermata.** Esc risale di un passo (sotto), ed è giusto — ma
+  da tre schermate di profondità servono tre Esc, e chi si è perso non sa nemmeno quanti. Il
+  valore di Canc sta **tutto** nell'essere lo stesso ovunque: una schermata in cui non
+  funzionasse basterebbe a non fidarsene più, quindi va aggiunto anche dove non aggiunge niente
+  (l'albero e gli avvisi, dove Esc porta già a Claude). Il segnale viaggia come stringa `'esci'`
+  fino al wrapper, che chiude l'overlay: ogni schermata nuova deve produrlo, e ogni chiamante
+  deve distinguerlo da `'indietro'` — trattarlo come "non hai ancora scelto" riaprirebbe la
+  schermata da cui si sta uscendo. **Va aggiunto anche a `navigazioneDa`**: senza, `azioniNavigazione`
+  lo produce ma `.filter(Boolean)` lo scarta e il tasto muore in silenzio, con l'albero che non
+  risponde (già successo, colto dalla prova `testCancEsceDaOgniSchermata`).
+- **Nella coda togliere un prompt è `ctrl+canc`**, non `canc`: l'azione frequente cede il tasto
+  semplice all'uscita, perché la coerenza fra schermate vale più della comodità in una sola.
+  I modificatori nelle sequenze CSI stanno in un parametro in mezzo (`ESC[3;5~` = ctrl+canc, il
+  numero è 1 + la somma dei bit, 4 = ctrl): vanno letti, o `shift+canc` toglierebbe per sbaglio.
 - **Esc risale di un passo, non esce.** Una schermata aperta da un'altra deve poter tornare da
   dove è venuta: dall'elenco delle conversazioni si torna alle cartelle (un `while` in
   `cambiaConversazione` e in `bin/cb.js`), e dal navigatore delle cartelle si torna all'albero
@@ -392,6 +409,47 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   (`src/eseguibile.js`): i percorsi noti sono Windows, il `PATH` copre npm, homebrew e nvm
   altrove. Su Windows si cerca solo `claude.exe`, mai `claude`: quello è lo shim, che
   node-pty non lancia.
+- **La coda ha due strade di consegna, e dentro cb vince il pty.** L'hook `Stop` può solo
+  rispondere `{"decision":"block","reason":<testo>}`: Claude non si ferma e riceve il testo,
+  ma **come motivo del blocco**, non come record `user` — nel transcript non c'è un prompt,
+  quindi nell'albero non nasce un nodo e da lì non si riparte. Dentro cb il prompt lo scrive
+  invece il pty (`consegnaCoda`), seguito da invio, cioè **come lo scriveresti tu**: diventa
+  un record `user` vero e un nodo dell'albero. Le due strade non devono convivere o ogni
+  prompt partirebbe due volte: cb mette `CB_CODA_PTY=1` nell'ambiente di Claude (`ambiente()`)
+  e l'hook, che la eredita, esce subito. Fuori da cb la variabile non c'è e l'hook resta
+  l'unica strada — è il motivo per cui l'hook si tiene lo stesso.
+- **Quando Claude è fermo non si deduce dallo schermo, ma dal silenzio dell'output.** cb non
+  parsa mai la TUI. Mentre Claude lavora l'indicatore si anima e i byte continuano ad
+  arrivare; quando ha finito l'output si ferma. `rimandaConsegna` riarma il conto a ogni
+  blocco di output **e a ogni tasto dell'utente**: il secondo serve perché iniettare mentre
+  stai digitando mescolerebbe il prompt accodato a quello che stai scrivendo, e l'invio
+  manderebbe il miscuglio. `QUIETE_CODA` (1500 ms) è più larga di `QUIETE_AVVIO` (600): lì si
+  aspetta che compaia una barra di input, qui si decide se una risposta è finita.
+- **Il primo controllo della coda parte anche senza output.** Se Claude è già fermo — o non
+  scrive nulla dopo l'avvio — la quiete non arriverebbe mai da sola, e i prompt già in coda
+  resterebbero ad aspettare un turno che non esiste. Per questo `rimandaConsegna()` viene
+  chiamata anche subito dopo `creaProcesso` e alla chiusura della schermata della coda, dove
+  si azzera anche `ultimoTasto`: i tasti battuti dentro cb non sono «l'utente sta scrivendo a
+  Claude».
+- **La coda è legata all'id di sessione, quindi va spostata a mano.** In cb quell'id cambia di
+  continuo — `/clear` fa nascere un file nuovo, ogni cambio ramo crea una sessione troncata — e
+  i prompt appesi alla sessione vecchia non riceverebbero più hook, cioè sparirebbero in
+  silenzio. Per questo `sessionId` **non si assegna mai direttamente**: si passa da
+  `cambiaSessione`, che chiama `trasferisci` di `src/coda.js`. Sono tre i punti che lo fanno
+  (`avviaClaude` e i due rami di `trovaTranscript`), ed è l'unico modo di non doverseli
+  ricordare uno per uno.
+- **Ogni operazione sulla coda rilegge il file prima di scriverlo.** Mentre la schermata è
+  aperta Claude sta lavorando — è il motivo per cui esiste — e a fine turno l'hook toglie il
+  primo prompt. Tenendo l'elenco in memoria, il primo carattere digitato dopo quella consegna
+  lo avrebbe rimesso in coda già consegnato.
+- **In PowerShell il `@()` va attorno alla pipeline, non al suo ingresso.** Un `Where-Object`
+  che lascia passare un elemento solo restituisce **quell'elemento**, non un array da uno, e
+  `$prompt[0]` su una stringa dà il primo *carattere*. Colto eseguendo l'hook a mano: con un
+  solo prompt in coda consegnava `"s"` invece di `"secondo prompt"`. Ogni hook che filtra una
+  lista va provato **anche nel caso da un elemento**.
+- **L'hook della coda riscrive il file prima di consegnare, non dopo.** Se la scrittura fallisce
+  — disco pieno, permesso negato — il prompt non parte, invece di ripartire a ogni turno per
+  sempre. Un prompt perso si riscrive, un ciclo infinito no.
 - Le prove stanno in `src/transcript.test.js`, `src/tasti.test.js`, `src/titolo.test.js`,
   `src/vista.test.js`, `src/wrapper.test.js`, `src/overlay.test.js`, `src/cartelle.test.js`,
   `src/conversazioni.test.js` e `src/pulizia.test.js`, con `assert`. Quelle che toccano

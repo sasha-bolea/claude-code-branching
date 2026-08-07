@@ -276,6 +276,11 @@ export function applicaAzione(stato, azione) {
       return { esito: 'conferma' };
     case 'annulla':
       return { esito: 'annulla' };
+    // Canc esce dall'interfaccia intera e torna a Claude, senza risalire le
+    // schermate una per una: e' lo stesso tasto in tutte, ed e' quello che lo
+    // rende utile quando ti sei perso di due passi.
+    case 'esci':
+      return { esito: 'esci' };
     default:
       break;
   }
@@ -294,7 +299,8 @@ const cartellaDellaRiga = (riga) => (riga.cartella ? riga.percorso : path.dirnam
 // opzioni.cwd: cartella corrente, da cui dipende la selezione iniziale
 // opzioni.ripresa: modo iniziale (true = l'utente ha scritto "claude -r")
 // opzioni.profilo: profilo attivo all'apertura, o null per l'ambiente di partenza
-// ritorna: Promise<{ percorso, ripresa, profilo } | null> — null se annullato
+// ritorna: Promise<{ percorso, ripresa, profilo } | null | 'esci'> — null se
+//          annullato con Esc, 'esci' se si e' chiesto di tornare dritti a Claude
 export function selezionaCartella({
   radice = radicePredefinita(),
   cwd = process.cwd(),
@@ -331,6 +337,7 @@ export function selezionaCartella({
       for (const azione of azioniNavigazione(dati)) {
         const { esito } = applicaAzione(stato, azione);
         if (esito === 'annulla') return chiudi(null);
+        if (esito === 'esci') return chiudi('esci');
         if (esito === 'conferma') {
           return chiudi({
             percorso: cartellaDellaRiga(stato.righe[stato.indice]),

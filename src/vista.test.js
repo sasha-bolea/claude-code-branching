@@ -612,7 +612,7 @@ function testSchermata() {
   assert.match(righe, /rami di questa conversazione/, 'intestazione');
   assert.match(righe, /riparti da qui/, 'il prompt selezionato e dichiarato');
   assert.match(righe, /precedenti: 1/, 'la storia conta gli antenati');
-  assert.match(righe, /ripristina anche i file/, 'la barra dice cosa fa l invio');
+  assert.match(righe, /invio riparti/, 'la barra dice cosa fa l invio');
 
   const senzaFile = schermata(vista, 'b', { ripristinaCodice: false }).join('\n');
   assert.match(senzaFile, /i file restano come sono/, 'e lo dice anche al contrario');
@@ -636,6 +636,45 @@ function testSchermataStaNelloSchermo() {
   assert.match(testo, /righe sotto/, 'e anche sotto');
   // La barra dei tasti nomina sempre l'invio, in tutte le sue varianti di lunghezza.
   assert.match(testo, /invio/, 'la barra dei tasti non viene spinta fuori');
+}
+
+// La barra dei tasti sta in fondo allo schermo, non subito sotto il contenuto:
+// il testo del prompt e lo storico cambiano altezza a ogni spostamento del
+// cursore, e una barra che sale e scende si legge peggio di una ferma. Vale
+// anche per il menu del ripristino e per l'elenco dei profili, che ne prendono
+// il posto: sono le tre uscite di schermata(), e i tre casi restano allineati
+// solo se li si prova insieme.
+function testLaBarraStaSempreInFondo() {
+  const vista = componiVista(
+    alberoFinto(
+      [
+        ['a', null, 'u'],
+        ['b', 'a', 'u'],
+        ['c', 'a', 'u'],
+      ],
+      'c',
+    ),
+  );
+
+  const casi = [
+    ['albero', {}],
+    ['menu', { menu: 0 }],
+    ['profili', { profili: { elenco: [null, 'lavoro'], indice: 0 } }],
+  ];
+
+  for (const [nome, opzioni] of casi) {
+    for (const altezza of [24, 40, 60]) {
+      const disegno = schermata(vista, 'b', { colonne: 100, altezza, ...opzioni });
+      assert.equal(disegno.length, altezza, `${nome} a ${altezza} righe riempie lo schermo`);
+      assert.notEqual(disegno[altezza - 1].trim(), '', `${nome}: l ultima riga e' la barra`);
+      assert.match(disegno[altezza - 2], /^ +─+$/, `${nome}: sopra la barra c e' il separatore`);
+      // Su uno schermo alto il contenuto non arriva in fondo: fra lui e il
+      // separatore c'e' il riempimento, ed e' quello che tiene ferma la barra.
+      if (altezza === 60) {
+        assert.equal(disegno[altezza - 3].trim(), '', `${nome}: e sopra ancora il riempimento`);
+      }
+    }
+  }
 }
 
 function testNessunaDiscesaAttraversaUnAltroRamo() {
@@ -675,6 +714,45 @@ function testNessunaDiscesaAttraversaUnAltroRamo() {
   const riga = (uuid) => vista.posizioni.get(uuid).riga;
   assert.equal(riga('d1') - riga('b1'), 1, 'il ramo del ramo e adiacente al suo');
   assert.equal(riga('c1'), 1, 'il ramo nato piu a destra sta subito sotto alla principale');
+}
+
+// L'interruzione non e' un nodo dell'albero — da un turno fermato a meta' non si
+// riparte — ma sceglierlo riporta indietro una risposta monca: il marchio sta
+// accanto all'ora del prompt che l'ha subita, dove si legge prima di premere
+// invio.
+function testIlPromptInterrottoPortaIlMarchio() {
+  // alberoFinto usa l'uuid come testo, e qui il testo conta: si costruisce a mano.
+  const nodo = (uuid, parentUuid, tipo, testo, minuto) => [
+    uuid,
+    {
+      uuid,
+      parentUuid,
+      isPromptUtente: tipo === 'u',
+      testo,
+      timestamp: `2026-08-07T09:${String(minuto).padStart(2, '0')}:00.000Z`,
+      figli: [],
+    },
+  ];
+
+  const albero = {
+    nodi: new Map([
+      nodo('a', null, 'u', 'avvia il server', 0),
+      nodo('ra', 'a', 'r', 'sto avviando', 1),
+      nodo('i', 'ra', 'u', '[Request interrupted by user]', 2),
+      nodo('b', 'i', 'u', 'vedo tutto bianco', 3),
+    ]),
+    leafAttivo: 'b',
+    ultimoNodo: 'b',
+  };
+
+  const vista = componiVista(albero);
+  assert.deepEqual(vista.nodi, ['a', 'b'], 'l interruzione non occupa un nodo');
+
+  const suA = schermata(vista, 'a', { colonne: 100, altezza: 30 }).join('\n');
+  assert.match(suA, /interrotto {2}riparti da qui/, 'il marchio sta accanto all ora');
+
+  const suB = schermata(vista, 'b', { colonne: 100, altezza: 30 }).join('\n');
+  assert.doesNotMatch(suB, /interrotto/, 'e solo sul prompt che l ha subita');
 }
 
 function testRigheCambiateNellIntestazione() {
@@ -721,6 +799,58 @@ function testRigheCambiateNellIntestazione() {
   }
 }
 
+// Il prompt scelto sta in un riquadro arancione, come la barra di stato di
+// Claude Code: e' il punto su cui si decide, e un bordo chiuso lo isola meglio
+// del separatore che c'era prima — che infatti e' sparito, o il confine fra
+// albero e prompt sarebbe stato doppio.
+function testIlPromptSceltoStaInUnRiquadro() {
+  const albero = alberoFinto(
+    [
+      ['a', null, 'u'],
+      ['b', 'a', 'u'],
+    ],
+    'b',
+  );
+  const disegno = schermata(componiVista(albero), 'a', { colonne: 60, altezza: 30 });
+
+  const alto = disegno.findIndex((r) => r.includes('╭'));
+  const basso = disegno.findIndex((r) => r.includes('╰'));
+  assert.ok(alto > 0 && basso > alto, 'il riquadro ha un sopra e un sotto');
+  // Ogni riga fra i due bordi e' chiusa dai lati, e tutte finiscono alla stessa
+  // colonna: un riempimento contato sulla stringa invece che sulle colonne
+  // visibili farebbe traballare il bordo destro appena il contenuto e' colorato.
+  const larghezze = new Set();
+  for (let i = alto; i <= basso; i += 1) {
+    if (i > alto && i < basso) assert.match(disegno[i], /^ {2}│.*│$/, `riga ${i} chiusa dai lati`);
+    larghezze.add(disegno[i].length);
+  }
+  assert.equal(larghezze.size, 1, 'il bordo destro sta su una colonna sola');
+
+  // Fra l'albero e il riquadro non c'e' piu' il separatore: solo una riga vuota.
+  assert.equal(disegno[alto - 1].trim(), '', 'niente separatore prima del riquadro');
+}
+
+// I tasti della barra in fondo sono arancioni e le spiegazioni no: e' quello che
+// si cerca con l'occhio quando si vuole solo sapere che cosa premere.
+function testITastiDellaBarraSonoArancioni() {
+  const albero = alberoFinto([['a', null, 'u'], ['b', 'a', 'u']], 'b');
+  const vista = componiVista(albero);
+
+  process.env.NO_COLOR = '';
+  process.env.CB_COLORI = '1';
+  try {
+    const barra = schermata(vista, 'a', { colonne: 100, altezza: 30 }).at(-1);
+    assert.match(barra, /\x1b\[38;2;255;140;102m←→ ad\x1b\[0m avanti e indietro/, 'tasti e testo');
+    assert.match(barra, /\x1b\[38;2;255;140;102mesc\x1b\[0m torna a Claude/, 'anche l ultima voce');
+    // La spiegazione non e' colorata: fra la chiusura del tasto e il separatore
+    // di voce non deve ricomparire una sequenza.
+    assert.doesNotMatch(barra, /\x1b\[38;2;255;140;102mavanti/, 'la spiegazione resta in chiaro');
+  } finally {
+    process.env.CB_COLORI = '';
+    process.env.NO_COLOR = '1';
+  }
+}
+
 function testMenuDelRipristino() {
   // Premuto invio l'albero resta a schermo — la scelta riguarda il punto che si
   // vede — e la barra dei tasti lascia il posto alle tre voci.
@@ -733,7 +863,7 @@ function testMenuDelRipristino() {
   assert.match(testo, /1\. la conversazione e i file/, 'prima voce');
   assert.match(testo, /2\. solo la conversazione/, 'seconda voce');
   assert.match(testo, /3\. solo i file/, 'terza voce');
-  assert.doesNotMatch(testo, /invio = riparti/, 'la barra dei tasti dell albero non c e piu');
+  assert.doesNotMatch(testo, /invio riparti/, 'la barra dei tasti dell albero non c e piu');
   assert.match(testo, /rami di questa conversazione/, 'ma l albero resta a schermo');
 
   // Dove finisce il prompt scelto e' una riga a parte, non una quarta voce: si
@@ -826,7 +956,7 @@ function testSceltaDelProfilo() {
   assert.match(testo, /gateway/, 'e ci sono quelli configurati');
   assert.match(testo, /la conversazione resta dov'è/, 'dice che la conversazione non si muove');
   assert.match(testo, /rami di questa conversazione/, "e l'albero resta a schermo");
-  assert.doesNotMatch(testo, /invio = riparti/, 'la barra dei tasti dell albero non c e piu');
+  assert.doesNotMatch(testo, /invio riparti/, 'la barra dei tasti dell albero non c e piu');
 
   const marcate = disegno.filter((riga) => riga.includes('▸'));
   assert.equal(marcate.length, 1, 'un solo profilo selezionato');
@@ -984,7 +1114,11 @@ const prove = [
   testAlberoVuoto,
   testSchermata,
   testSchermataStaNelloSchermo,
+  testLaBarraStaSempreInFondo,
   testNessunaDiscesaAttraversaUnAltroRamo,
+  testIlPromptInterrottoPortaIlMarchio,
+  testIlPromptSceltoStaInUnRiquadro,
+  testITastiDellaBarraSonoArancioni,
   testRigheCambiateNellIntestazione,
   testMenuDelRipristino,
   testSceltaDelProfilo,

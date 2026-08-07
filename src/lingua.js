@@ -49,7 +49,7 @@ cb — branching for Claude Code conversations
 
 In the tree inside a session: ←→ (or a/d) move along the conversation, ↑↓ (or
 w/s) switch branch, enter restarts from there, esc goes back to Claude. From
-there "c" or "p" open the folder navigator, where "r" switches between resuming
+there "c" opens the folder navigator, where "r" switches between resuming
 a conversation and starting a new one: you change conversation, project or start
 over without closing Claude. The commands above use the
 numbered list, so that "cb open <session> 3" has a number to refer to.
@@ -92,7 +92,6 @@ with CB_LINGUA (en, it).
   // src/vista.js — l'albero dentro la sessione
   albero: {
     legenda: [
-      `${VUOTO} restart here   ${FORCA} fork   ${COMPATTAZIONE} compacted   orange = history of this point`,
       `${VUOTO} restart here   ${FORCA} fork   ${COMPATTAZIONE} compacted`,
       `${VUOTO} restart here   ${FORCA} fork`,
       `${VUOTO} restart here`,
@@ -112,6 +111,10 @@ with CB_LINGUA (en, it).
     promptDopo: (n) => `${n} prompts ahead →`,
     ripartiDaQui: 'restart here',
     compattazione: '© conversation compacted',
+    // Il turno di questo prompt e' stato fermato a meta': la risposta che porta
+    // con se' e' monca. Non e' un nodo a parte — da un'interruzione non si
+    // riparte — ma va detto prima di sceglierlo.
+    interrotto: '⎋ interrupted',
     precedenti: (n) => `earlier: ${n}`,
     riportaIndietro: 'what do I roll back?',
     // Il prompt scelto: due stati, e si mostra per intero quello attivo. E' una
@@ -133,35 +136,57 @@ with CB_LINGUA (en, it).
       'remember',
     ],
     legendaMenu: [
+      '↑↓ pick   ←→ the prompt   1-3 direct choice   enter confirm   esc tree   canc to Claude',
       '↑↓ pick   ←→ the prompt   1-3 direct choice   enter confirm   esc tree',
       '↑↓ pick   ←→ prompt   enter confirm   esc tree',
       '↑↓ ←→ enter esc',
     ],
-    invioConFile: 'enter = restart (restores files too)',
-    invioSenzaFile: 'enter = restart (files stay as they are)',
+    invioConFile: 'enter restart',
+    invioSenzaFile: 'enter restart (files stay as they are)',
     avantiIndietro: '←→ ad back and forth',
     avantiIndietroCorto: '←→ ad back/forward',
     frecce: '←→ ad',
     cambiaRamo: '↑↓ ws switch branch',
     ramo: '↑↓ ws branch',
     frecceCorte: '↑↓ ws',
-    invioRiparti: 'enter = restart',
+    invioRiparti: 'enter restart',
     barraMinima: (esc) => `←→↑↓ move  enter restart  esc ${esc}`,
     // Tasti in piu' disponibili solo dentro la sessione, e nome dell'uscita
     // quando l'albero e' stato aperto dal selettore delle conversazioni.
-    extraLunga: 'c/p = folder and conversation   m = profile',
-    extraCorta: 'c/p other conv.   m profile',
+    extraLunga: 'c folder and conversation   m profile   p queue',
+    extraCorta: 'c other conv.   m profile   p queue',
     // Profili: si vedono solo se ne hai configurato almeno uno.
     qualeProfilo: 'which profile?',
     profiloBase: "Claude, the way you launched it",
     profiloResta: 'the conversation stays where it is: only the process restarts',
     legendaProfili: [
+      '↑↓ pick   enter confirm   esc back to tree   canc to Claude',
       '↑↓ pick   enter confirm   esc back to tree',
       '↑↓ pick   enter   esc tree',
       '↑↓ enter esc',
     ],
     escElencoLunga: 'back to the list',
     escElencoCorta: 'list',
+  },
+
+  // src/coda.js — la coda dei prompt che partono da soli a fine turno
+  coda: {
+    titolo: 'prompt queue',
+    sottotitolo: 'they go out one at a time, when Claude finishes a turn',
+    vuota: 'the queue is empty: write below and press enter',
+    quanti: (n) => (n === 1 ? '1 prompt waiting' : `${n} prompts waiting`),
+    campo: 'next prompt',
+    // Il prompt che sta per partire e' quello in cima: dirlo evita di dover
+    // dedurre l'ordine dalla numerazione.
+    prossimo: 'next',
+    legende: [
+      'enter queue   ↑↓ pick   ctrl+canc remove   esc back to tree   canc to Claude',
+      'enter queue   ↑↓ pick   ctrl+canc remove   esc tree   canc Claude',
+      'enter ↑↓ esc canc',
+    ],
+    // Cosa l'hook antepone al prompt quando lo consegna a Claude: senza, un
+    // prompt breve arriva senza contesto e sembra una frase caduta dal nulla.
+    intestazione: 'Queued by the user while you were working. Do this now:',
   },
 
   // src/configura.js — schermata delle impostazioni, al primo avvio
@@ -200,6 +225,7 @@ with CB_LINGUA (en, it).
   // src/cartelle.js — selettore della cartella di lavoro
   cartelle: {
     legende: [
+      '↑↓ scroll   →← open/close   space open/close   r switch mode   enter confirm   esc back   canc to Claude',
       '↑↓ scroll   →← open/close   space open/close   r switch mode   enter confirm   esc cancel',
       '↑↓ scroll   →← open/close   r mode   enter ok   esc cancel',
       '↑↓ →←   r mode   enter ok   esc cancel',
@@ -207,6 +233,7 @@ with CB_LINGUA (en, it).
     ],
     // Con almeno un profilo configurato: `m` lo alterna, come `r` fa col modo.
     legendeConProfilo: [
+      '↑↓ scroll   →← open/close   r mode   m profile   enter ok   esc back   canc to Claude',
       '↑↓ scroll   →← open/close   r switch mode   m profile   enter confirm   esc cancel',
       '↑↓ scroll   →← open/close   r mode   m profile   enter ok   esc cancel',
       '↑↓ →←   r mode   m profile   enter ok   esc cancel',
@@ -222,10 +249,12 @@ with CB_LINGUA (en, it).
   conversazioni: {
     legende: [
       [
+        '↑↓ pick the conversation   enter go into the tree   esc folders   canc to Claude',
         '↑↓ pick the conversation   enter go into the tree   esc back to folders',
         '↑↓ conversation   enter tree   esc back',
       ],
       [
+        '←→ back and forth   ↑↓ switch branch   enter restart   esc list   canc to Claude',
         '←→ back and forth   ↑↓ switch branch   enter restart here   esc back to list',
         '←→↑↓ move   enter restart   esc list',
       ],
@@ -244,16 +273,16 @@ with CB_LINGUA (en, it).
   // src/wrapper.js — messaggi durante il cambio ramo
   wrapper: {
     invioPerTornare: 'enter to go back to Claude',
-    tastiAvviso: 'c or p  pick folder and conversation      enter or esc  back to Claude',
+    tastiAvviso: 'c  pick folder and conversation      enter or esc  back to Claude',
     tastiAvvisoConProfilo:
-      'c or p  folder and conversation      m  profile      enter or esc  back to Claude',
+      'c  folder and conversation      m  profile      enter or esc  back to Claude',
     senzaTranscript: (scorciatoia, sessione) => [
       'This conversation has no transcript on disk yet.',
       '',
       'Claude writes it at the first exchange: send a prompt, wait for the',
       `answer, then press ${scorciatoia} again.`,
       '',
-      'Or start somewhere else: c and p open the folder navigator, where "r"',
+      'Or start somewhere else: c opens the folder navigator, where "r"',
       'switches between resuming a conversation and starting a new one.',
       '',
       'm picks the profile to run Claude under — here is the best moment,',
@@ -264,7 +293,7 @@ with CB_LINGUA (en, it).
     senzaMessaggi: (sessione, transcript) => [
       'This conversation has no message to restart from yet.',
       '',
-      'c and p open the folder navigator, where "r" switches between resuming',
+      'c opens the folder navigator, where "r" switches between resuming',
       'a conversation and starting a new one.',
       '',
       `session: ${sessione}`,
@@ -352,7 +381,7 @@ cb — branching per conversazioni Claude Code
   cb --aiuto            questo testo
 
 Nell'albero dentro la sessione: ←→ (o a/d) scorrono la conversazione, ↑↓ (o w/s)
-cambiano ramo, invio riparte da lì, esc torna a Claude. Da lì "c" o "p" aprono
+cambiano ramo, invio riparte da lì, esc torna a Claude. Da lì "c" apre
 il navigatore delle cartelle, dove "r" alterna la ripresa di una conversazione e
 l'avvio di una nuova: si cambia conversazione, progetto o si riparte da zero
 senza chiudere Claude. I comandi qui sopra usano
@@ -393,7 +422,6 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
 
   albero: {
     legenda: [
-      `${VUOTO} riparti da qui   ${FORCA} biforcazione   ${COMPATTAZIONE} compattata   arancione = storia di questo punto`,
       `${VUOTO} riparti da qui   ${FORCA} biforcazione   ${COMPATTAZIONE} compattata`,
       `${VUOTO} riparti da qui   ${FORCA} biforcazione`,
       `${VUOTO} riparti da qui`,
@@ -413,6 +441,10 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     promptDopo: (n) => `${n} prompt dopo →`,
     ripartiDaQui: 'riparti da qui',
     compattazione: '© conversazione compattata',
+    // Il turno di questo prompt e' stato fermato a meta': la risposta che porta
+    // con se' e' monca. Non e' un nodo a parte — da un'interruzione non si
+    // riparte — ma va detto prima di sceglierlo.
+    interrotto: '⎋ interrotto',
     precedenti: (n) => `precedenti: ${n}`,
     riportaIndietro: 'cosa riporto indietro?',
     // Il prompt scelto: due stati, e si mostra per intero quello attivo. E' una
@@ -434,33 +466,55 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
       'ricordala',
     ],
     legendaMenu: [
+      '↑↓ scegli   ←→ il prompt   1-3 scelta diretta   invio conferma   esc albero   canc a Claude',
       '↑↓ scegli   ←→ il prompt   1-3 scelta diretta   invio conferma   esc albero',
       '↑↓ scegli   ←→ il prompt   invio conferma   esc albero',
       '↑↓ ←→ invio esc',
     ],
-    invioConFile: 'invio = riparti (ripristina anche i file)',
-    invioSenzaFile: 'invio = riparti (i file restano come sono)',
+    invioConFile: 'invio riparti',
+    invioSenzaFile: 'invio riparti (i file restano come sono)',
     avantiIndietro: '←→ ad avanti e indietro',
     avantiIndietroCorto: '←→ ad indietro/avanti',
     frecce: '←→ ad',
     cambiaRamo: '↑↓ ws cambia ramo',
     ramo: '↑↓ ws ramo',
     frecceCorte: '↑↓ ws',
-    invioRiparti: 'invio = riparti',
+    invioRiparti: 'invio riparti',
     barraMinima: (esc) => `←→↑↓ muovi  invio riparti  esc ${esc}`,
-    extraLunga: 'c/p = cartella e conversazione   m = profilo',
-    extraCorta: 'c/p altra conv.   m profilo',
+    extraLunga: 'c cartella e conversazione   m profilo   p coda',
+    extraCorta: 'c altra conv.   m profilo   p coda',
     // Profili: si vedono solo se ne hai configurato almeno uno.
     qualeProfilo: 'con quale profilo?',
     profiloBase: "Claude, come l'hai lanciato",
     profiloResta: "la conversazione resta dov'è: riparte solo il processo",
     legendaProfili: [
+      "↑↓ scegli   invio conferma   esc torna all'albero   canc a Claude",
       "↑↓ scegli   invio conferma   esc torna all'albero",
       '↑↓ scegli   invio   esc albero',
       '↑↓ invio esc',
     ],
     escElencoLunga: "torna all'elenco",
     escElencoCorta: 'elenco',
+  },
+
+  // src/coda.js — la coda dei prompt che partono da soli a fine turno
+  coda: {
+    titolo: 'coda dei prompt',
+    sottotitolo: 'partono uno alla volta, quando Claude finisce un turno',
+    vuota: 'la coda è vuota: scrivi qui sotto e premi invio',
+    quanti: (n) => (n === 1 ? '1 prompt in attesa' : `${n} prompt in attesa`),
+    campo: 'prossimo prompt',
+    // Il prompt che sta per partire e' quello in cima: dirlo evita di dover
+    // dedurre l'ordine dalla numerazione.
+    prossimo: 'il prossimo',
+    legende: [
+      'invio accoda   ↑↓ scegli   ctrl+canc togli   esc albero   canc a Claude',
+      'invio accoda   ↑↓ scegli   ctrl+canc togli   esc albero   canc Claude',
+      'invio ↑↓ esc canc',
+    ],
+    // Cosa l'hook antepone al prompt quando lo consegna a Claude: senza, un
+    // prompt breve arriva senza contesto e sembra una frase caduta dal nulla.
+    intestazione: 'Accodato dall\'utente mentre lavoravi. Fai questo adesso:',
   },
 
   configura: {
@@ -497,6 +551,7 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
 
   cartelle: {
     legende: [
+      '↑↓ scorri   →← apri/chiudi   spazio apri/chiudi   r cambia modo   invio conferma   esc indietro   canc a Claude',
       '↑↓ scorri   →← apri/chiudi   spazio apri/chiudi   r cambia modo   invio conferma   esc annulla',
       '↑↓ scorri   →← apri/chiudi   r modo   invio ok   esc annulla',
       '↑↓ →←   r modo   invio ok   esc annulla',
@@ -504,6 +559,7 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     ],
     // Con almeno un profilo configurato: `m` lo alterna, come `r` fa col modo.
     legendeConProfilo: [
+      '↑↓ scorri   →← apri/chiudi   r modo   m profilo   invio ok   esc indietro   canc a Claude',
       '↑↓ scorri   →← apri/chiudi   r cambia modo   m profilo   invio conferma   esc annulla',
       '↑↓ scorri   →← apri/chiudi   r modo   m profilo   invio ok   esc annulla',
       '↑↓ →←   r modo   m profilo   invio ok   esc annulla',
@@ -518,10 +574,12 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
   conversazioni: {
     legende: [
       [
+        "↑↓ scegli la conversazione   invio entra nell'albero   esc cartelle   canc a Claude",
         "↑↓ scegli la conversazione   invio entra nell'albero   esc alle cartelle",
         '↑↓ conversazione   invio albero   esc indietro',
       ],
       [
+        "←→ avanti e indietro   ↑↓ cambia ramo   invio riparti da qui   esc elenco   canc a Claude",
         "←→ avanti e indietro   ↑↓ cambia ramo   invio riparti da qui   esc torna all'elenco",
         '←→↑↓ muovi   invio riparti   esc elenco',
       ],
@@ -539,16 +597,16 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
 
   wrapper: {
     invioPerTornare: 'invio per tornare a Claude',
-    tastiAvviso: 'c o p  scegli cartella e conversazione      invio o esc  torna a Claude',
+    tastiAvviso: 'c  scegli cartella e conversazione      invio o esc  torna a Claude',
     tastiAvvisoConProfilo:
-      'c o p  cartella e conversazione      m  profilo      invio o esc  torna a Claude',
+      'c  cartella e conversazione      m  profilo      invio o esc  torna a Claude',
     senzaTranscript: (scorciatoia, sessione) => [
       'Questa conversazione non ha ancora un transcript su disco.',
       '',
       'Claude lo scrive al primo scambio: manda un prompt, attendi la',
       `risposta, poi ripremi ${scorciatoia}.`,
       '',
-      'Oppure riparti da un altro punto: c e p aprono il navigatore delle',
+      'Oppure riparti da un altro punto: c apre il navigatore delle',
       'cartelle, dove "r" alterna la ripresa di una conversazione e l\'avvio',
       'di una nuova.',
       '',
@@ -560,7 +618,7 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     senzaMessaggi: (sessione, transcript) => [
       'La conversazione non contiene ancora messaggi da cui ripartire.',
       '',
-      'c e p aprono il navigatore delle cartelle, dove "r" alterna la ripresa',
+      'c apre il navigatore delle cartelle, dove "r" alterna la ripresa',
       'di una conversazione e l\'avvio di una nuova.',
       '',
       `sessione: ${sessione}`,

@@ -209,7 +209,7 @@ const famiglie = raggruppaPerFamiglia([
   assert.match(testo, /strada due/, 'e con il suo testo per intero');
   assert.match(testo, /precedenti:/, 'sotto c\'e\' la storia che quel punto porta con se\'');
   assert.doesNotMatch(testo, /tutt altra conversazione/, 'l\'elenco non si vede piu\'');
-  assert.match(righe[righe.length - 1], /esc = (torna all')?elenco/, 'esc riporta all\'elenco');
+  assert.match(righe[righe.length - 1], /esc (torna all')?elenco/, 'esc riporta all\'elenco');
   assert.ok(
     righe.every((r) => r.length <= 90),
     'anche qui nessuna riga eccede la larghezza',

@@ -406,6 +406,8 @@ export function esitoScelta(caricata, uuid, modo = 'entrambi', daRimandare = fal
 //   - risultato di esitoScelta, se una conversazione e' stata scelta
 //   - { nuova: true } se non ci sono conversazioni da riprendere
 //   - null se annullato con Esc: cb non deve avviare niente
+//   - 'esci' se con Canc si e' chiesto di tornare dritti a Claude, saltando le
+//     schermate da cui si era passati
 export async function selezionaConversazione({
   cartella,
   famiglie = null,
@@ -443,7 +445,9 @@ export async function selezionaConversazione({
       uscita.removeListener('resize', ridisegna);
       if (ingresso.isTTY) ingresso.setRawMode(false);
       ingresso.pause();
-      uscita.write('\x1b[?25h\x1b[?1049l'); // cursore visibile, schermo normale
+      // Il tracciamento acceso qui non deve sopravvivere alla schermata: chi
+      // riprende il terminale — Claude, o la shell — accende i modi che vuole lui.
+      uscita.write('\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l'); // e schermo normale
       risolvi(risultato);
     };
 
@@ -492,6 +496,9 @@ export async function selezionaConversazione({
             stato.modo = 'albero';
             break;
           }
+          // Canc esce dall'interfaccia intera, da qualunque schermata: qui vuol
+          // dire senza scegliere niente, come Esc ma fino in fondo.
+          if (azione.tipo === 'esci') return chiudi('esci');
           if (azione.tipo === 'invio') return chiudi(esito(stato.menu));
           if (azione.tipo === 'cifra') {
             const scelto = Number.parseInt(azione.valore, 10) - 1;
@@ -509,6 +516,10 @@ export async function selezionaConversazione({
       }
 
       for (const azione of azioniNavigazione(dati)) {
+        // Canc vale prima di tutto il resto e in ogni modo della schermata —
+        // elenco, albero, cartella vuota — perche' e' l'uscita, non una scelta.
+        if (azione === 'esci') return chiudi('esci');
+
         if (stato.famiglie.length === 0) {
           // Niente da riprendere: qualunque conferma vale come "parti da zero",
           // Esc invece annulla come ovunque.
@@ -553,7 +564,10 @@ export async function selezionaConversazione({
       else ridisegna();
     };
 
-    uscita.write('\x1b[?1049h\x1b[?25l'); // schermo alternativo, cursore nascosto
+    // Schermo alternativo, cursore nascosto, e il tracciamento minimo del mouse
+    // (?1000 clic e rotella, ?1006 coordinate SGR): serve alla rotella, che
+    // scorre l'albero come le frecce. La selezione del testo resta con shift.
+    uscita.write('\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h');
     if (ingresso.isTTY) ingresso.setRawMode(true);
     ingresso.resume();
     ingresso.on('data', suDati);

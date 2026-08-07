@@ -10,6 +10,7 @@ import { disegnaAlbero } from '../src/albero.js';
 import { lanciaClaude, lanciaClaudeDiretto, argomentiRipresa } from '../src/lancia.js';
 import { attivaRamoDi } from '../src/attiva.js';
 import { impostazione, impostazioniPresenti } from '../src/impostazioni.js';
+import { SPEGNI_MODI_INPUT } from '../src/tasti.js';
 import { LINGUA, T } from '../src/lingua.js';
 
 // Scorciatoia che apre l'albero: CB_TASTO, poi quella scelta nelle impostazioni,
@@ -285,7 +286,10 @@ async function main() {
         // precedente a cui tornare.
         while (!conversazione) {
           scelta = await selezionaCartella({ cwd: cartella, ripresa: iniziale, profilo });
-          if (!scelta) return;
+          // Qui davanti a cb non c'e' ancora niente: Canc ed Esc escono tutt'e
+          // due, e Canc non ha una scorciatoia in piu' da offrire. Va comunque
+          // riconosciuto, o il valore 'esci' finirebbe letto come una scelta.
+          if (!scelta || scelta === 'esci') return;
           cartella = scelta.percorso;
           profilo = scelta.profilo;
 
@@ -299,6 +303,8 @@ async function main() {
             cartella,
             ripristinaCodice: !argomenti.includes('--senza-file'),
           });
+          // Canc dall'elenco non risale al navigatore come Esc: esce da cb.
+          if (conversazione === 'esci') return;
         }
 
         annotaCartellaScelta(cartella);
@@ -421,6 +427,19 @@ async function main() {
   const iVoce = await chiediNumero(T.comandi.chiediPunto(voci.length), voci.length);
   await riprendi(scheda, albero, iVoce === null ? null : voci[iVoce]);
 }
+
+// Rete di sicurezza: qualunque sia la strada dell'uscita, i modi di input del
+// terminale tornano spenti. `Wrapper.chiudi` lo fa gia', ma non tutte le uscite
+// ci passano — i `process.exit` sparsi qui, un'eccezione non catturata — e
+// bastava una di quelle per lasciare la shell che stampa caratteri a caso a ogni
+// tasto. Solo su TTY: verso una pipe le sequenze sporcherebbero l'output.
+//
+// L'import e' statico e non dinamico apposta: `tasti.js` non tira dentro
+// node-pty, quindi la rete c'e' anche sulle macchine dove il modulo nativo non
+// compila — cioe' proprio dove cb esce male.
+process.on('exit', () => {
+  if (process.stdout.isTTY) process.stdout.write(SPEGNI_MODI_INPUT);
+});
 
 main().catch((errore) => {
   console.error(`cb: ${errore?.message ?? errore}`);

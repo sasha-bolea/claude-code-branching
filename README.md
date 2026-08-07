@@ -124,7 +124,7 @@ ends up**.
 `~/.claude/cb/impostazioni.json` (`promptDaRimandare`) and the menu opens that way from then
 on.
 
-When you resume a conversation from outside (`cb -r`, `cb --scegli`, the `c`/`p` keys) the
+When you resume a conversation from outside (`cb -r`, `cb --scegli`, the `c` key) the
 prompt choice is still there, arrows included: only the checkbox goes. There it holds for
 that one time, and it **always** starts from "stays sent" — a remembered preference would
 decide for you exactly when you reopen a months-old conversation, which is when you no longer
@@ -191,10 +191,10 @@ Why not the `claude -r` picker: that one lists session **files**, and since a fo
 new one, the branches of the same conversation show up as different conversations. Here
 sessions are grouped by root uuid, and a conversation is its whole tree.
 
-The same two screens reopen from inside a running session: press `c` or `p` — from the tree,
-or from the notice you get when there is no transcript yet. Both land on the folder
-navigator, and `r` there switches between resuming a conversation and starting a new one. So
-you change conversation, change project, or start over, without closing Claude.
+The same two screens reopen from inside a running session: press `c` — from the tree, or
+from the notice you get when there is no transcript yet. It lands on the folder navigator,
+and `r` there switches between resuming a conversation and starting a new one. So you change
+conversation, change project, or start over, without closing Claude.
 
 If `CB_CARTELLA_SCELTA` points to a file, cb writes the chosen folder into it: whoever
 launched cb can read it on exit and move there (a child process cannot change the current
@@ -222,28 +222,44 @@ carries with it, back to the root.
 
 ```
   cb  branches of the conversation
-  ◯ restart here   ┳ fork   orange = history of this point
+  ──────────────────────────────────────────────────────────────────────
+  ◯ restart here   ┳ fork   © compacted
+  ──────────────────────────────────────────────────────────────────────
 
   ⬤━━━⬤━━━⬤━━━⬤━┳━⬤━━━⬤━━━⬤━━━⬤
                 ┗━⬤━┳━⬤━━━◯
                     ┗━⬤━━━⬤━━━⬤
 
-  ───────────────────────────────────────────────────────────────────
-  24-07 15:51  restart here
-  the app got very slow, rendering the list freezes
+  ╭────────────────────────────────────────────────────────────────────╮
+  │ 24-07 15:51  +42 -7  restart here                                  │
+  │ the app got very slow, rendering the list freezes                  │
+  ╰────────────────────────────────────────────────────────────────────╯
 
   earlier: 3
     24-07 15:40  add the date filter
-    24-07 15:12  /login
+    24-07 15:12  put the name sorting back
     24-07 15:10  let's do the customer list
 
-  ←→ ad back and forth   ↑↓ ws switch branch   enter = restart   esc = back to Claude
+  ──────────────────────────────────────────────────────────────────────
+  ←→ ad back and forth   ↑↓ ws branch   enter restart   p queue   esc exit
 ```
 
+The tree holds only the prompts you typed. Background-task notifications, system reminders,
+slash commands and their output do not become nodes: in the transcript they are `user`
+records like any other, but they are not points worth restarting from. Compactions (`©`)
+stay, because they mark where the history was summarised. A turn you interrupted is not a
+node of its own: the prompt that took the interruption is marked `⎋ interrupted`, so you know
+the answer you would carry back is cut short.
+
 `←` `→` walk up and down the conversation, `↑` `↓` move between the branches of the same
-fork. `a` `d` and `w` `s` work too, if your hand would rather stay on the letters. The
-cursor starts where you are now. Enter grows a new branch from that point: the previous one
-stays where it was.
+fork. `a` `d` and `w` `s` work too, if your hand would rather stay on the letters. The mouse
+wheel scrolls the conversation like `←` `→`. The cursor starts where you are now. Enter grows
+a new branch from that point: the previous one stays where it was.
+
+**Two keys to get out, in every cb screen.** `esc` goes back one step: from the conversation
+list back to the folders, from the restore menu back to the tree — hitting the wrong key
+should not cost you the exit. `canc` instead leaves everything and drops you straight back
+into Claude, from any depth, without climbing back through the screens one by one.
 
 The commands from outside (`cb tree`, `cb pick`, `cb open`) use the numbered vertical list
 instead, because `cb open <session> 3` needs a number to refer to:
@@ -257,6 +273,55 @@ instead, because `cb open <session> 3` needs a number to refer to:
 ```
 
 `●` active branch · `○` branch set aside · `⑂n` fork with n branches.
+
+### The prompt queue
+
+A prompt sent while Claude is still answering does get appended, but **when** it enters the
+context is Claude's call: you can tell because the spinner stays above what you just typed,
+and the only way to force it is Esc.
+
+`p` from the tree opens a queue you own instead. You write the next prompts, you see them
+listed in the order they will go out, and **one goes out per turn**: each one sees the work
+the previous one produced.
+
+```
+  cb  prompt queue
+  they go out one at a time, when Claude finishes a turn
+
+  3 prompts waiting
+
+     1. fix the failing test  next
+  ▸  2. update the README
+     3. make the commit
+
+  > typing the fourth one█
+
+  ──────────────────────────────────────────────────────────────────────
+  enter queue   ↑↓ pick   ctrl+canc remove   esc tree   canc to Claude
+```
+
+Enter queues what you typed and leaves the field ready for the next one. `↑` `↓` pick a row
+and `ctrl+canc` removes it — backspace stays for fixing what you are typing. Esc goes back to
+the tree, right where you left it.
+
+**Inside cb nothing needs installing.** cb writes the prompt into Claude's input bar itself,
+followed by enter: exactly as you would have typed it, so it becomes a real prompt and a node
+of the tree you can restart from.
+
+It does not guess the moment by reading the screen — cb never does — but from the **silence of
+the output**: while Claude works the spinner animates and bytes keep coming; when the output
+stays quiet for a second and a half the answer is done and the next prompt goes out. If Claude
+is already idle when you queue something, it goes out as soon as you close the screen.
+
+Nothing is injected while you are typing: the text would mix into what you are writing, and
+enter would send the mixture.
+
+The queue belongs to one session, so two windows open on the same folder never steal each
+other's prompts. A `/clear` and every branch switch change the session id: cb moves the queue
+along, and what you wrote follows you.
+
+The hook `hooks/cb-coda.ps1` (below) is only there to make the queue work **outside** cb, in a
+Claude session you started by hand.
 
 ## How it works
 
@@ -522,6 +587,38 @@ Do not make it `async`: running in parallel it could read the working tree while
 switch is rewriting it.
 
 There is no shell equivalent for macOS and Linux yet.
+
+## Prompt queue outside cb (optional, Windows)
+
+**Not needed if you use cb**: inside the wrapper the queue goes out on its own (see *The
+prompt queue*). `hooks/cb-coda.ps1` is the `Stop` hook that makes it work in a Claude session
+you started by hand: at the end of a turn it takes the first prompt waiting, hands it to
+Claude and drops it from the list.
+
+The hook and cb never collide: cb puts `CB_CODA_PTY=1` in Claude's environment, the hook
+inherits it and stands down. Without that variable — that is, outside cb — the hook delivers.
+
+Install it in `~/.claude/settings.json` under `hooks.Stop`, **before** `cb-commit.ps1` if you
+have that one too — so the turn the prompt keeps going gets saved when it actually ends:
+
+```json
+{
+  "type": "command",
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"C:/path/to/cb/hooks/cb-coda.ps1\"",
+  "timeout": 15
+}
+```
+
+⚠️ The hook runs on **every** Claude session: with no queue for that session it exits at once
+without writing anything.
+
+It delivers with `{"decision":"block","reason":"<prompt>"}`, the only way hooks give you to
+keep a conversation going. The text therefore arrives as the reason for the block and **not**
+as a typed prompt: down this path it does not become a node in the tree. That is the
+difference from delivery inside cb, which types it into the bar instead.
+
+Queues live in `~/.claude/cb/coda/<session>.json`. There is no shell equivalent for macOS and
+Linux yet.
 
 ## Tests
 

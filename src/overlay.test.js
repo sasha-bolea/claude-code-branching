@@ -92,6 +92,8 @@ const GIU = `${esc}[B`;
 const SINISTRA = `${esc}[D`;
 const INVIO = '\r';
 const ANNULLA = esc;
+// Canc: esce dall'interfaccia e torna a Claude, da qualunque schermata.
+const ESCI = `${esc}[3~`;
 
 // Invio apre il menu di cosa riportare indietro: le cifre scelgono una voce
 // direttamente, senza passare dalle frecce.
@@ -163,7 +165,7 @@ async function testOverlaySenzaTranscript() {
 // ripresa e l'avvio di una conversazione nuova. E' il caso di chi preme la
 // scorciatoia prima ancora di aver scritto un prompt.
 async function testSenzaTranscriptSiArrivaAiSelettori() {
-  for (const tasto of ['c', 'p']) {
+  for (const tasto of ['c']) {
     pulisciCartella();
     const { wrapper, schermo } = wrapperFinto('00000000-0000-4000-8000-00000000dea0', CARTELLA);
     let aperture = 0;
@@ -178,7 +180,7 @@ async function testSenzaTranscriptSiArrivaAiSelettori() {
       await new Promise((r) => setTimeout(r, 5));
     }
     assert.match(schermo(), /non ha ancora un transcript/, 'spiega perche non c e l albero');
-    assert.match(schermo(), /c e p|c o p/, 'e annuncia i tasti per ripartire da altrove');
+    assert.match(schermo(), /c apre|c {2}cartella/, 'e annuncia il tasto per ripartire da altrove');
 
     await premiTasti(tasto);
     await attesa;
@@ -827,7 +829,7 @@ async function testEscNelMenuTornaAllAlbero() {
   const da = contesto.schermo().length;
   await premiTasti(ANNULLA);
   assert.equal(contesto.wrapper.inOverlay, true, 'l overlay resta aperto');
-  assert.match(contesto.schermo().slice(da), /invio = riparti/, 'e torna la barra dei tasti');
+  assert.match(contesto.schermo().slice(da), /invio riparti/, 'e torna la barra dei tasti');
 
   premi(ANNULLA); // ora chiudo davvero
   await attesa;
@@ -1390,10 +1392,10 @@ async function testTastiPerCambiareConversazioneOCartella() {
     { type: 'last-prompt', leafUuid: 'b', sessionId },
   ]);
 
-  // c e p portano allo stesso posto: il navigatore delle cartelle, dove "r"
-  // alterna ripresa e avvio normale. Prima "c" saltava direttamente all'elenco
-  // delle conversazioni, e da li' non c'era modo di cominciarne una nuova.
-  for (const tasto of ['c', 'p']) {
+  // "c" porta al navigatore delle cartelle, dove "r" alterna ripresa e avvio
+  // normale. Prima saltava direttamente all'elenco delle conversazioni, e da
+  // li' non c'era modo di cominciarne una nuova.
+  for (const tasto of ['c']) {
     const { wrapper, schermo } = wrapperFinto(sessionId, CARTELLA);
     let aperture = 0;
     // Il selettore vero prende lo stdin e legge il disco: qui interessa solo
@@ -1405,7 +1407,7 @@ async function testTastiPerCambiareConversazioneOCartella() {
 
     const attesa = wrapper.mostraOverlay();
     await attendiPrompt(schermo);
-    assert.match(schermo(), /c = altra conversazione|c\/p altra conv/, 'la barra li annuncia');
+    assert.match(schermo(), /c = altra conversazione|c altra conv/, 'la barra lo annuncia');
 
     await premiTasti(tasto);
     await attesa;
@@ -1422,7 +1424,129 @@ async function testTastiPerCambiareConversazioneOCartella() {
   pulisciCartella();
 }
 
+// "p" apre la coda dei prompt e ci torna dentro: a differenza di "c" e "m" non
+// cambia ne' conversazione ne' processo, quindi l'albero deve restare aperto
+// dietro, con la stessa vista e lo stesso cursore. Se chiudesse l'overlay,
+// guardare la coda costerebbe la posizione nell'albero.
+async function testIlTastoPApreLaCodaESiTornaAllAlbero() {
+  const sessionId = '00000000-0000-4000-8000-0000000000cd';
+  creaTranscript(sessionId, CARTELLA, [
+    msg('a', null, 'user', 'primo prompt', 1),
+    msg('b', 'a', 'assistant', 'prima risposta', 2),
+    { type: 'last-prompt', leafUuid: 'b', sessionId },
+  ]);
+
+  const { wrapper, schermo } = wrapperFinto(sessionId, CARTELLA);
+  let aperture = 0;
+  // La schermata vera prende lo stdin e scrive su disco: qui interessa solo che
+  // il tasto ci arrivi, e che l'albero sia ancora li' dopo.
+  wrapper.mostraCoda = async () => {
+    aperture += 1;
+  };
+
+  const attesa = wrapper.mostraOverlay();
+  await attendiPrompt(schermo);
+  assert.match(schermo(), /p coda/, 'la barra annuncia il tasto');
+
+  await premiTasti('p');
+  assert.equal(aperture, 1, '"p" apre la coda');
+
+  // L'albero e' ancora aperto: si chiude con Esc, come se non fosse successo
+  // niente.
+  await premiTasti(ANNULLA);
+  await attesa;
+  assert.equal(aperture, 1, 'e la coda non si riapre da sola');
+
+  pulisciCartella();
+}
+
+// Canc esce dall'interfaccia da **ogni** schermata, senza risalirle una per una.
+//
+// Esc risale di un passo, ed e' giusto — sbagliare tasto non deve costare
+// l'uscita — ma da tre schermate di profondita' servono tre Esc, e chi si e'
+// perso non sa nemmeno quanti. Il valore di Canc sta tutto nell'essere lo stesso
+// ovunque: una schermata in cui non funzionasse basterebbe a non fidarsene piu'.
+// E' per questo che si provano tutte insieme, e non una per una.
+async function testCancEsceDaOgniSchermata() {
+  const sessionId = '00000000-0000-4000-8000-0000000000ca';
+  const prepara = () =>
+    creaTranscript(sessionId, CARTELLA, [
+      msg('a', null, 'user', 'primo prompt', 1),
+      msg('b', 'a', 'assistant', 'prima risposta', 2),
+      msg('c', 'b', 'user', 'secondo prompt', 3),
+      { type: 'last-prompt', leafUuid: 'c', sessionId },
+    ]);
+
+  // Dall'albero: e' anche quello che fa Esc, ma deve valere lo stesso.
+  prepara();
+  {
+    const { wrapper, schermo } = wrapperFinto(sessionId, CARTELLA);
+    const attesa = wrapper.mostraOverlay();
+    await attendiPrompt(schermo);
+    await premiTasti(ESCI);
+    await attesa;
+    assert.equal(wrapper.inOverlay, false, 'canc chiude l albero');
+    assert.equal(wrapper.ramoAvviato, undefined, 'senza far ripartire niente');
+  }
+
+  // Dal menu del ripristino, aperto con invio: non si ripristina nulla e non si
+  // torna all'albero — si esce.
+  pulisciCartella();
+  prepara();
+  {
+    const { wrapper, schermo } = wrapperFinto(sessionId, CARTELLA);
+    const attesa = wrapper.mostraOverlay();
+    await attendiPrompt(schermo);
+    await premiTasti(INVIO);
+    assert.match(schermo(), /cosa riporto indietro/, 'il menu e aperto');
+    await premiTasti(ESCI);
+    await attesa;
+    assert.equal(wrapper.inOverlay, false, 'canc dal menu esce da tutto');
+    assert.equal(wrapper.ramoAvviato, undefined, 'senza ripristinare niente');
+  }
+
+  // Dalla coda: la schermata restituisce 'esci', e l'albero non si riapre.
+  pulisciCartella();
+  prepara();
+  {
+    const { wrapper, schermo } = wrapperFinto(sessionId, CARTELLA);
+    wrapper.mostraCoda = async () => 'esci';
+    const attesa = wrapper.mostraOverlay();
+    await attendiPrompt(schermo);
+    await premiTasti('p');
+    await attesa;
+    assert.equal(wrapper.inOverlay, false, 'canc dalla coda esce da tutto');
+  }
+
+  // Dai selettori: 'esci' non deve essere scambiato per "torna indietro", che
+  // invece riaprirebbe l'albero.
+  pulisciCartella();
+  prepara();
+  {
+    const { wrapper, schermo } = wrapperFinto(sessionId, CARTELLA);
+    let riaperture = 0;
+    wrapper.apriCartelle = async () => 'esci';
+    const overlayVero = wrapper.mostraOverlay.bind(wrapper);
+    wrapper.mostraOverlay = () => {
+      riaperture += 1;
+      return overlayVero();
+    };
+
+    const attesa = overlayVero();
+    await attendiPrompt(schermo);
+    await premiTasti('c');
+    await attesa;
+
+    assert.equal(riaperture, 0, 'canc nei selettori non riapre l albero');
+    assert.equal(wrapper.inOverlay, false, 'e lo schermo torna a Claude');
+  }
+
+  pulisciCartella();
+}
+
 const prove = [
+  testCancEsceDaOgniSchermata,
+  testIlTastoPApreLaCodaESiTornaAllAlbero,
   testTastiPerCambiareConversazioneOCartella,
   testOverlaySenzaTranscript,
   testSenzaTranscriptSiArrivaAiSelettori,

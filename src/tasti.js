@@ -39,6 +39,33 @@ const RE_ESC_KITTY = /^\x1b\[27(;[0-9:]+)?u/;
 //   Kd = 1 pressione, 0 rilascio  Cs = stato dei modificatori
 const RE_WIN32 = /^\x1b\[(\d*);(\d*);(\d*);(\d*);(\d*);(\d*)_/;
 
+// Modi di tracciamento del mouse che una TUI puo' accendere. Finche' sono accesi
+// il terminale manda movimenti e clic all'applicazione invece di selezionare il
+// testo. Stanno qui e non nel wrapper perche' sono la stessa cosa di RE_WIN32:
+// protocolli di input, e SPEGNI_MODI_INPUT li deve conoscere tutti.
+export const MODI_MOUSE = [1000, 1002, 1003, 1005, 1006, 1015, 1016];
+
+// Spegne ogni modo di input che una TUI puo' aver acceso: win32-input-mode
+// (ESC[?9001h) e il protocollo kitty (ESC[>1u), che li chiede Claude, i modi
+// mouse, il riporto del focus (?1004) e i marcatori di incolla (?2004). In coda
+// il cursore, che Claude nasconde.
+//
+// Serve perche' il terminale non li spegne da solo: dopo un'uscita anomala —
+// Claude ucciso con l'overlay a schermo, un'eccezione, un exit che salta la
+// chiusura ordinata — restano accesi e il terminale continua a mandare le
+// proprie sequenze alla shell, che non le interpreta e le stampa come testo.
+// A quel punto ogni tasto e ogni scatto di rotella scrivono caratteri a caso, e
+// nemmeno il comando che li spegnerebbe si riesce a digitare: l'unica via
+// rimasta e' chiudere la finestra (successo il 2026-08-07).
+export const SPEGNI_MODI_INPUT = [
+  '\x1b[?9001l', // win32-input-mode
+  '\x1b[>u', // protocollo kitty
+  '\x1b[?1004l', // riporto del focus
+  '\x1b[?2004l', // bracketed paste
+  ...MODI_MOUSE.map((modo) => `\x1b[?${modo}l`),
+  '\x1b[?25h', // cursore visibile
+].join('');
+
 // Bit dello stato modificatori di Windows (ControlKeyState).
 const ALT_PREMUTO = 0x0003; // destro | sinistro
 const CTRL_PREMUTO = 0x000c; // destro | sinistro
@@ -320,6 +347,50 @@ export function azioniTesto(dati) {
   return azioni;
 }
 
+// Rotella del mouse. Due codifiche: SGR (`ESC[<Cb;Cx;Cy` e M o m, accesa dal
+// modo ?1006) e quella storica (`ESC[M` piu' tre byte, con 32 sommato a
+// ciascuno). Si riconoscono tutt'e due perche' il modo SGR lo si chiede, ma un
+// terminale che non lo capisce risponde comunque nella vecchia.
+//
+// Nel codice del pulsante i bit 4, 8 e 16 sono shift, alt e ctrl: vanno tolti,
+// o la rotella con un modificatore premuto non verrebbe riconosciuta.
+const RE_ROTELLA_SGR = /\x1b\[<(\d+);\d+;\d+[Mm]/g;
+const RE_ROTELLA_X10 = /\x1b\[M([\s\S])[\s\S][\s\S]/g;
+const SENZA_MODIFICATORI = ~(4 | 8 | 16);
+
+// Direzione dell'albero per ogni verso della rotella. Su e giu' scorrono la
+// conversazione avanti e indietro come le frecce sinistra e destra: l'albero e'
+// orizzontale, e sono i rami — non i turni — a stare uno sotto l'altro.
+// Le rotelle orizzontali (66 e 67, trackpad e mouse con la rotella inclinabile)
+// vanno dalla stessa parte del gesto.
+const DIREZIONE_ROTELLA = { 64: 'sinistra', 65: 'destra', 66: 'sinistra', 67: 'destra' };
+
+// Traduce un blocco di byte non riconosciuti negli scorrimenti della rotella che
+// contiene. I clic e i movimenti non producono niente: l'albero non ha un
+// bersaglio da cliccare, e reagire a un movimento qualsiasi sposterebbe il
+// cursore mentre si passa sopra lo schermo.
+// bytes: Buffer del blocco
+// ritorna: array di { tipo: 'freccia', valore: 'sinistra'|'destra' }
+export function azioniRotella(bytes) {
+  const azioni = [];
+  const testo = Buffer.from(bytes).toString('latin1');
+
+  for (const [espressione, scarto] of [
+    [RE_ROTELLA_SGR, 0],
+    [RE_ROTELLA_X10, 32],
+  ]) {
+    espressione.lastIndex = 0;
+    for (const trovato of testo.matchAll(espressione)) {
+      const codice = (Number(scarto ? trovato[1].charCodeAt(0) - scarto : trovato[1]) &
+        SENZA_MODIFICATORI);
+      const direzione = DIREZIONE_ROTELLA[codice];
+      if (direzione) azioni.push({ tipo: 'freccia', valore: direzione });
+    }
+  }
+
+  return azioni;
+}
+
 // Traduce i byte ricevuti in azioni per un campo di input testuale.
 // Necessario perche' in win32-input-mode ogni evento tastiera comincia con
 // 0x1b: leggere i byte grezzi farebbe scambiare per Esc anche il rilascio di un
@@ -338,6 +409,7 @@ export function azioniTastiera(dati) {
       if (voce.tasto.rilascio) continue; // il rilascio non e' un input
       if (voce.tasto.vk === VK_INVIO) azioni.push({ tipo: 'invio' });
       else if (voce.tasto.vk === VK_BACKSPACE) azioni.push({ tipo: 'cancella' });
+      else if (voce.tasto.vk === VK_CANC) azioni.push({ tipo: 'esci' });
       else if (voce.tasto.vk === VK_ESCAPE) azioni.push({ tipo: 'annulla' });
       else if (DIREZIONE[voce.tasto.vk]) {
         azioni.push({ tipo: 'freccia', valore: DIREZIONE[voce.tasto.vk] });
@@ -362,9 +434,15 @@ export function azioniTastiera(dati) {
       continue;
     }
 
-    // Blocco non riconosciuto: se comincia con ESC e' una sequenza di controllo
-    // (mouse, frecce) e va ignorata, altrimenti sono caratteri digitati.
-    if (voce.bytes[0] === 0x1b) continue;
+    // Blocco non riconosciuto: se comincia con ESC e' una sequenza di controllo.
+    // Della rotella si tiene lo scorrimento — muove l'albero come le frecce —
+    // e il resto (clic, movimenti, frecce gia' gestite sopra) si scarta: le sue
+    // coordinate, lette a byte, diventerebbero cifre digitate.
+    if (voce.bytes[0] === 0x1b) {
+      if (cancNeiByte(voce.bytes).canc) azioni.push({ tipo: 'esci' });
+      azioni.push(...azioniRotella(voce.bytes));
+      continue;
+    }
     for (const byte of voce.bytes) {
       if (byte === 0x0d || byte === 0x0a) azioni.push({ tipo: 'invio' });
       else if (byte === 0x7f || byte === 0x08) azioni.push({ tipo: 'cancella' });
@@ -392,10 +470,89 @@ export function azioniTastiera(dati) {
 const COMANDI_LETTERA = {
   r: 'modo',
   ' ': 'apri',
-  c: 'conversazione', // cambia conversazione senza uscire da Claude
-  p: 'progetto', // cambia cartella di lavoro
+  c: 'conversazione', // apre il navigatore delle cartelle: cartella e conversazione
   m: 'profilo', // rilancia la stessa conversazione con altre variabili d'ambiente
+  p: 'coda', // la coda dei prompt che partono da soli a fine turno
 };
+
+const VK_CANC = 46;
+// Canc nelle codifiche ANSI. tokenizza lo lascia fra i byte non riconosciuti:
+// la sua forma e' quella dei tasti funzione (ESC[<n>~) ma il 3 non e' un F.
+// I modificatori arrivano come parametro in mezzo: ESC[3;5~ e' ctrl+canc.
+const RE_CANC_ANSI = /\x1b\[3(?:;(\d+))?~/;
+// Bit dei modificatori nelle sequenze CSI: il parametro e' 1 + la somma, con
+// 4 = ctrl (1 = niente, 5 = ctrl, 6 = ctrl+shift).
+const CTRL_CSI = 4;
+
+// Vero se il blocco contiene Canc, e se era premuto con ctrl.
+// bytes: blocco non riconosciuto da tokenizza
+// ritorna: { canc, ctrl }
+function cancNeiByte(bytes) {
+  const trovato = RE_CANC_ANSI.exec(Buffer.from(bytes).toString('latin1'));
+  if (!trovato) return { canc: false, ctrl: false };
+  const modificatori = Number(trovato[1] ?? 1) - 1;
+  return { canc: true, ctrl: (modificatori & CTRL_CSI) !== 0 };
+}
+
+// Traduce i byte ricevuti in azioni per la coda dei prompt, dove si scrive testo
+// libero **e** si naviga un elenco.
+//
+// Non basta ne' azioniTesto — che le frecce le scarta, e qui scelgono la riga da
+// togliere — ne' azioniTastiera, che mappa w/a/s/d sulle direzioni e in un campo
+// di testo servono come lettere. Si tiene `grezzo` e non `carattere` perche' un
+// prompt e' testo: le maiuscole contano.
+//
+// Canc esce dall'interfaccia e torna a Claude, come in ogni altra schermata: e'
+// l'unico tasto che vale lo stesso ovunque, ed e' quello che lo rende utile.
+// Per togliere un prompt dalla coda si usa **ctrl+canc**: e' l'azione frequente,
+// ma cedere il tasto semplice all'uscita e' il prezzo della coerenza.
+// Backspace resta per correggere il testo che stai scrivendo: un tasto solo non
+// puo' fare due cose a seconda di quanto hai scritto.
+// dati: Buffer letto da stdin
+// ritorna: array di { tipo: 'carattere'|'invio'|'cancella'|'togli'|'freccia'|'annulla'|'esci', valore? }
+export function azioniCoda(dati) {
+  const azioni = [];
+
+  for (const voce of tokenizza(dati)) {
+    if (voce.tasto) {
+      if (voce.tasto.rilascio) continue;
+      if (voce.tasto.vk === VK_INVIO) azioni.push({ tipo: 'invio' });
+      else if (voce.tasto.vk === VK_BACKSPACE) azioni.push({ tipo: 'cancella' });
+      else if (voce.tasto.vk === VK_CANC) {
+        azioni.push({ tipo: voce.tasto.ctrl ? 'togli' : 'esci' });
+      } else if (voce.tasto.vk === VK_ESCAPE) azioni.push({ tipo: 'annulla' });
+      else if (DIREZIONE[voce.tasto.vk]) {
+        azioni.push({ tipo: 'freccia', valore: DIREZIONE[voce.tasto.vk] });
+      } else if (voce.tasto.grezzo && !voce.tasto.ctrl && !voce.tasto.alt) {
+        azioni.push({ tipo: 'carattere', valore: voce.tasto.grezzo });
+      }
+      continue;
+    }
+
+    // Blocco non riconosciuto: se comincia con ESC e' una sequenza di controllo.
+    // Ne interessa Canc, e la rotella — che qui scorre l'elenco come le frecce.
+    if (voce.bytes[0] === 0x1b) {
+      const canc = cancNeiByte(voce.bytes);
+      if (canc.canc) azioni.push({ tipo: canc.ctrl ? 'togli' : 'esci' });
+      for (const azione of azioniRotella(voce.bytes)) {
+        // La rotella dell'albero scorre in orizzontale, qui l'elenco e' verticale.
+        azioni.push({ tipo: 'freccia', valore: azione.valore === 'sinistra' ? 'su' : 'giu' });
+      }
+      continue;
+    }
+
+    for (const byte of voce.bytes) {
+      if (byte === 0x0d || byte === 0x0a) azioni.push({ tipo: 'invio' });
+      else if (byte === 0x7f || byte === 0x08) azioni.push({ tipo: 'cancella' });
+      else if (byte === 0x03) azioni.push({ tipo: 'annulla' });
+      else if (byte >= 0x20 && byte < 0x7f) {
+        azioni.push({ tipo: 'carattere', valore: String.fromCharCode(byte) });
+      }
+    }
+  }
+
+  return azioni;
+}
 
 // Traduce i byte ricevuti in comandi per le schermate che si navigano: il
 // selettore delle cartelle e quello delle conversazioni.
@@ -412,6 +569,7 @@ export function azioniNavigazione(dati) {
       const direzione = DIREZIONE[voce.tasto.vk];
       if (direzione) azioni.push(direzione);
       else if (voce.tasto.vk === VK_INVIO) azioni.push('conferma');
+      else if (voce.tasto.vk === VK_CANC) azioni.push('esci');
       else if (voce.tasto.vk === VK_ESCAPE) azioni.push('annulla');
       else if (!voce.tasto.ctrl && !voce.tasto.alt && voce.tasto.carattere) {
         const comando =
@@ -421,9 +579,14 @@ export function azioniNavigazione(dati) {
       continue;
     }
 
-    // Byte non riconosciuti: se cominciano con ESC sono sequenze di controllo
-    // (mouse, tasti che non ci interessano) e vanno ignorate.
-    if (voce.bytes[0] === 0x1b) continue;
+    // Byte non riconosciuti: se cominciano con ESC sono sequenze di controllo.
+    // Della rotella si tiene lo scorrimento — che muove come le frecce — e il
+    // resto (clic, movimenti) si scarta.
+    if (voce.bytes[0] === 0x1b) {
+      if (cancNeiByte(voce.bytes).canc) azioni.push('esci');
+      for (const azione of azioniRotella(voce.bytes)) azioni.push(azione.valore);
+      continue;
+    }
     for (const byte of voce.bytes) {
       if (byte === 0x0d || byte === 0x0a) azioni.push('conferma');
       else if (byte === 0x03) azioni.push('annulla');

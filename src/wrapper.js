@@ -28,6 +28,7 @@ import { senzaTitolo, sequenzaTitolo } from './titolo.js';
 import { impostazione, salvaImpostazione, percorsoImpostazioni } from './impostazioni.js';
 import { T } from './lingua.js';
 import { creaSessioneTroncata } from './ramo.js';
+import { trasferisci, leggiCoda, togli } from './coda.js';
 import { leggiProfili, elencoProfili, ambienteConProfilo } from './profili.js';
 import {
   tokenizza,
@@ -38,6 +39,8 @@ import {
   azioniNavigazione,
   ATTESA_DOPPIO_ESC,
   FINESTRA_SCORCIATOIA,
+  MODI_MOUSE,
+  SPEGNI_MODI_INPUT,
 } from './tasti.js';
 
 // Sequenze ANSI usate dall'overlay. Nominate perche' scritte come caratteri di
@@ -58,14 +61,14 @@ function scrittoDopo(candidato, riferimento) {
   }
 }
 
-// Modi di tracciamento del mouse che una TUI puo' accendere. Finche' sono accesi
-// il terminale manda movimenti e clic all'applicazione invece di selezionare il
-// testo: con l'overlay a schermo non si riusciva a copiare niente, perche' cb
-// quegli eventi li scarta e basta.
+// Con l'overlay a schermo il tracciamento del mouse va spento: finche' e' acceso
+// il terminale manda movimenti e clic all'applicazione invece di selezionare, e
+// dall'albero non si riusciva a copiare niente, perche' cb quegli eventi li
+// scarta e basta.
 //
 // Quali siano accesi non si indovina: si guarda cosa Claude ha chiesto
 // (`osservaMouse`) e si rimette esattamente quello alla chiusura dell'overlay.
-const MODI_MOUSE = [1000, 1002, 1003, 1005, 1006, 1015, 1016];
+// L'elenco dei modi sta in `tasti.js`, insieme agli altri protocolli di input.
 const RE_MODO_MOUSE = new RegExp(`\\x1b\\[\\?(${MODI_MOUSE.join('|')})([hl])`, 'g');
 
 // La sequenza piu' lunga fra quelle cercate e' `ESC[?1016h`, nove caratteri:
@@ -81,6 +84,12 @@ const FINE_INCOLLA = '\x1b[201~';
 // Millisecondi di silenzio dell'output dopo cui Claude e' considerato pronto a
 // ricevere tasti, e limite oltre il quale si scrive comunque (vedi programmaBarra).
 const QUIETE_AVVIO = 600;
+
+// Silenzio dell'output dopo cui Claude e' considerato fermo, e la coda puo'
+// partire. Piu' larga di QUIETE_AVVIO: qui non si sta aspettando che compaia una
+// barra di input, si sta decidendo se una risposta e' finita — e un prompt
+// mandato a meta' di un ragionamento lo interromperebbe.
+const QUIETE_CODA = 1500;
 const ATTESA_MASSIMA_AVVIO = 8000;
 
 // Millisecondi di calma prima di ridisegnare l'overlay dopo un ridimensionamento.
@@ -143,9 +152,12 @@ function navigazioneDa(comando) {
   }
   if (comando === 'conferma') return { tipo: 'conferma' };
   if (comando === 'annulla') return { tipo: 'annulla' };
+  // Senza questa riga Canc veniva scartato da `.filter(Boolean)` e l'albero non
+  // rispondeva affatto: il tasto arrivava fin qui e moriva in silenzio.
+  if (comando === 'esci') return { tipo: 'esci' };
   if (comando === 'conversazione') return { tipo: 'conversazione' };
-  if (comando === 'progetto') return { tipo: 'progetto' };
   if (comando === 'profilo') return { tipo: 'profilo' };
+  if (comando === 'coda') return { tipo: 'coda' };
   return null;
 }
 
@@ -210,6 +222,8 @@ export class Wrapper {
     this.ridisegnaOverlay = null; // come ridisegnare l'overlay aperto, se c'e'
     this.timerRidimensiona = null;
     this.attesaBarra = null; // prompt da rimettere nella barra appena Claude e' pronto
+    this.timerCoda = null; // conto della quiete dopo cui parte il prossimo prompt in coda
+    this.ultimoTasto = 0; // quando l'utente ha battuto l'ultimo tasto (vedi consegnaCoda)
 
     // Fotografia dell'ambiente di partenza. Ogni processo Claude nasce da questa,
     // non dall'ambiente corrente: e' cio' che fa sparire da sole le variabili di
@@ -255,8 +269,15 @@ export class Wrapper {
   // che cb ha ricevuto — il comportamento di sempre.
   // ritorna: oggetto da passare a pty.spawn
   ambiente() {
-    if (!this.profilo) return this.ambienteDiPartenza;
-    return ambienteConProfilo(this.ambienteDiPartenza, leggiProfili().get(this.profilo));
+    // CB_CODA_PTY dice all'hook della coda di stare fermo: dentro cb i prompt li
+    // consegna il pty, che li scrive come li scriveresti tu — quindi diventano
+    // record `user` veri, e nodi dell'albero. Gli hook girano come figli di
+    // Claude e questa variabile la ereditano. Fuori da cb non c'e', e l'hook
+    // resta l'unica strada.
+    const base = this.profilo
+      ? ambienteConProfilo(this.ambienteDiPartenza, leggiProfili().get(this.profilo))
+      : this.ambienteDiPartenza;
+    return { ...base, CB_CODA_PTY: '1' };
   }
 
   // Lancia un processo Claude.
@@ -265,7 +286,9 @@ export class Wrapper {
   // prompt: testo da rimettere nella barra di input senza inviarlo (modo
   //   'prompt' del menu di ripristino). Assente negli altri modi.
   avviaClaude({ riprendi = null, prompt = null } = {}) {
-    this.sessionId = riprendi ?? randomUUID();
+    // Passa da cambiaSessione e non dall'assegnazione diretta: dopo un cambio
+    // ramo la sessione e' un'altra, e i prompt in coda devono seguirla.
+    this.cambiaSessione(riprendi ?? randomUUID());
     this.attesaBarra = null; // il processo e' nuovo: l'attesa di quello vecchio non vale piu'
     const argomenti = [];
 
@@ -310,8 +333,14 @@ export class Wrapper {
     this.processo.onData((dati) => {
       this.osservaMouse(dati);
       this.attesaBarra?.(); // finche' Claude disegna, il prompt da rimettere aspetta
+      this.rimandaConsegna(); // e per lo stesso motivo la coda non parte
       if (!this.inOverlay) this.scrivi(senzaTitolo(dati));
     });
+
+    // Il primo controllo parte anche senza output: se Claude e' gia' fermo — o se
+    // non scrive nulla dopo l'avvio — la quiete non arriverebbe mai da sola, e i
+    // prompt gia' in coda resterebbero li' ad aspettare un turno che non c'e'.
+    this.rimandaConsegna();
 
     this.programmaBarra(prompt);
 
@@ -381,6 +410,52 @@ export class Wrapper {
     this.attesaBarra();
   }
 
+  // Manda il prossimo prompt della coda, se Claude e' fermo.
+  //
+  // Il momento non si deduce da quello che c'e' a schermo — cb non legge l'output
+  // di Claude, che cambia a ogni versione del CLI — ma da **quando l'output
+  // smette di arrivare**: mentre Claude lavora l'indicatore si anima e i byte
+  // continuano, quando ha finito l'interfaccia si ferma. E' lo stesso segnale su
+  // cui si regge gia' `programmaBarra`.
+  //
+  // Copre tutt'e due i casi che servono, senza distinguerli: Claude che finisce
+  // di rispondere arriva alla quiete adesso, Claude gia' fermo ci e' arrivato
+  // prima e il prompt parte al primo controllo.
+  //
+  // Il prompt si scrive nel pty seguito da invio, cioe' esattamente come lo
+  // scriveresti tu: nel transcript diventa un record `user` vero, e quindi un
+  // nodo dell'albero da cui si puo' ripartire. E' il motivo per cui dentro cb
+  // questa strada batte l'hook, che puo' solo consegnarlo come motivo di un
+  // `decision: block`.
+  consegnaCoda() {
+    if (!this.processo || this.inOverlay) return; // schermo di cb: l'utente sta scrivendo qui
+    // Mentre l'utente digita non si inietta niente: il testo si mescolerebbe a
+    // quello che sta scrivendo, e l'invio manderebbe il miscuglio.
+    if (Date.now() - (this.ultimoTasto ?? 0) < QUIETE_CODA) return;
+
+    const prossimo = leggiCoda(this.sessionId)[0];
+    if (!prossimo) return;
+
+    // Si toglie PRIMA di scrivere: se la scrittura fallisce si perde un prompt,
+    // mentre togliendolo dopo un errore lo rimanderebbe a ogni quiete, per sempre.
+    togli(this.sessionId, 0);
+    this.registra(`coda: mando un prompt (${prossimo.length} caratteri), ne restano ${leggiCoda(this.sessionId).length}`);
+    // Su piu' righe va incollato: gli a capo grezzi verrebbero letti come invii,
+    // e il prompt partirebbe a pezzi.
+    const testo = prossimo.includes('\n')
+      ? `${INIZIO_INCOLLA}${prossimo}${FINE_INCOLLA}`
+      : prossimo;
+    this.processo.write(`${testo}\r`);
+  }
+
+  // Fa ripartire il conto della quiete a ogni blocco di output.
+  // Finche' Claude disegna il timer si riarma, e la coda non parte: e' l'attesa
+  // stessa a dire che sta ancora lavorando.
+  rimandaConsegna() {
+    clearTimeout(this.timerCoda);
+    this.timerCoda = setTimeout(() => this.consegnaCoda(), QUIETE_CODA);
+  }
+
   // Forza Claude a ridisegnare l'interfaccia dopo che l'overlay l'ha coperta.
   // Una variazione di dimensione fa ripartire il layout di Ink: e' l'unico modo
   // affidabile, Claude non risponde a una richiesta di refresh.
@@ -396,9 +471,29 @@ export class Wrapper {
     this.inOverlay = false;
     this.ridisegnaOverlay = null; // da qui in poi lo schermo e' di Claude
     clearTimeout(this.timerRidimensiona);
+    this.mouseOverlay(false); // prima si toglie il nostro, poi si rimette il suo
     this.mouse(true); // lo schermo torna a Claude, e il mouse e' suo
     this.scrivi(PULISCI_SCHERMO);
     this.forzaRidisegno();
+  }
+
+  // Cambia la sessione seguita, portandosi dietro la coda dei prompt.
+  //
+  // Va usata **ovunque** `sessionId` venga riassegnato, e non e' un dettaglio:
+  // la coda e' legata all'id, e in cb quell'id cambia spesso — un /clear fa
+  // nascere un file nuovo, ogni cambio ramo crea una sessione troncata. Senza lo
+  // spostamento i prompt gia' scritti resterebbero appesi a una sessione che non
+  // riceve piu' hook, cioe' sparirebbero in silenzio.
+  // nuovo: id della sessione da seguire da qui in avanti
+  cambiaSessione(nuovo) {
+    if (this.sessionId && nuovo && this.sessionId !== nuovo) {
+      try {
+        trasferisci(this.sessionId, nuovo);
+      } catch {
+        // una coda che non si sposta non e' un motivo per non cambiare sessione
+      }
+    }
+    this.sessionId = nuovo;
   }
 
   // Prende nota dei modi mouse che Claude accende o spegne, leggendo il suo
@@ -428,6 +523,19 @@ export class Wrapper {
     if (this.mouseAcceso.size === 0) return;
     const finale = acceso ? 'h' : 'l';
     this.scrivi([...this.mouseAcceso].map((modo) => `\x1b[?${modo}${finale}`).join(''));
+  }
+
+  // Il tracciamento che serve all'overlay, al posto di quello di Claude: ?1000
+  // riporta clic e rotella, ?1006 ne da' le coordinate in SGR, che e' l'unica
+  // codifica che regge un terminale largo piu' di 223 colonne.
+  //
+  // E' il minimo che fa arrivare la rotella: ?1002 e ?1003, che Claude accende,
+  // riportano anche i movimenti, e con quelli il terminale smette del tutto di
+  // selezionare. Con ?1000 la selezione resta a portata tenendo premuto shift,
+  // che e' l'aggiramento standard del tracciamento.
+  // acceso: true mentre l'overlay e' a schermo
+  mouseOverlay(acceso) {
+    this.scrivi(acceso ? '\x1b[?1000h\x1b[?1006h' : '\x1b[?1006l\x1b[?1000l');
   }
 
   // Reagisce al ridimensionamento della finestra del terminale.
@@ -498,7 +606,7 @@ export class Wrapper {
     return new Promise((risolvi) => {
       const ascoltatore = (dati) => {
         for (const comando of azioniNavigazione(dati)) {
-          if (comando === 'conversazione' || comando === 'progetto') {
+          if (comando === 'conversazione') {
             process.stdin.off('data', ascoltatore);
             return risolvi('selettori');
           }
@@ -506,7 +614,10 @@ export class Wrapper {
             process.stdin.off('data', ascoltatore);
             return risolvi('profilo');
           }
-          if (comando === 'conferma' || comando === 'annulla') {
+          // Da un avviso non si risale da nessuna parte: dietro c'e' Claude, e
+          // Canc ci porta come Esc. Restano tutt'e due perche' Canc deve
+          // funzionare in ogni schermata, comprese quelle dove non aggiunge nulla.
+          if (comando === 'conferma' || comando === 'annulla' || comando === 'esci') {
             process.stdin.off('data', ascoltatore);
             return risolvi(null);
           }
@@ -555,7 +666,7 @@ export class Wrapper {
     if (nostro && recente && recente.sessionId !== this.sessionId) {
       if (scrittoDopo(recente.percorso, nostro)) {
         this.registra(`sessione cambiata: ${this.sessionId} -> ${recente.sessionId}`);
-        this.sessionId = recente.sessionId;
+        this.cambiaSessione(recente.sessionId); // e' il caso del /clear: la coda segue
         return recente.percorso;
       }
     }
@@ -575,7 +686,7 @@ export class Wrapper {
     if (recente) {
       if (recente.sessionId !== this.sessionId) {
         this.registra(`sessione scoperta dal disco: ${recente.sessionId}`);
-        this.sessionId = recente.sessionId;
+        this.cambiaSessione(recente.sessionId);
       }
       return recente.percorso;
     }
@@ -617,7 +728,10 @@ export class Wrapper {
     }
 
     this.inOverlay = true;
-    this.mouse(false); // schermo nostro: il mouse torni a selezionare il testo
+    this.mouse(false); // schermo nostro: via il tracciamento di Claude
+    // Al suo posto il minimo che fa arrivare la rotella, che qui scorre l'albero
+    // come le frecce. La selezione del testo resta con shift premuto.
+    this.mouseOverlay(true);
     this.scrivi(MOSTRA_CURSORE + PULISCI_SCHERMO); // cursore visibile, schermo pulito
 
     // I rami abbandonati prima di un fork vivono nel file della sessione di
@@ -681,7 +795,10 @@ export class Wrapper {
       this.ridisegnaOverlay();
       const azione = await this.leggiNavigazione();
 
-      if (azione.tipo === 'annulla') {
+      // Nell'albero i due tasti finiscono nello stesso posto — indietro da qui
+      // vuol dire Claude — ma restano tutt'e due: Canc deve funzionare in ogni
+      // schermata, e una in cui non funzionasse basterebbe a non fidarsene piu'.
+      if (azione.tipo === 'annulla' || azione.tipo === 'esci') {
         this.registra('overlay chiuso senza scegliere');
         this.chiudiOverlay();
         return;
@@ -690,6 +807,11 @@ export class Wrapper {
         // Invio non riparte piu' subito: prima si sceglie cosa riportare
         // indietro. Esc nel menu torna all'albero, non chiude l'overlay.
         scelta = await this.scegliModoRipristino(vista, selezione);
+        // Canc dal menu esce da tutto: l'albero non si riapre.
+        if (scelta === 'esci') {
+          this.chiudiOverlay();
+          return;
+        }
         if (!scelta) continue;
         voce = vista.perUuid.get(selezione);
         break;
@@ -702,9 +824,19 @@ export class Wrapper {
         if (cambiato) return;
         continue;
       }
+      // La coda non cambia ne' conversazione ne' processo: si torna all'albero
+      // dove lo si era lasciato, con la stessa vista e lo stesso cursore. Con
+      // Canc invece si esce da tutto, senza ripassare dall'albero.
+      if (azione.tipo === 'coda') {
+        if ((await this.mostraCoda()) === 'esci') {
+          this.chiudiOverlay();
+          return;
+        }
+        continue;
+      }
       // Da qui si esce dalla conversazione corrente: si sceglie un'altra
       // conversazione della stessa cartella, o prima un'altra cartella.
-      if (azione.tipo === 'conversazione' || azione.tipo === 'progetto') {
+      if (azione.tipo === 'conversazione') {
         // Esc sul primo selettore riporta all'albero, da dove si era partiti.
         // Si ricomincia da capo invece di riusare la vista: nel frattempo la
         // conversazione puo' essere cresciuta, e ridisegnare quella vecchia
@@ -735,8 +867,8 @@ export class Wrapper {
   //
   // vista: risultato di componiVista
   // selezione: uuid del nodo su cui sta il cursore
-  // ritorna: Promise<{ modo, daRimandare } | null> — null se si torna all'albero
-  //          con Esc
+  // ritorna: Promise<{ modo, daRimandare } | null | 'esci'> — null se si torna
+  //          all'albero con Esc, 'esci' se con Canc si esce dall'interfaccia
   scegliModoRipristino(vista, selezione) {
     // Preselezione: il caso normale, o "solo la conversazione" se l'utente ha
     // chiesto di non toccare i file (--senza-file).
@@ -791,6 +923,9 @@ export class Wrapper {
       const ascoltatore = (dati) => {
         for (const azione of azioniTastiera(dati)) {
           if (azione.tipo === 'annulla') return concludi(null);
+          // Canc esce da tutto senza ripristinare niente: si torna a Claude come
+          // se il menu non fosse mai stato aperto.
+          if (azione.tipo === 'esci') return concludi('esci');
           if (azione.tipo === 'invio') return concludi(esito());
           if (azione.tipo === 'cifra') {
             const scelto = Number.parseInt(azione.valore, 10) - 1;
@@ -879,6 +1014,8 @@ export class Wrapper {
       const ascoltatore = (dati) => {
         for (const azione of azioniTastiera(dati)) {
           if (azione.tipo === 'annulla') return concludi(undefined);
+          // Canc esce da tutto senza cambiare profilo: il processo non si tocca.
+          if (azione.tipo === 'esci') return concludi('esci');
           if (azione.tipo === 'invio') return concludi(elenco[indice]);
           if (azione.tipo === 'freccia') {
             if (azione.valore === 'su') indice = (indice + elenco.length - 1) % elenco.length;
@@ -893,6 +1030,12 @@ export class Wrapper {
     });
 
     if (scelto === undefined) return false; // Esc: si torna all'albero
+    // Canc: fuori da tutto. Vale come "gestito", cosi' chi ci ha chiamato non
+    // riapre l'albero — ma senza rilanciare niente.
+    if (scelto === 'esci') {
+      this.chiudiOverlay();
+      return true;
+    }
     if (scelto === this.profilo) {
       this.chiudiOverlay();
       return true; // gia' quello: niente da rilanciare, ma l'overlay si chiude
@@ -980,7 +1123,10 @@ export class Wrapper {
     });
 
     this.scrivi(PULISCI_SCHERMO);
-    for (const riga of righe) this.scrivi(`${riga}\r\n`);
+    // Senza a capo finale: la pagina e' alta esattamente quanto lo schermo, e un
+    // \r\n dopo l'ultima riga la farebbe scorrere di uno portando via
+    // l'intestazione.
+    this.scrivi(righe.join('\r\n'));
   }
 
   // Legge un tasto di navigazione dallo stdin grezzo.
@@ -1041,6 +1187,32 @@ export class Wrapper {
     return selezionaConversazione(opzioni);
   }
 
+  // La coda dei prompt che partono da soli a fine turno (vedi src/coda.js).
+  //
+  // A differenza degli altri due non porta da nessuna parte: si scrive, si
+  // guarda, si torna all'albero. Il processo Claude non si tocca — i prompt li
+  // consegna il pty a fine turno — quindi non c'e' niente da rilanciare.
+  //
+  // Lo stdin va rimesso come lo vuole il wrapper in un `finally`: la schermata,
+  // come tutti i selettori, alla chiusura lo lascia com'era prima (raw mode
+  // spento, flusso in pausa), e senza rimetterlo i tasti non arriverebbero piu'
+  // a Claude.
+  // ritorna: 'indietro' (Esc, si torna all'albero) o 'esci' (Canc, dritti a Claude)
+  async mostraCoda() {
+    const { apriCoda } = await import('./coda.js');
+    try {
+      return await apriCoda({ sessione: this.sessionId });
+    } finally {
+      if (process.stdin.isTTY) process.stdin.setRawMode(true);
+      process.stdin.resume();
+      // Chiudendo la coda i tasti battuti qui dentro non contano come "l'utente
+      // sta scrivendo a Claude": erano per cb. Senza azzerarli, il primo prompt
+      // aspetterebbe un tempo che non ha motivo di aspettare.
+      this.ultimoTasto = 0;
+      this.rimandaConsegna();
+    }
+  }
+
   async cambiaConversazione() {
     const { annotaCartellaScelta } = await import('./cartelle.js');
 
@@ -1062,6 +1234,13 @@ export class Wrapper {
           ripresa: true,
           profilo: this.profilo,
         });
+        // Canc: si torna dritti a Claude, saltando le schermate da cui si era
+        // passati. Lo schermo va restituito qui — chi ci ha chiamato, vedendo
+        // 'esci', non riapre niente e non chiuderebbe l'overlay per noi.
+        if (scelta === 'esci') {
+          this.chiudiOverlay();
+          return 'esci';
+        }
         if (!scelta) return 'indietro'; // esc sul primo passo: decide chi ci ha chiamato
         cartella = scelta.percorso;
         // Il profilo scelto nel navigatore vale per il processo che nascera' da
@@ -1083,6 +1262,13 @@ export class Wrapper {
           cartella,
           ripristinaCodice: this.ripristinaCodice,
         });
+        // Canc dall'elenco non risale alle cartelle come farebbe Esc: esce da
+        // tutto. Va intercettato qui dentro il ciclo, o il `while` lo tratterebbe
+        // come "non hai ancora scelto" e riaprirebbe il navigatore.
+        if (conversazione === 'esci') {
+          this.chiudiOverlay();
+          return 'esci';
+        }
       }
 
       this.registra(
@@ -1282,6 +1468,16 @@ export class Wrapper {
   chiudiProcesso() {
     if (!this.processo) return Promise.resolve();
 
+    // Il tracciamento acceso per la rotella dell'overlay non deve sopravvivere al
+    // processo: quello che parte dopo accende i suoi modi, e questo in piu' gli
+    // farebbe arrivare clic che non si aspetta. Qui si passa da ogni uscita
+    // dell'albero che non sia chiudiOverlay — cambio ramo, profilo, conversazione.
+    this.mouseOverlay(false);
+    // Stessa ragione per il conto della coda: scattando dopo il kill scriverebbe
+    // in un pty morto, o peggio nel processo che nasce subito dopo, che sta
+    // ancora avviandosi.
+    clearTimeout(this.timerCoda);
+
     const attesa = new Promise((risolvi) => {
       this.risolviUscita = risolvi;
       // Rete di sicurezza: se l'uscita non venisse notificata non restiamo bloccati.
@@ -1444,6 +1640,12 @@ export class Wrapper {
   gestisciInput(dati) {
     if (this.inOverlay) return; // in overlay legge leggiNumero
 
+    // Quando hai battuto l'ultimo tasto: finche' stai scrivendo, la coda non
+    // inietta niente. Senza, il prompt accodato si mescolerebbe a quello che stai
+    // digitando e l'invio manderebbe il miscuglio.
+    this.ultimoTasto = Date.now();
+    this.rimandaConsegna();
+
     const token = tokenizza(dati);
 
     if (this.diagnostica) {
@@ -1547,9 +1749,14 @@ export class Wrapper {
   }
 
   // Ripristina il terminale ed esce.
+  //
+  // I modi di input li ha accesi Claude e di norma li spegne lui uscendo: qui si
+  // rifa' comunque, perche' quando l'uscita non e' la sua — processo ucciso con
+  // l'overlay a schermo — resterebbero accesi e la shell diventerebbe
+  // inutilizzabile (vedi SPEGNI_MODI_INPUT).
   chiudi(codice) {
     if (process.stdin.isTTY) process.stdin.setRawMode(false);
-    this.scrivi(MOSTRA_CURSORE); // il cursore potrebbe essere nascosto da Claude
+    this.scrivi(SPEGNI_MODI_INPUT);
     process.exit(codice);
   }
 

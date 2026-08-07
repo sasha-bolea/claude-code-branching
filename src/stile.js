@@ -2,11 +2,12 @@
 // sequenze ANSI sono invisibili in fase di lettura del sorgente, e perche' vanno
 // spente tutte insieme quando il terminale non le regge.
 //
-// Regola della tavolozza: tutta l'interfaccia sta alla massima luminosita', e la
-// legenda e' l'unica cosa che resta indietro. Ne segue che il ramo attivo NON si
-// distingue dagli altri per luminosita' ma per TINTA — arancione contro il primo
-// piano del terminale. Abbassare i rami in disparte era la scelta di prima, e
-// faceva sembrare mezzo schermo a luminosita' ridotta.
+// Regola della tavolozza: il contenuto sta alla massima luminosita', e resta
+// indietro solo cio' che contenuto non e' — la legenda, i separatori fra le
+// fasce, la colonna delle ore accanto ai prompt passati. Ne segue che il ramo
+// attivo NON si distingue dagli altri per luminosita' ma per TINTA — arancione
+// contro il primo piano del terminale. Abbassare i rami in disparte era la
+// scelta di prima, e faceva sembrare mezzo schermo a luminosita' ridotta.
 
 // Arancione del marchio Claude portato al valore massimo: stessa tinta di
 // #D97757, con il canale piu' alto a 255. Il truecolor e' necessario perche' nella
@@ -42,6 +43,10 @@ const vesti = (codice) => (testo) =>
 
 export const arancione = vesti(ARANCIONE);
 export const arancioneForte = vesti(`1;${ARANCIONE}`);
+// Il prompt scelto dentro il riquadro. E' l'unico punto in cui si scrive un
+// bianco invece di affidarsi a `normale`: il riquadro intorno e' arancione, e il
+// testo deve staccarsene per tinta come fa tutto il resto della tavolozza.
+export const bianco = vesti('1;38;2;255;255;255');
 export const grigio = vesti(GRIGIO);
 export const verde = vesti(VERDE);
 export const rosso = vesti(ROSSO);
