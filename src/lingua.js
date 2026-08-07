@@ -105,6 +105,10 @@ with CB_LINGUA (en, it).
     titoloCorto: 'tree',
     escLunga: 'back to Claude',
     escCorta: 'exit',
+    // Le due parole dell'uscita, uguali in ogni schermata: esc risale di un
+    // passo, canc esce da tutto. Vedi `uscita` in vista.js.
+    indietro: 'back',
+    esci: 'exit',
     righeSopra: (n) => `↑ ${n} rows above`,
     righeSotto: (n) => `↓ ${n} rows below`,
     promptPrima: (n) => `← ${n} prompts back`,
@@ -136,10 +140,10 @@ with CB_LINGUA (en, it).
       'remember',
     ],
     legendaMenu: [
-      '↑↓ pick   ←→ the prompt   1-3 direct choice   enter confirm   esc tree   canc to Claude',
-      '↑↓ pick   ←→ the prompt   1-3 direct choice   enter confirm   esc tree',
-      '↑↓ pick   ←→ prompt   enter confirm   esc tree',
-      '↑↓ ←→ enter esc',
+      '↑↓ pick   ←→ the prompt   1-3 direct choice   enter confirm   esc back   canc exit',
+      '↑↓ pick  ←→ the prompt  1-3 direct choice  enter confirm  esc back  canc exit',
+      '↑↓ pick  ←→ prompt  enter confirm  esc back  canc exit',
+      '↑↓ ←→ enter  esc back  canc exit',
     ],
     invioConFile: 'enter restart',
     invioSenzaFile: 'enter restart (files stay as they are)',
@@ -150,20 +154,22 @@ with CB_LINGUA (en, it).
     ramo: '↑↓ ws branch',
     frecceCorte: '↑↓ ws',
     invioRiparti: 'enter restart',
-    barraMinima: (esc) => `←→↑↓ move  enter restart  esc ${esc}`,
+    // L'uscita arriva gia' composta: puo' essere un tasto solo o due (vedi
+    // `uscita` in vista.js).
+    barraMinima: (uscita) => `←→↑↓ move  enter restart  ${uscita}`,
     // Tasti in piu' disponibili solo dentro la sessione, e nome dell'uscita
     // quando l'albero e' stato aperto dal selettore delle conversazioni.
-    extraLunga: 'c folder and conversation   m profile   p queue',
-    extraCorta: 'c other conv.   m profile   p queue',
+    extraLunga: 'c folder and conversation   m profile   p queue   n notes',
+    extraCorta: 'c other conv.   m profile   p queue   n notes',
     // Profili: si vedono solo se ne hai configurato almeno uno.
     qualeProfilo: 'which profile?',
     profiloBase: "Claude, the way you launched it",
     profiloResta: 'the conversation stays where it is: only the process restarts',
     legendaProfili: [
-      '↑↓ pick   enter confirm   esc back to tree   canc to Claude',
-      '↑↓ pick   enter confirm   esc back to tree',
-      '↑↓ pick   enter   esc tree',
-      '↑↓ enter esc',
+      '↑↓ pick   enter confirm   esc back   canc exit',
+      '↑↓ pick  enter confirm  esc back  canc exit',
+      '↑↓ pick  enter  esc back  canc exit',
+      '↑↓ enter  esc back  canc exit',
     ],
     escElencoLunga: 'back to the list',
     escElencoCorta: 'list',
@@ -179,14 +185,59 @@ with CB_LINGUA (en, it).
     // Il prompt che sta per partire e' quello in cima: dirlo evita di dover
     // dedurre l'ordine dalla numerazione.
     prossimo: 'next',
+    // Gli interruttori, come compaiono accanto al prompt che li porta.
+    marchioStop: '⏸ stop',
+    marchioSalta: '⤼ skip',
     legende: [
-      'enter queue   ↑↓ pick   ctrl+canc remove   esc back to tree   canc to Claude',
-      'enter queue   ↑↓ pick   ctrl+canc remove   esc tree   canc Claude',
-      'enter ↑↓ esc canc',
+      'enter queue   ↑↓ pick   ctrl+↑↓ move   ctrl+s stop   ctrl+x skip   ctrl+canc remove   esc back   canc exit',
+      'enter queue  ↑↓ pick  ctrl+↑↓ move  ctrl+s stop  ctrl+x skip  ctrl+canc remove  esc back  canc exit',
+      'enter queue  ↑↓ pick  ctrl+↑↓ move  ctrl+s/x stop,skip  ctrl+canc remove  esc back  canc exit',
+      'enter queue  ↑↓  ctrl+↑↓ move  ctrl+s/x  ctrl+canc  esc back  canc exit',
+      'enter ↑↓ ctrl+↑↓ ctrl+s/x  esc back  canc exit',
     ],
     // Cosa l'hook antepone al prompt quando lo consegna a Claude: senza, un
     // prompt breve arriva senza contesto e sembra una frase caduta dal nulla.
     intestazione: 'Queued by the user while you were working. Do this now:',
+  },
+
+  // src/note.js — le note della cartella di lavoro
+  note: {
+    titolo: 'notes',
+    // Il legame con la cartella e non con la conversazione e' la cosa meno
+    // ovvia della schermata, ed e' la ragione per cui esiste: va detto in cima.
+    sottotitolo: (cartella) => `of ${cartella} — the same in every session here`,
+    vuota: 'no note yet: write a title, enter, then the body',
+    quante: (n) => (n === 1 ? '1 note' : `${n} notes`),
+    // Solo il titolo si annuncia facoltativo: e' l'informazione che serve, perche'
+    // e' il campo che si puo' saltare. Scrivere «obbligatorio» sull'altro
+    // ripeterebbe la stessa cosa al contrario.
+    titoloNota: 'title (optional)',
+    corpo: 'body',
+    // Il posto della nota nuova resta annunciato in fondo anche quando il cursore
+    // sta altrove: senza, l'elenco sembrerebbe finire con l'ultima nota.
+    nuova: 'new note',
+    // Righe che non ci stanno a schermo. Si dice invece di tagliare zitti: un
+    // elenco troncato in silenzio si legge come un elenco completo.
+    fuoriSchermo: (n) => `${n} more lines, ↑↓ to see them`,
+    cerca: 'search: ',
+    quanteTrovate: (n) => (n === 1 ? '1 match' : `${n} matches`),
+    nessunaCorrispondenza: 'no note matches',
+    // Quante sono segnate per la cancellazione: e' il numero che ctrl+canc
+    // toglierebbe, e va saputo anche quando sono scorse fuori dallo schermo.
+    quanteSegnate: (n) => (n === 1 ? '1 marked' : `${n} marked`),
+    legendeRicerca: [
+      'type to search   ↑↓ move through the matches   ctrl+enter to the bar   enter edit this one   ctrl+space mark   ctrl+canc delete   esc back   canc exit',
+      'type to search  ↑↓ matches  ctrl+enter to the bar  enter edit  ctrl+space mark  ctrl+canc delete  esc back  canc exit',
+      'type to search  ↑↓ matches  ctrl+enter to the bar  ctrl+space mark  ctrl+canc delete  esc back  canc exit',
+      'search  ↑↓  ctrl+enter  ctrl+space  ctrl+canc  esc back  canc exit',
+    ],
+    legende: [
+      'enter title→body, then save   shift+enter new line   ctrl+enter into the bar   ctrl+f search   ctrl+space mark   ctrl+canc delete   ↑↓ notes   esc back   canc exit',
+      'enter title→body, save  shift+enter new line  ctrl+enter into the bar  ctrl+f search  ctrl+space mark  ctrl+canc delete  ↑↓ notes  esc back  canc exit',
+      'enter save  shift+enter new line  ctrl+enter into the bar  ctrl+f search  ctrl+space mark  ctrl+canc delete  esc back  canc exit',
+      'enter save  shift+enter line  ctrl+enter bar  ctrl+f search  ctrl+space mark  ctrl+canc delete  esc back  canc exit',
+      'enter  shift+enter  ctrl+enter  ctrl+f  ctrl+space  ctrl+canc  ↑↓  esc back  canc exit',
+    ],
   },
 
   // src/configura.js — schermata delle impostazioni, al primo avvio
@@ -213,7 +264,7 @@ with CB_LINGUA (en, it).
     legende: [
       '↑↓ pick the setting   ←→ change   enter acts on the row   esc keep these',
       '↑↓ setting   ←→ change   enter acts   esc keep',
-      '↑↓ ←→ enter esc',
+      '↑↓ ←→ enter  esc keep',
     ],
     legendeTesto: [
       'type the path   ~ is your home   enter confirms   esc leaves it as it was',
@@ -225,19 +276,19 @@ with CB_LINGUA (en, it).
   // src/cartelle.js — selettore della cartella di lavoro
   cartelle: {
     legende: [
-      '↑↓ scroll   →← open/close   space open/close   r switch mode   enter confirm   esc back   canc to Claude',
-      '↑↓ scroll   →← open/close   space open/close   r switch mode   enter confirm   esc cancel',
-      '↑↓ scroll   →← open/close   r mode   enter ok   esc cancel',
-      '↑↓ →←   r mode   enter ok   esc cancel',
-      '↑↓ →← r enter esc',
+      '↑↓ scroll   →← open/close   space open/close   r switch mode   enter confirm   esc back   canc exit',
+      '↑↓ scroll  →← open/close  space open/close  r switch mode  enter confirm  esc back  canc exit',
+      '↑↓ scroll  →← open/close  r mode  enter ok  esc back  canc exit',
+      '↑↓ →←  r mode  enter ok  esc back  canc exit',
+      '↑↓ →← r enter  esc back  canc exit',
     ],
     // Con almeno un profilo configurato: `m` lo alterna, come `r` fa col modo.
     legendeConProfilo: [
-      '↑↓ scroll   →← open/close   r mode   m profile   enter ok   esc back   canc to Claude',
-      '↑↓ scroll   →← open/close   r switch mode   m profile   enter confirm   esc cancel',
-      '↑↓ scroll   →← open/close   r mode   m profile   enter ok   esc cancel',
-      '↑↓ →←   r mode   m profile   enter ok   esc cancel',
-      '↑↓ →← r m enter esc',
+      '↑↓ scroll   →← open/close   r switch mode   m profile   enter confirm   esc back   canc exit',
+      '↑↓ scroll  →← open/close  r switch mode  m profile  enter confirm  esc back  canc exit',
+      '↑↓ scroll  →← open/close  r mode  m profile  enter ok  esc back  canc exit',
+      '↑↓ →←  r mode  m profile  enter ok  esc back  canc exit',
+      '↑↓ →← r m enter  esc back  canc exit',
     ],
     titolo: '  Working folder for Claude',
     modoRipresa: 'resume a conversation (-r)',
@@ -249,14 +300,14 @@ with CB_LINGUA (en, it).
   conversazioni: {
     legende: [
       [
-        '↑↓ pick the conversation   enter go into the tree   esc folders   canc to Claude',
-        '↑↓ pick the conversation   enter go into the tree   esc back to folders',
-        '↑↓ conversation   enter tree   esc back',
+        '↑↓ pick the conversation   enter go into the tree   esc back   canc exit',
+        '↑↓ pick the conversation  enter go into the tree  esc back  canc exit',
+        '↑↓ conversation  enter tree  esc back  canc exit',
       ],
       [
-        '←→ back and forth   ↑↓ switch branch   enter restart   esc list   canc to Claude',
-        '←→ back and forth   ↑↓ switch branch   enter restart here   esc back to list',
-        '←→↑↓ move   enter restart   esc list',
+        '←→ back and forth   ↑↓ switch branch   enter restart here   esc back   canc exit',
+        '←→ back and forth  ↑↓ switch branch  enter restart  esc back  canc exit',
+        '←→↑↓ move  enter restart  esc back  canc exit',
       ],
     ],
     quante: (n) => (n === 1 ? '1 conversation' : `${n} conversations`),
@@ -273,9 +324,11 @@ with CB_LINGUA (en, it).
   // src/wrapper.js — messaggi durante il cambio ramo
   wrapper: {
     invioPerTornare: 'enter to go back to Claude',
-    tastiAvviso: 'c  pick folder and conversation      enter or esc  back to Claude',
+    // Da un avviso non si risale da nessuna parte: dietro c'e' Claude, e i due
+    // tasti fanno la stessa cosa. Si scrivono quindi insieme, come nell'albero.
+    tastiAvviso: 'c pick folder and conversation      enter  confirm      esc/canc exit',
     tastiAvvisoConProfilo:
-      'c  folder and conversation      m  profile      enter or esc  back to Claude',
+      'c folder and conversation      m profile      enter  confirm      esc/canc exit',
     senzaTranscript: (scorciatoia, sessione) => [
       'This conversation has no transcript on disk yet.',
       '',
@@ -435,6 +488,10 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     titoloCorto: 'rami',
     escLunga: 'torna a Claude',
     escCorta: 'esci',
+    // Le due parole dell'uscita, uguali in ogni schermata: esc risale di un
+    // passo, canc esce da tutto. Vedi `uscita` in vista.js.
+    indietro: 'indietro',
+    esci: 'esci',
     righeSopra: (n) => `↑ ${n} righe sopra`,
     righeSotto: (n) => `↓ ${n} righe sotto`,
     promptPrima: (n) => `← ${n} prompt prima`,
@@ -466,10 +523,10 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
       'ricordala',
     ],
     legendaMenu: [
-      '↑↓ scegli   ←→ il prompt   1-3 scelta diretta   invio conferma   esc albero   canc a Claude',
-      '↑↓ scegli   ←→ il prompt   1-3 scelta diretta   invio conferma   esc albero',
-      '↑↓ scegli   ←→ il prompt   invio conferma   esc albero',
-      '↑↓ ←→ invio esc',
+      '↑↓ scegli   ←→ il prompt   1-3 scelta diretta   invio conferma   esc indietro   canc esci',
+      '↑↓ scegli  ←→ il prompt  1-3 scelta diretta  invio conferma  esc indietro  canc esci',
+      '↑↓ scegli  ←→ il prompt  invio conferma  esc indietro  canc esci',
+      '↑↓ ←→ invio  esc indietro  canc esci',
     ],
     invioConFile: 'invio riparti',
     invioSenzaFile: 'invio riparti (i file restano come sono)',
@@ -480,18 +537,20 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     ramo: '↑↓ ws ramo',
     frecceCorte: '↑↓ ws',
     invioRiparti: 'invio riparti',
-    barraMinima: (esc) => `←→↑↓ muovi  invio riparti  esc ${esc}`,
-    extraLunga: 'c cartella e conversazione   m profilo   p coda',
-    extraCorta: 'c altra conv.   m profilo   p coda',
+    // L'uscita arriva gia' composta: puo' essere un tasto solo o due (vedi
+    // `uscita` in vista.js).
+    barraMinima: (uscita) => `←→↑↓ muovi  invio riparti  ${uscita}`,
+    extraLunga: 'c cartella e conversazione   m profilo   p coda   n note',
+    extraCorta: 'c altra conv.   m profilo   p coda   n note',
     // Profili: si vedono solo se ne hai configurato almeno uno.
     qualeProfilo: 'con quale profilo?',
     profiloBase: "Claude, come l'hai lanciato",
     profiloResta: "la conversazione resta dov'è: riparte solo il processo",
     legendaProfili: [
-      "↑↓ scegli   invio conferma   esc torna all'albero   canc a Claude",
-      "↑↓ scegli   invio conferma   esc torna all'albero",
-      '↑↓ scegli   invio   esc albero',
-      '↑↓ invio esc',
+      '↑↓ scegli   invio conferma   esc indietro   canc esci',
+      '↑↓ scegli  invio conferma  esc indietro  canc esci',
+      '↑↓ scegli  invio  esc indietro  canc esci',
+      '↑↓ invio  esc indietro  canc esci',
     ],
     escElencoLunga: "torna all'elenco",
     escElencoCorta: 'elenco',
@@ -507,14 +566,58 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     // Il prompt che sta per partire e' quello in cima: dirlo evita di dover
     // dedurre l'ordine dalla numerazione.
     prossimo: 'il prossimo',
+    // Gli interruttori, come compaiono accanto al prompt che li porta.
+    marchioStop: '⏸ stop',
+    marchioSalta: '⤼ salta',
     legende: [
-      'invio accoda   ↑↓ scegli   ctrl+canc togli   esc albero   canc a Claude',
-      'invio accoda   ↑↓ scegli   ctrl+canc togli   esc albero   canc Claude',
-      'invio ↑↓ esc canc',
+      'invio accoda   ↑↓ scegli   ctrl+↑↓ sposta   ctrl+s stop   ctrl+x salta   ctrl+canc togli   esc indietro   canc esci',
+      'invio accoda  ↑↓ scegli  ctrl+↑↓ sposta  ctrl+s stop  ctrl+x salta  ctrl+canc togli  esc indietro  canc esci',
+      'invio accoda  ↑↓ scegli  ctrl+↑↓ sposta  ctrl+s/x stop,salta  ctrl+canc togli  esc indietro  canc esci',
+      'invio accoda  ↑↓  ctrl+↑↓ sposta  ctrl+s/x  ctrl+canc  esc indietro  canc esci',
+      'invio ↑↓ ctrl+↑↓ ctrl+s/x  esc indietro  canc esci',
     ],
     // Cosa l'hook antepone al prompt quando lo consegna a Claude: senza, un
     // prompt breve arriva senza contesto e sembra una frase caduta dal nulla.
     intestazione: 'Accodato dall\'utente mentre lavoravi. Fai questo adesso:',
+  },
+
+  note: {
+    titolo: 'note',
+    // Il legame con la cartella e non con la conversazione e' la cosa meno
+    // ovvia della schermata, ed e' la ragione per cui esiste: va detto in cima.
+    sottotitolo: (cartella) => `di ${cartella} — le stesse in ogni sessione qui`,
+    vuota: 'nessuna nota: scrivi un titolo, invio, poi il corpo',
+    quante: (n) => (n === 1 ? '1 nota' : `${n} note`),
+    // Solo il titolo si annuncia facoltativo: e' l'informazione che serve, perche'
+    // e' il campo che si puo' saltare. Scrivere «obbligatorio» sull'altro
+    // ripeterebbe la stessa cosa al contrario.
+    titoloNota: 'titolo (facoltativo)',
+    corpo: 'corpo',
+    // Il posto della nota nuova resta annunciato in fondo anche quando il cursore
+    // sta altrove: senza, l'elenco sembrerebbe finire con l'ultima nota.
+    nuova: 'nota nuova',
+    // Righe che non ci stanno a schermo. Si dice invece di tagliare zitti: un
+    // elenco troncato in silenzio si legge come un elenco completo.
+    fuoriSchermo: (n) => `altre ${n} righe, ↑↓ per vederle`,
+    cerca: 'cerca: ',
+    quanteTrovate: (n) => (n === 1 ? '1 trovata' : `${n} trovate`),
+    nessunaCorrispondenza: 'nessuna nota corrisponde',
+    // Quante sono segnate per la cancellazione: e' il numero che ctrl+canc
+    // toglierebbe, e va saputo anche quando sono scorse fuori dallo schermo.
+    quanteSegnate: (n) => (n === 1 ? '1 segnata' : `${n} segnate`),
+    legendeRicerca: [
+      'scrivi per cercare   ↑↓ passa fra le trovate   ctrl+invio nella barra   invio modifica questa   ctrl+spazio segna   ctrl+canc cancella   esc indietro   canc esci',
+      'scrivi per cercare  ↑↓ trovate  ctrl+invio nella barra  invio modifica  ctrl+spazio segna  ctrl+canc cancella  esc indietro  canc esci',
+      'scrivi per cercare  ↑↓ trovate  ctrl+invio nella barra  ctrl+spazio segna  ctrl+canc cancella  esc indietro  canc esci',
+      'cerca  ↑↓  ctrl+invio  ctrl+spazio  ctrl+canc  esc indietro  canc esci',
+    ],
+    legende: [
+      'invio titolo→corpo, poi salva   shift+invio a capo   ctrl+invio nella barra   ctrl+f cerca   ctrl+spazio segna   ctrl+canc cancella   ↑↓ note   esc indietro   canc esci',
+      'invio titolo→corpo, salva  shift+invio a capo  ctrl+invio nella barra  ctrl+f cerca  ctrl+spazio segna  ctrl+canc cancella  ↑↓ note  esc indietro  canc esci',
+      'invio salva  shift+invio a capo  ctrl+invio nella barra  ctrl+f cerca  ctrl+spazio segna  ctrl+canc cancella  esc indietro  canc esci',
+      'invio salva  shift+invio a capo  ctrl+invio barra  ctrl+f cerca  ctrl+spazio segna  ctrl+canc cancella  esc indietro',
+      'invio  shift+invio  ctrl+invio  ctrl+f  ctrl+spazio  ctrl+canc  esc indietro  canc esci',
+    ],
   },
 
   configura: {
@@ -540,7 +643,7 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     legende: [
       "↑↓ scegli l'impostazione   ←→ cambia   invio agisce sulla riga   esc tieni queste",
       '↑↓ impostazione   ←→ cambia   invio agisce   esc tieni',
-      '↑↓ ←→ invio esc',
+      '↑↓ ←→ invio  esc tieni',
     ],
     legendeTesto: [
       'scrivi il percorso   ~ e la tua home   invio conferma   esc lascia com era',
@@ -551,19 +654,19 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
 
   cartelle: {
     legende: [
-      '↑↓ scorri   →← apri/chiudi   spazio apri/chiudi   r cambia modo   invio conferma   esc indietro   canc a Claude',
-      '↑↓ scorri   →← apri/chiudi   spazio apri/chiudi   r cambia modo   invio conferma   esc annulla',
-      '↑↓ scorri   →← apri/chiudi   r modo   invio ok   esc annulla',
-      '↑↓ →←   r modo   invio ok   esc annulla',
-      '↑↓ →← r invio esc',
+      '↑↓ scorri   →← apri/chiudi   spazio apri/chiudi   r cambia modo   invio conferma   esc indietro   canc esci',
+      '↑↓ scorri  →← apri/chiudi  spazio apri/chiudi  r cambia modo  invio conferma  esc indietro  canc esci',
+      '↑↓ scorri  →← apri/chiudi  r modo  invio ok  esc indietro  canc esci',
+      '↑↓ →←  r modo  invio ok  esc indietro  canc esci',
+      '↑↓ →← r invio  esc indietro  canc esci',
     ],
     // Con almeno un profilo configurato: `m` lo alterna, come `r` fa col modo.
     legendeConProfilo: [
-      '↑↓ scorri   →← apri/chiudi   r modo   m profilo   invio ok   esc indietro   canc a Claude',
-      '↑↓ scorri   →← apri/chiudi   r cambia modo   m profilo   invio conferma   esc annulla',
-      '↑↓ scorri   →← apri/chiudi   r modo   m profilo   invio ok   esc annulla',
-      '↑↓ →←   r modo   m profilo   invio ok   esc annulla',
-      '↑↓ →← r m invio esc',
+      '↑↓ scorri   →← apri/chiudi   r cambia modo   m profilo   invio conferma   esc indietro   canc esci',
+      '↑↓ scorri  →← apri/chiudi  r cambia modo  m profilo  invio conferma  esc indietro  canc esci',
+      '↑↓ scorri  →← apri/chiudi  r modo  m profilo  invio ok  esc indietro  canc esci',
+      '↑↓ →←  r modo  m profilo  invio ok  esc indietro  canc esci',
+      '↑↓ →← r m invio  esc indietro  canc esci',
     ],
     titolo: '  Cartella di lavoro per Claude',
     modoRipresa: 'ripresa della conversazione (-r)',
@@ -574,14 +677,14 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
   conversazioni: {
     legende: [
       [
-        "↑↓ scegli la conversazione   invio entra nell'albero   esc cartelle   canc a Claude",
-        "↑↓ scegli la conversazione   invio entra nell'albero   esc alle cartelle",
-        '↑↓ conversazione   invio albero   esc indietro',
+        "↑↓ scegli la conversazione   invio entra nell'albero   esc indietro   canc esci",
+        "↑↓ scegli la conversazione  invio entra nell'albero  esc indietro  canc esci",
+        '↑↓ conversazione  invio albero  esc indietro  canc esci',
       ],
       [
-        "←→ avanti e indietro   ↑↓ cambia ramo   invio riparti da qui   esc elenco   canc a Claude",
-        "←→ avanti e indietro   ↑↓ cambia ramo   invio riparti da qui   esc torna all'elenco",
-        '←→↑↓ muovi   invio riparti   esc elenco',
+        '←→ avanti e indietro   ↑↓ cambia ramo   invio riparti da qui   esc indietro   canc esci',
+        '←→ avanti e indietro  ↑↓ cambia ramo  invio riparti  esc indietro  canc esci',
+        '←→↑↓ muovi  invio riparti  esc indietro  canc esci',
       ],
     ],
     quante: (n) => (n === 1 ? '1 conversazione' : `${n} conversazioni`),
@@ -597,9 +700,11 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
 
   wrapper: {
     invioPerTornare: 'invio per tornare a Claude',
-    tastiAvviso: 'c  scegli cartella e conversazione      invio o esc  torna a Claude',
+    // Da un avviso non si risale da nessuna parte: dietro c'e' Claude, e i due
+    // tasti fanno la stessa cosa. Si scrivono quindi insieme, come nell'albero.
+    tastiAvviso: 'c scegli cartella e conversazione      invio  conferma      esc/canc esci',
     tastiAvvisoConProfilo:
-      'c  cartella e conversazione      m  profilo      invio o esc  torna a Claude',
+      'c cartella e conversazione      m profilo      invio  conferma      esc/canc esci',
     senzaTranscript: (scorciatoia, sessione) => [
       'Questa conversazione non ha ancora un transcript su disco.',
       '',

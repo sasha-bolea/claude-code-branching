@@ -241,7 +241,7 @@ carries with it, back to the root.
     24-07 15:10  let's do the customer list
 
   ──────────────────────────────────────────────────────────────────────
-  ←→ ad back and forth   ↑↓ ws branch   enter restart   p queue   esc exit
+  ←→ ad back and forth   ↑↓ ws branch   enter restart   p queue   n notes   esc/canc exit
 ```
 
 The tree holds only the prompts you typed. Background-task notifications, system reminders,
@@ -252,9 +252,12 @@ node of its own: the prompt that took the interruption is marked `⎋ interrupte
 the answer you would carry back is cut short.
 
 `←` `→` walk up and down the conversation, `↑` `↓` move between the branches of the same
-fork. `a` `d` and `w` `s` work too, if your hand would rather stay on the letters. The mouse
-wheel scrolls the conversation like `←` `→`. The cursor starts where you are now. Enter grows
-a new branch from that point: the previous one stays where it was.
+fork. `a` `d` and `w` `s` work too, if your hand would rather stay on the letters. The cursor
+starts where you are now. Enter grows a new branch from that point: the previous one stays
+where it was.
+
+No cb screen grabs the mouse: text selects and copies like in any terminal, no shift held
+down. The price is that the wheel does not scroll the tree — the arrows do.
 
 **Two keys to get out, in every cb screen.** `esc` goes back one step: from the conversation
 list back to the folders, from the restore menu back to the tree — hitting the wrong key
@@ -288,21 +291,32 @@ the previous one produced.
   cb  prompt queue
   they go out one at a time, when Claude finishes a turn
 
-  3 prompts waiting
+  4 prompts waiting
 
      1. fix the failing test  next
-  ▸  2. update the README
-     3. make the commit
+     2. update the README  ⤼ skip
+  ▸  3. bump the version  ⏸ stop
+     4. make the commit
 
-  > typing the fourth one█
+  > typing the fifth one█
 
-  ──────────────────────────────────────────────────────────────────────
-  enter queue   ↑↓ pick   ctrl+canc remove   esc tree   canc to Claude
+  ─────────────────────────────────────────────────────────────────────────────────────
+  enter queue  ↑↓ pick  ctrl+↑↓ move  ctrl+s/x stop,skip  ctrl+canc remove  esc  canc
 ```
 
-Enter queues what you typed and leaves the field ready for the next one. `↑` `↓` pick a row
-and `ctrl+canc` removes it — backspace stays for fixing what you are typing. Esc goes back to
-the tree, right where you left it.
+Enter queues what you typed and leaves the field ready for the next one. `↑` `↓` pick a row,
+`ctrl+↑` `ctrl+↓` move it up and down the list, and `ctrl+canc` removes it — backspace stays
+for fixing what you are typing. Esc goes back to the tree, right where you left it.
+
+Two switches decide what actually goes out, and they are different on purpose:
+
+- **`ctrl+s` — stop.** A barrier: that prompt and **everything after it** stay put while it is
+  on. For «from here on, wait for me».
+- **`ctrl+x` — skip.** One prompt only, stepped over while it is on; the ones after it keep
+  going out. For «this one not yet».
+
+Both are toggles, both survive a `/clear` and a branch switch, and a stopped or skipped prompt
+is greyed out in the list, so you can see at a glance where the queue will halt.
 
 **Inside cb nothing needs installing.** cb writes the prompt into Claude's input bar itself,
 followed by enter: exactly as you would have typed it, so it becomes a real prompt and a node
@@ -322,6 +336,64 @@ along, and what you wrote follows you.
 
 The hook `hooks/cb-coda.ps1` (below) is only there to make the queue work **outside** cb, in a
 Claude session you started by hand.
+
+### Notes
+
+`n` from the tree opens the notes. They belong to the **folder**, not to the conversation: the
+same notes show up in every session opened in there, and they survive a `/clear`, a branch
+switch, a closed window. That is the difference from the queue, and the reason they exist — a
+note is useful precisely when the conversation you wrote it in is over.
+
+```
+  cb  notes
+  of C:\Users\me\projects\web — the same in every session here
+
+  2 notes
+
+  ────────────────────────────────────────────────────────────────────────────
+    Ports
+    4310 and 4311 are already taken by omniroute
+  ────────────────────────────────────────────────────────────────────────────
+    remember to publish before touching the profiles
+  ────────────────────────────────────────────────────────────────────────────
+  ╭──────────────────────────────────────────────────────────────────────────╮
+  │ New note                                                                 │
+  │                                                                          │
+  │ typing in here█                                                          │
+  ╰──────────────────────────────────────────────────────────────────────────╯
+
+  ────────────────────────────────────────────────────────────────────────────
+  enter save  shift+enter new line  ctrl+enter send  ctrl+f search  ↑↓ notes  esc  canc
+```
+
+Every note has a body and an **optional title**: the body is the note, the title is what you
+call it. The screen opens on the new note already, with the cursor in the title — if you do not
+need one, enter moves you to the body.
+
+The three enters do three things, and all of them are frequent:
+
+- **enter** saves the note and opens the next one right away, so you write them one after
+  another without touching anything else. From the title it moves to the body instead.
+- **shift+enter** starts a new line inside the body: a note is a text, not a line.
+- **ctrl+enter** drops the note into Claude's input bar as `title: body`, **without sending
+  it**: you land back in the conversation and the text is sitting there, ready to fix, extend,
+  or send with one enter. The note leaves the list — you have used it, and finding it again
+  tomorrow would mean not knowing whether it is still pending. The text is not lost: it is in
+  the bar, and sending it makes it a node of the tree.
+
+`↑` `↓` move between notes, and the one you are on is editable right away, **with the cursor
+always in the title**: it is the only one of the two fields you can reach the other from, since
+enter takes you down from the title to the body but never back up. Whatever you were typing is
+saved by itself when you move. **To delete a note you empty it** — no title, no body — so there
+is no extra key to learn.
+
+**`ctrl+f` searches**, across title and body at once: you do not always remember which of the
+two held the word. `↑` `↓` step through the matches, enter stops searching and leaves the one
+you are on selected — ready to edit — and ctrl+enter drops it into the bar without even leaving
+the search.
+
+Notes live in `~/.claude/cb/note/<folder>.json`, under the same name Claude gives its transcript
+folders.
 
 ## How it works
 

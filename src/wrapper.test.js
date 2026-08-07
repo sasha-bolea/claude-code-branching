@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { Wrapper, senzaRipresa, chiedeRipresa } from './wrapper.js';
+import { MODI_MOUSE } from './tasti.js';
 
 // Costruisce un wrapper con pty e terminale finti, per provare la logica dei
 // tasti senza lanciare Claude.
@@ -299,6 +300,25 @@ function testIlMouseTornaASelezionareNellOverlay() {
   assert.ok(!accende.includes('1003'), 'senza accendere modi che Claude non aveva chiesto');
 }
 
+// Nessuna schermata di cb accende un tracciamento suo. Prima si accendeva il
+// minimo che fa arrivare la rotella (?1000+?1006), e la selezione del testo
+// restava solo tenendo premuto shift: fra la rotella e il poter copiare quello
+// che c'e' a schermo vince il copiare, perche' l'albero si scorre gia' con le
+// frecce mentre un testo che non si prende non ha alternative.
+function testNessunaSchermataAccendeIlMouse() {
+  const scritto = [];
+  const wrapper = new Wrapper({});
+  wrapper.scrivi = (t) => scritto.push(t);
+  wrapper.registra = () => {};
+
+  wrapper.spegniMouse();
+  const testo = scritto.join('');
+  assert.ok(!/\x1b\[\?\d+h/.test(testo), 'non accende niente');
+  for (const modo of MODI_MOUSE) {
+    assert.ok(testo.includes(`\x1b[?${modo}l`), `spegne anche ${modo}`);
+  }
+}
+
 // Lo stato va seguito, non fotografato una volta: se Claude spegne un modo, alla
 // chiusura dell'overlay non va riacceso.
 function testUnModoSpentoDaClaudeNonTorna() {
@@ -338,6 +358,7 @@ function testSenzaMouseNonScriveNiente() {
 
 const prove = [
   testIlMouseTornaASelezionareNellOverlay,
+  testNessunaSchermataAccendeIlMouse,
   testUnModoSpentoDaClaudeNonTorna,
   testSequenzaSpezzataFraDueBlocchi,
   testSenzaMouseNonScriveNiente,

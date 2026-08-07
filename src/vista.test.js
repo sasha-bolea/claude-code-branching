@@ -841,7 +841,10 @@ function testITastiDellaBarraSonoArancioni() {
   try {
     const barra = schermata(vista, 'a', { colonne: 100, altezza: 30 }).at(-1);
     assert.match(barra, /\x1b\[38;2;255;140;102m←→ ad\x1b\[0m avanti e indietro/, 'tasti e testo');
-    assert.match(barra, /\x1b\[38;2;255;140;102mesc\x1b\[0m torna a Claude/, 'anche l ultima voce');
+    // Dall'albero Esc e Canc portano tutt'e due a Claude: si scrivono insieme,
+    // e vanno colorati tutt'e due — mezza voce arancione e mezza no sembrerebbe
+    // una parola qualunque.
+    assert.match(barra, /\x1b\[38;2;255;140;102mesc\/canc\x1b\[0m esci/, 'l ultima voce');
     // La spiegazione non e' colorata: fra la chiusura del tasto e il separatore
     // di voce non deve ricomparire una sequenza.
     assert.doesNotMatch(barra, /\x1b\[38;2;255;140;102mavanti/, 'la spiegazione resta in chiaro');

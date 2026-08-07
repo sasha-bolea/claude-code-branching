@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { azioniNavigazione } from './tasti.js';
+import { coloraTasti } from './vista.js';
 import { arancione, arancioneForte, grigio, normale } from './stile.js';
 import { impostazione } from './impostazioni.js';
 import { leggiProfili, elencoProfili } from './profili.js';
@@ -166,8 +167,10 @@ export function disegna(
 
   // La legenda va in fondo allo schermo, non subito sotto l'elenco: l'elenco
   // cambia altezza a ogni apertura, e la legenda che salta e' fastidiosa.
+  // I tasti in arancione, come in ogni altra schermata: e' quello che si cerca
+  // con l'occhio quando si vuole solo sapere che cosa premere.
   while (pagina.length < altezza - 1) pagina.push('');
-  pagina.push(grigio(taglia(`  ${legenda}`, larghezza)));
+  pagina.push(coloraTasti(taglia(`  ${legenda}`, larghezza)));
 
   return `\x1b[H\x1b[2J${pagina.join('\r\n')}`;
 }
@@ -334,7 +337,13 @@ export function selezionaCartella({
     };
 
     const suDati = (dati) => {
-      for (const azione of azioniNavigazione(dati)) {
+      const azioni = azioniNavigazione(dati);
+      // Niente da fare, niente da ridisegnare. Ctrl e Shift premuti da soli sono
+      // eventi di tastiera che non producono azioni, e ridisegnando comunque si
+      // ripuliva lo schermo: la selezione del testo se ne andava proprio mentre
+      // si stava premendo ctrl per copiarla.
+      if (azioni.length === 0) return;
+      for (const azione of azioni) {
         const { esito } = applicaAzione(stato, azione);
         if (esito === 'annulla') return chiudi(null);
         if (esito === 'esci') return chiudi('esci');

@@ -241,7 +241,7 @@ storia che quel punto porta con sé fino alla radice.
     24-07 15:10  facciamo la lista dei clienti
 
   ──────────────────────────────────────────────────────────────────────
-  ←→ ad avanti e indietro   ↑↓ ws ramo   invio riparti   p coda   esc esci
+  ←→ ad avanti e indietro   ↑↓ ws ramo   invio riparti   p coda   n note   esc/canc esci
 ```
 
 Nell'albero ci sono solo i prompt che hai scritto tu. Le notifiche dei task in background,
@@ -253,8 +253,12 @@ risposta che ti porti dietro è monca.
 
 `←` `→` risalgono e scendono la conversazione, `↑` `↓` passano da un ramo all'altro della
 stessa biforcazione. In alternativa `a` `d` e `w` `s`, se la mano preferisce restare sulle
-lettere. La rotella del mouse scorre la conversazione come `←` `→`. Il cursore parte da dove
-sei adesso. Invio fa nascere un ramo nuovo da quel punto: quello di prima resta dov'è.
+lettere. Il cursore parte da dove sei adesso. Invio fa nascere un ramo nuovo da quel punto:
+quello di prima resta dov'è.
+
+In nessuna schermata di cb il mouse è agganciato: il testo si seleziona e si copia come in un
+terminale qualunque, senza tenere premuto shift. Il prezzo è che la rotella non scorre
+l'albero — lo fanno le frecce.
 
 **Due tasti per uscire, in ogni schermata di cb.** `esc` risale di un passo: dall'elenco delle
 conversazioni torni alle cartelle, dal menu del ripristino torni all'albero — sbagliare tasto
@@ -288,21 +292,34 @@ fatto da quello prima.
   cb  coda dei prompt
   partono uno alla volta, quando Claude finisce un turno
 
-  3 prompt in attesa
+  4 prompt in attesa
 
      1. sistemare il test che fallisce  il prossimo
-  ▸  2. aggiornare il README
-     3. fare il commit
+     2. aggiornare il README  ⤼ salta
+  ▸  3. alzare il numero di versione  ⏸ stop
+     4. fare il commit
 
-  > sto scrivendo il quarto█
+  > sto scrivendo il quinto█
 
-  ──────────────────────────────────────────────────────────────────────
-  invio accoda   ↑↓ scegli   ctrl+canc togli   esc albero   canc a Claude
+  ─────────────────────────────────────────────────────────────────────────────────────────
+  invio accoda  ↑↓ scegli  ctrl+↑↓ sposta  ctrl+s/x stop,salta  ctrl+canc togli  esc  canc
 ```
 
 Invio accoda quello che hai scritto e lascia il campo pronto per il prossimo. `↑` `↓`
-scelgono una riga dell'elenco e `ctrl+canc` la toglie — backspace resta per correggere quello
-che stai scrivendo. Esc torna all'albero, dove l'avevi lasciato.
+scelgono una riga dell'elenco, `ctrl+↑` `ctrl+↓` la spostano su e giù, e `ctrl+canc` la
+toglie — backspace resta per correggere quello che stai scrivendo. Esc torna all'albero, dove
+l'avevi lasciato.
+
+Due interruttori decidono cosa parte davvero, e sono diversi apposta:
+
+- **`ctrl+s` — stop.** È una barriera: quel prompt e **tutti quelli dopo** restano fermi
+  finché è acceso. Serve per «da qui in poi aspetta che te lo dica io».
+- **`ctrl+x` — salta.** Riguarda un prompt solo, che viene scavalcato finché è acceso; quelli
+  dopo continuano a partire. Serve per «questo non ancora».
+
+Si accendono e si spengono con lo stesso tasto, seguono il prompt anche dopo un `/clear` o un
+cambio ramo, e un prompt fermo o scavalcato si vede sbiadito nell'elenco: dov'è che la coda si
+ferma si legge a colpo d'occhio.
 
 **Dentro cb non serve installare niente.** Il prompt lo scrive cb stesso nella barra di
 Claude, seguito da invio: esattamente come lo scriveresti tu, quindi diventa un prompt vero e
@@ -322,6 +339,64 @@ da sola, e quello che avevi scritto ti segue.
 
 L'hook `hooks/cb-coda.ps1` (più sotto) serve solo a far funzionare la coda **fuori** da cb, in
 una sessione Claude lanciata a mano.
+
+### Le note
+
+`n` dall'albero apre le note. Sono legate alla **cartella**, non alla conversazione: le stesse
+note si vedono da ogni sessione aperta lì dentro, e restano dopo un `/clear`, un cambio ramo o
+una finestra chiusa. È la differenza con la coda, e la ragione per cui esistono — una nota
+serve proprio quando la conversazione in cui l'hai scritta è finita.
+
+```
+  cb  note
+  di C:\Users\tizio\progetti\web — le stesse in ogni sessione qui
+
+  2 note
+
+  ────────────────────────────────────────────────────────────────────────────
+    Porte
+    la 4310 e la 4311 sono prese da omniroute
+  ────────────────────────────────────────────────────────────────────────────
+    ricordati di pubblicare prima di toccare i profili
+  ────────────────────────────────────────────────────────────────────────────
+  ╭──────────────────────────────────────────────────────────────────────────╮
+  │ Nota nuova                                                               │
+  │                                                                          │
+  │ sto scrivendo qui█                                                       │
+  ╰──────────────────────────────────────────────────────────────────────────╯
+
+  ────────────────────────────────────────────────────────────────────────────
+  invio salva  shift+invio a capo  ctrl+invio manda  ctrl+f cerca  ↑↓ note  esc  canc
+```
+
+Ogni nota ha un corpo e un **titolo facoltativo**: il corpo è la nota, il titolo è come la
+chiami. La schermata si apre già sulla nota nuova, col cursore nel titolo — se non ti serve,
+invio e passi al corpo.
+
+I tre invii fanno tre cose, e sono tutte azioni frequenti:
+
+- **invio** salva la nota e apre subito la prossima, così ne scrivi una dietro l'altra senza
+  toccare altro. Dal titolo invece porta al corpo.
+- **shift+invio** va a capo dentro il corpo: una nota è un testo, non una riga.
+- **ctrl+invio** porta la nota nella barra di input di Claude come `titolo: corpo`, **senza
+  inviarla**: torni alla conversazione e il testo è lì, pronto da correggere, completare o
+  mandare con un invio. La nota se ne va dall'elenco — l'hai usata, e ritrovarsela domani
+  vorrebbe dire non sapere più se è ancora da fare. Il testo non si perde: è nella barra, e
+  mandandolo diventa un nodo dell'albero.
+
+`↑` `↓` si spostano fra le note, e quella su cui sei è modificabile subito, **col cursore
+sempre nel titolo**: è l'unico dei due campi da cui si raggiunge l'altro, perché dal titolo si
+scende al corpo con un invio ma dal corpo non si risale. Quello che stavi scrivendo viene
+salvato da solo quando ti muovi. **Per cancellare una nota si svuota** — niente titolo, niente
+corpo — così non c'è un tasto in più da imparare.
+
+**`ctrl+f` cerca**, su titolo e corpo insieme: non sempre ti ricordi in quale dei due stava la
+parola. `↑` `↓` passano fra le trovate, invio smette di cercare lasciando selezionata quella su
+cui sei — pronta da modificare — e ctrl+invio la porta nella barra senza nemmeno uscire dalla
+ricerca.
+
+Le note stanno in `~/.claude/cb/note/<cartella>.json`, con lo stesso nome che Claude dà alle
+cartelle dei transcript.
 
 ## Come funziona
 

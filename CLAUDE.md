@@ -36,6 +36,7 @@ Sasha, singolo sviluppatore.
 | `src/impostazioni.js` | Lettura/scrittura di `~/.claude/cb/impostazioni.json`, precedenza dei valori |
 | `src/profili.js` | Insiemi di variabili d'ambiente con un nome: rilancia Claude altrove senza uscire dalla conversazione |
 | `src/coda.js` | La coda dei prompt: si scrivono mentre Claude lavora, ne parte uno per turno |
+| `src/note.js` | Le note della cartella di lavoro: le stesse in ogni sessione aperta lì dentro |
 | `src/pulizia.js` | I tre accumuli che non scadono: `cb prune` a mano, e la pulizia automatica |
 | `src/configura.js` | Schermata del primo avvio: lingua, cartella di lavoro, scorciatoia |
 | `src/prove.js` | Esecutore delle prove: un processo per file, lingua fissata a `it` |
@@ -74,6 +75,7 @@ node src/cartelle.js              il selettore delle cartelle, da solo
 node src/configura.js             la schermata delle impostazioni (scrive su un file di prova)
 node src/conversazioni.js [dir]   il selettore delle conversazioni, da solo
 node src/coda.js [sessione]      la coda dei prompt, su una coda di prova
+node src/note.js [cartella]      le note, su un archivio di prova
 node src/verifica-reale.js [file] verifica il parser su una sessione vera
 node bin/cb.js ls                 catalogo globale
 node bin/cb.js tree <sessione>    albero dei rami
@@ -450,6 +452,51 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
 - **L'hook della coda riscrive il file prima di consegnare, non dopo.** Se la scrittura fallisce
   — disco pieno, permesso negato — il prompt non parte, invece di ripartire a ogni turno per
   sempre. Un prompt perso si riscrive, un ciclo infinito no.
+- **Nessuna schermata accende un tracciamento del mouse.** Serviva alla rotella (`?1000`+`?1006`),
+  ma finché è acceso il terminale manda i clic all'applicazione invece di selezionare, e copiare
+  richiedeva shift — un aggiramento standard, ma pur sempre un aggiramento. All'ingresso di ogni
+  schermata si spengono **tutti** i modi (`spegniMouse`), all'uscita si rimettono esattamente
+  quelli che Claude aveva chiesto (`osservaMouse` continua a seguirli). Prezzo dichiarato: l'albero
+  si scorre solo con le frecce. Vale anche per `conversazioni.js`, che se li accendeva da sé.
+- **Un tasto che non produce azioni non deve ridisegnare.** Ogni ridisegno ripulisce lo schermo, e
+  con lui se ne va la selezione fatta col mouse: Ctrl premuto da solo **arriva** come evento
+  (`ESC[17;29;0;1;8;1_`) ma non produce niente, e ridisegnando lì la selezione spariva proprio
+  mentre la si stava per copiare. Ogni ciclo dei tasti esce subito se `azioni.length === 0`.
+- **`esc indietro` e `canc esci`, con quelle parole, in ogni variante di ogni legenda.** Uniti in
+  `esc/canc esci` **solo** dove fanno davvero la stessa cosa (albero e avvisi, dove dietro c'è
+  Claude in entrambi i casi). Nominarli col posto dove portano — «esc albero», «esc elenco» —
+  costringe a rileggere ogni volta un tasto che è sempre lo stesso. E un tasto scritto solo nella
+  variante più lunga è un tasto che non sai di avere: le varianti accorciate si tagliano altrove.
+- **La legenda si colora in ogni schermata** (`coloraTasti`, esportata da `vista.js`): colorarla
+  solo nell'albero vorrebbe dire che i tasti si cercano con l'occhio in un posto e si leggono come
+  prosa in tutti gli altri.
+- **Prima di scrivere nella barra di Claude la si svuota** (`ctrl+u`, `SVUOTA_BARRA`), in una
+  scrittura separata dal testo: quello che c'era va **sostituito**, non allungato — un abbozzo
+  fermo da minuti nessuna quiete lo rivela. Non `ctrl+c`, che svuota ma la **seconda** volta esce.
+  Verificato su una sessione vera.
+- **Nella coda `stop` e `salta` sono regole diverse apposta**: `salta` scavalca un prompt solo,
+  `stop` è una barriera e ferma anche tutti quelli dopo. `indiceProssimo` è l'unica regola di
+  scelta, e la usano tutt'e due le strade di consegna (pty e hook): scriverla due volte
+  significherebbe che dentro e fuori da cb la coda si comporta diversamente.
+- **Un formato su disco che cambia si accetta, non si migra.** Le voci della coda sono passate da
+  stringa a oggetto e le note accettano tutt'e due le forme (`normalizza`): una coda o una nota in
+  attesa è roba dell'utente, e una migrazione che sbaglia la perde. Il prezzo è una funzione di
+  normalizzazione in lettura, che costa molto meno.
+- **Le note stanno alla cartella come la coda sta alla sessione.** È il motivo per cui esistono:
+  una nota serve proprio quando la conversazione in cui l'hai scritta è finita. La chiave è lo
+  slug della cartella (`slugProgetto`), lo stesso che usa Claude per i transcript, così l'archivio
+  si legge a occhio.
+- **Nelle note il cursore parte sempre dal titolo**, anche su una nota che ha già tutto: è l'unico
+  dei due campi da cui si raggiunge l'altro — dal titolo si scende al corpo con un invio, dal
+  corpo non si risale (invio lì salva). Partendo dal corpo, il titolo di una nota vecchia
+  diventerebbe impossibile da correggere.
+- **Cancellando più note si toglie dall'indice più alto al più basso**, o togliendo la prima tutte
+  le altre scalano di uno e si cancella quella sbagliata. Gli indici segnati si azzerano appena il
+  numero di note cambia: resterebbero su note diverse da quelle scelte.
+- **`apriNote`/`apriCoda` si aprono da un metodo del wrapper**, non chiamando l'import diretto:
+  stessa ragione di `apriCartelle` — i moduli ESM sono in sola lettura, e senza quel metodo le
+  prove non potrebbero verificare *cosa arriva al pty* senza aprire una schermata che si prende lo
+  stdin.
 - Le prove stanno in `src/transcript.test.js`, `src/tasti.test.js`, `src/titolo.test.js`,
   `src/vista.test.js`, `src/wrapper.test.js`, `src/overlay.test.js`, `src/cartelle.test.js`,
   `src/conversazioni.test.js` e `src/pulizia.test.js`, con `assert`. Quelle che toccano

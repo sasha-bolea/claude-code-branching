@@ -17,17 +17,35 @@ const { scriviCoda, leggiCoda } = await import('./coda.js');
 
 // Il wrapper con un pty finto che registra cosa gli viene scritto: e' l'unica
 // cosa che conta qui, e non serve un terminale.
+//
+// Prima del prompt parte sempre un ctrl+u che svuota la barra: quello che c'era
+// scritto va sostituito, non allungato. Nelle prove interessa il prompt, quindi
+// `scritto` lo tiene da parte — che ci sia lo verifica testLaBarraSiSvuotaPrima.
 function wrapperFinto(sessione) {
   const wrapper = new Wrapper({ cwd: process.cwd() });
+  const tutto = [];
   const scritto = [];
   wrapper.sessionId = sessione;
   wrapper.scrivi = () => {};
   wrapper.registra = () => {};
-  wrapper.processo = { write: (t) => scritto.push(t), resize: () => {}, kill: () => {} };
-  return { wrapper, scritto };
+  wrapper.processo = {
+    write: (t) => {
+      tutto.push(t);
+      if (t !== SVUOTA_BARRA) scritto.push(t);
+    },
+    resize: () => {},
+    kill: () => {},
+  };
+  return { wrapper, scritto, tutto };
 }
 
+// Ctrl+u: lo stesso carattere che il wrapper manda per svuotare la barra.
+const SVUOTA_BARRA = '\x15';
+
 const respiro = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// I prompt di una coda, senza gli interruttori.
+const testi = (sessione) => leggiCoda(sessione).map((voce) => voce.testo);
 
 // La quiete vera e' 1500 ms: le prove non la aspettano, chiamano direttamente
 // il controllo. Che sia il silenzio dell'output a farlo scattare lo verifica
@@ -38,7 +56,7 @@ async function testMandaIlPrimoQuandoClaudeEFermo() {
 
   wrapper.consegnaCoda();
   assert.deepEqual(scritto, ['primo prompt\r'], 'il prompt parte con l invio in coda');
-  assert.deepEqual(leggiCoda('s1'), ['secondo prompt'], 'e sparisce dalla coda');
+  assert.deepEqual(testi('s1'), ['secondo prompt'], 'e sparisce dalla coda');
 
   // Uno per volta: il secondo parte al controllo dopo, cioe' a fine del turno
   // che il primo ha appena aperto.
@@ -52,6 +70,21 @@ async function testMandaIlPrimoQuandoClaudeEFermo() {
   assert.equal(scritto.length, 2, 'a coda vuota non parte niente');
 }
 
+// Quello che c'era nella barra va **sostituito**, non allungato: un abbozzo
+// lasciato li' da prima si incollerebbe in testa al prompt che parte, e l'invio
+// manderebbe il miscuglio. E' lo stesso guaio che `ultimoTasto` evita mentre stai
+// digitando, ma con un testo fermo da minuti, che nessuna quiete puo' rivelare.
+function testLaBarraSiSvuotaPrima() {
+  const { wrapper, tutto } = wrapperFinto('s7');
+  scriviCoda('s7', ['il prompt vero']);
+
+  wrapper.consegnaCoda();
+  assert.deepEqual(tutto, [SVUOTA_BARRA, 'il prompt vero\r'], 'prima ctrl+u, poi il prompt');
+  // In due scritture separate e non in una: arrivando nello stesso blocco, il
+  // carattere di controllo e il testo verrebbero letti come un incollaggio solo.
+  assert.equal(tutto.length, 2, 'due scritture, non una');
+}
+
 // Mentre l'utente digita non si inietta: il testo si mescolerebbe a quello che
 // sta scrivendo, e l'invio manderebbe il miscuglio.
 function testNonInterrompeChiStaScrivendo() {
@@ -61,7 +94,7 @@ function testNonInterrompeChiStaScrivendo() {
   wrapper.ultimoTasto = Date.now();
   wrapper.consegnaCoda();
   assert.deepEqual(scritto, [], 'con un tasto appena battuto la coda tace');
-  assert.deepEqual(leggiCoda('s2'), ['non devi partire adesso'], 'e il prompt resta in coda');
+  assert.deepEqual(testi('s2'), ['non devi partire adesso'], 'e il prompt resta in coda');
 
   // Passata la finestra, parte.
   wrapper.ultimoTasto = Date.now() - 5000;
@@ -82,6 +115,41 @@ function testConLOverlayApertoNonParte() {
   wrapper.inOverlay = false;
   wrapper.consegnaCoda();
   assert.deepEqual(scritto, ['aspetta\r'], 'chiuso l overlay, parte');
+}
+
+// Gli interruttori valgono anche qui, e non solo nell'hook: dentro cb la
+// consegna la fa il pty, quindi e' questo il posto dove stop e salta devono
+// fermare qualcosa davvero.
+function testStopESaltaFermanoLaConsegna() {
+  const { wrapper, scritto } = wrapperFinto('s6');
+  scriviCoda('s6', [
+    { testo: 'scavalcato', stop: false, salta: true },
+    { testo: 'questo parte', stop: false, salta: false },
+    { testo: 'barriera', stop: true, salta: false },
+    { testo: 'dietro la barriera', stop: false, salta: false },
+  ]);
+
+  wrapper.consegnaCoda();
+  assert.deepEqual(scritto, ['questo parte\r'], 'parte il primo non saltato');
+  assert.deepEqual(
+    testi('s6'),
+    ['scavalcato', 'barriera', 'dietro la barriera'],
+    'e sparisce solo lui: il saltato resta al suo posto',
+  );
+
+  // Adesso in testa c'e' il saltato, e subito dopo la barriera: non deve
+  // partire piu' niente, nemmeno quello che sta dietro.
+  wrapper.consegnaCoda();
+  assert.equal(scritto.length, 1, 'oltre lo stop non passa niente');
+
+  // Tolto lo stop, la coda riprende — e il saltato resta scavalcato.
+  scriviCoda('s6', [
+    { testo: 'scavalcato', stop: false, salta: true },
+    { testo: 'barriera', stop: false, salta: false },
+    { testo: 'dietro la barriera', stop: false, salta: false },
+  ]);
+  wrapper.consegnaCoda();
+  assert.deepEqual(scritto, ['questo parte\r', 'barriera\r'], 'spento lo stop, riparte');
 }
 
 // Un prompt su piu' righe va incollato: gli a capo grezzi verrebbero letti come
@@ -116,10 +184,46 @@ async function testLaConsegnaAspettaCheClaudeTaccia() {
   clearTimeout(wrapper.timerCoda);
 }
 
+// Una nota consegnata con ctrl+invio finisce **nella barra, non inviata**: la
+// coda manda, le note consegnano. Il testo resta li' pronto da correggere o da
+// completare, e a mandarlo e' un invio dell'utente.
+//
+// Si sostituisce `apriNote`, non `mostraNote`: la schermata vera si prende lo
+// stdin, ma quello che conta qui — cosa arriva al pty — sta in mostraNote, e
+// stubbando quella non si proverebbe niente.
+async function testLaNotaFinisceNellaBarraSenzaInvio() {
+  const { wrapper, tutto } = wrapperFinto('s8');
+  wrapper.apriNote = async () => ({ manda: 'il corpo della nota' });
+
+  assert.equal(await wrapper.mostraNote(), 'esci', 'consegnata la nota si torna a Claude');
+  assert.deepEqual(tutto, [SVUOTA_BARRA, 'il corpo della nota'], 'barra svuotata, poi il testo');
+  assert.ok(
+    !tutto.some((t) => t.endsWith('\r')),
+    'nessuna scrittura finisce con invio: la nota non parte da sola',
+  );
+
+  // Su piu' righe va incollata, o gli a capo verrebbero letti come invii — cioe'
+  // proprio la cosa che questo modo esiste per non fare.
+  const seconda = wrapperFinto('s9');
+  seconda.wrapper.apriNote = async () => ({ manda: 'prima riga\nseconda riga' });
+  await seconda.wrapper.mostraNote();
+  assert.equal(seconda.tutto[1], '\x1b[200~prima riga\nseconda riga\x1b[201~', 'incollata');
+  assert.ok(!seconda.tutto[1].endsWith('\r'), 'e sempre senza invio');
+
+  // Esc e Canc invece non scrivono niente nella barra.
+  const terza = wrapperFinto('s10');
+  terza.wrapper.apriNote = async () => 'indietro';
+  assert.equal(await terza.wrapper.mostraNote(), 'indietro');
+  assert.deepEqual(terza.tutto, [], 'tornando indietro la barra non si tocca');
+}
+
 const prove = [
   testMandaIlPrimoQuandoClaudeEFermo,
   testNonInterrompeChiStaScrivendo,
   testConLOverlayApertoNonParte,
+  testLaBarraSiSvuotaPrima,
+  testLaNotaFinisceNellaBarraSenzaInvio,
+  testStopESaltaFermanoLaConsegna,
   testIlPromptSuPiuRigheSiIncolla,
   testLaConsegnaAspettaCheClaudeTaccia,
 ];

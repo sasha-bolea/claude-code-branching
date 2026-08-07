@@ -45,18 +45,40 @@ try {
     exit 0  # coda illeggibile: si lascia stare, e la sessione finisce il turno
 }
 
+# Una voce sul disco puo' essere una stringa — il formato delle code scritte
+# prima che stop e salta esistessero — oppure un oggetto con i due interruttori.
+# Si accettano tutt'e due, come fa src/coda.js.
+#
 # Il @() va attorno alla PIPELINE, non attorno al suo ingresso: un Where-Object
 # che lascia passare un elemento solo restituisce quell'elemento, non un array da
 # uno, e `$prompt[0]` su una stringa da' il primo CARATTERE. E' successo davvero:
 # con un solo prompt in coda, l'hook consegnava "s" invece di "secondo prompt".
-$prompt = @($coda.prompt | Where-Object { $_ -is [string] -and $_.Trim() })
+$prompt = @($coda.prompt | ForEach-Object {
+    if ($_ -is [string]) {
+        if ($_.Trim()) { [pscustomobject]@{ testo = $_; stop = $false; salta = $false } }
+    } elseif ($_.testo -is [string] -and $_.testo.Trim()) {
+        [pscustomobject]@{ testo = $_.testo; stop = ($_.stop -eq $true); salta = ($_.salta -eq $true) }
+    }
+})
 if ($prompt.Count -eq 0) {
     Remove-Item -LiteralPath $file -ErrorAction SilentlyContinue
     exit 0
 }
 
-$primo = $prompt[0]
-$resto = @($prompt | Select-Object -Skip 1)
+# Le due regole sono diverse apposta: «salta» scavalca un prompt solo, «stop» e'
+# una barriera e ferma anche tutti quelli dopo. Con niente da mandare il turno
+# finisce normalmente, e la coda resta li' per il prossimo.
+$scelto = -1
+for ($i = 0; $i -lt $prompt.Count; $i++) {
+    if ($prompt[$i].stop) { break }
+    if (-not $prompt[$i].salta) { $scelto = $i; break }
+}
+if ($scelto -lt 0) { exit 0 }
+
+# Si toglie per indice e non per contenuto: due prompt uguali in coda sono
+# legittimi, e IndexOf toglierebbe il primo dei due invece di quello scelto.
+$primo = $prompt[$scelto].testo
+$resto = @(0..($prompt.Count - 1) | Where-Object { $_ -ne $scelto } | ForEach-Object { $prompt[$_] })
 
 # Si riscrive PRIMA di consegnare: se la scrittura fallisce — disco pieno,
 # permesso negato — il prompt non parte, invece di partire a ogni turno per

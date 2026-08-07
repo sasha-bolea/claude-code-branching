@@ -217,7 +217,9 @@ async function testLaLegendaDellAvvisoStaInFondo() {
     await new Promise((r) => setTimeout(r, 20));
 
     const righe = schermo().split('\r\n');
-    assert.match(righe[righe.length - 1], /invio o esc|enter or esc/, 'la legenda e l ultima riga');
+    // Da un avviso i due tasti fanno la stessa cosa — dietro c'e' Claude — e si
+    // scrivono insieme, come nell'albero.
+    assert.match(righe[righe.length - 1], /esc\/canc/, 'la legenda e l ultima riga');
     assert.equal(righe.length, 12, 'e la pagina riempie lo schermo esatto');
 
     premi(ANNULLA);
@@ -600,7 +602,10 @@ async function testOverlaySiRidisegnaAlRidimensionamento() {
     await attendiPrompt(contesto.schermo);
 
     // Il disegno iniziale sta nelle 100 colonne dichiarate.
-    const nudo = (t) => t.replace(/\x1b\[[0-9;]*m/g, '');
+    // Via ogni sequenza di controllo, non solo i colori: prima del disegno
+    // l'overlay spegne i modi mouse (ESC[?1002l e simili), che non occupano
+    // colonne ma allungherebbero la prima riga di questo conteggio.
+    const nudo = (t) => t.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
     const righeDi = (testo) => nudo(testo).split('\r\n').filter((r) => r.length > 0);
     for (const riga of righeDi(contesto.schermo())) {
       assert.ok(riga.length <= 100, `riga di ${riga.length} colonne prima del ridimensionamento`);
@@ -1460,6 +1465,40 @@ async function testIlTastoPApreLaCodaESiTornaAllAlbero() {
   pulisciCartella();
 }
 
+// Le note stanno alla cartella come la coda sta alla sessione: `n` le apre e
+// l'albero resta dov'era. Mandando una nota come prompt invece si torna a Claude,
+// perche' la si e' mandata per vederla partire.
+async function testIlTastoNApreLeNoteESiTornaAllAlbero() {
+  const sessionId = '00000000-0000-4000-8000-0000000000ce';
+  creaTranscript(sessionId, CARTELLA, [
+    msg('a', null, 'user', 'primo prompt', 1),
+    msg('b', 'a', 'assistant', 'prima risposta', 2),
+    { type: 'last-prompt', leafUuid: 'b', sessionId },
+  ]);
+
+  const { wrapper, schermo } = wrapperFinto(sessionId, CARTELLA);
+  let aperture = 0;
+  // La schermata vera prende lo stdin e scrive su disco: qui interessa solo che
+  // il tasto ci arrivi, e che l'albero sia ancora li' dopo.
+  wrapper.mostraNote = async () => {
+    aperture += 1;
+    return 'indietro';
+  };
+
+  const attesa = wrapper.mostraOverlay();
+  await attendiPrompt(schermo);
+  assert.match(schermo(), /n note/, 'la barra annuncia il tasto');
+
+  await premiTasti('n');
+  assert.equal(aperture, 1, '"n" apre le note');
+
+  await premiTasti(ANNULLA);
+  await attesa;
+  assert.equal(aperture, 1, 'e le note non si riaprono da sole');
+
+  pulisciCartella();
+}
+
 // Canc esce dall'interfaccia da **ogni** schermata, senza risalirle una per una.
 //
 // Esc risale di un passo, ed e' giusto — sbagliare tasto non deve costare
@@ -1547,6 +1586,7 @@ async function testCancEsceDaOgniSchermata() {
 const prove = [
   testCancEsceDaOgniSchermata,
   testIlTastoPApreLaCodaESiTornaAllAlbero,
+  testIlTastoNApreLeNoteESiTornaAllAlbero,
   testTastiPerCambiareConversazioneOCartella,
   testOverlaySenzaTranscript,
   testSenzaTranscriptSiArrivaAiSelettori,

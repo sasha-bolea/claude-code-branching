@@ -20,6 +20,7 @@ import {
   muovi,
   puntaRamoAttivo,
   schermata,
+  coloraTasti,
   VOCI_RIPRISTINO,
 } from './vista.js';
 import { azioniNavigazione, azioniTastiera } from './tasti.js';
@@ -260,8 +261,9 @@ export function disegnaConversazioni(
   // La barra dei tasti resta in fondo allo schermo: l'elenco cambia altezza da
   // una conversazione all'altra, e una barra che salta si legge male.
   while (righe.length < altezza - 1) righe.push('');
+  // I tasti in arancione, come in ogni altra schermata.
   righe.push(
-    `  ${grigio(
+    `  ${coloraTasti(
       primaCheEntra(
         famiglie.length === 0 ? T.conversazioni.legendaVuota : LEGENDE[modo === 'albero' ? 1 : 0],
         larghezza,
@@ -445,8 +447,8 @@ export async function selezionaConversazione({
       uscita.removeListener('resize', ridisegna);
       if (ingresso.isTTY) ingresso.setRawMode(false);
       ingresso.pause();
-      // Il tracciamento acceso qui non deve sopravvivere alla schermata: chi
-      // riprende il terminale — Claude, o la shell — accende i modi che vuole lui.
+      // Il tracciamento qui non si accende, ma si spegne lo stesso: puo' essere
+      // rimasto acceso da una versione precedente di cb, o da chi ci ha aperto.
       uscita.write('\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l'); // e schermo normale
       risolvi(risultato);
     };
@@ -491,7 +493,11 @@ export async function selezionaConversazione({
             stato.daRimandare,
           );
 
-        for (const azione of azioniTastiera(dati)) {
+        const azioni = azioniTastiera(dati);
+        // Niente da fare, niente da ridisegnare: vedi cartelle.js — un ctrl
+        // premuto da solo cancellava la selezione che si stava per copiare.
+        if (azioni.length === 0) return;
+        for (const azione of azioni) {
           if (azione.tipo === 'annulla') {
             stato.modo = 'albero';
             break;
@@ -515,7 +521,9 @@ export async function selezionaConversazione({
         return ridisegna();
       }
 
-      for (const azione of azioniNavigazione(dati)) {
+      const azioni = azioniNavigazione(dati);
+      if (azioni.length === 0) return; // vedi sopra: niente azioni, niente ridisegno
+      for (const azione of azioni) {
         // Canc vale prima di tutto il resto e in ogni modo della schermata —
         // elenco, albero, cartella vuota — perche' e' l'uscita, non una scelta.
         if (azione === 'esci') return chiudi('esci');
@@ -564,10 +572,10 @@ export async function selezionaConversazione({
       else ridisegna();
     };
 
-    // Schermo alternativo, cursore nascosto, e il tracciamento minimo del mouse
-    // (?1000 clic e rotella, ?1006 coordinate SGR): serve alla rotella, che
-    // scorre l'albero come le frecce. La selezione del testo resta con shift.
-    uscita.write('\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h');
+    // Schermo alternativo e cursore nascosto. Nessun tracciamento del mouse:
+    // acceso, il terminale manda i clic qui invece di selezionare, e il testo a
+    // schermo non si riesce piu' a prendere. L'elenco si scorre con le frecce.
+    uscita.write('\x1b[?1049h\x1b[?25l');
     if (ingresso.isTTY) ingresso.setRawMode(true);
     ingresso.resume();
     ingresso.on('data', suDati);

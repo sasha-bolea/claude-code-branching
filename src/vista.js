@@ -568,7 +568,7 @@ function tagliaVisibile(riga, massimo) {
 // traballerebbe a ogni riga colorata diversamente.
 // riga: testo, colorato o no
 // ritorna: numero di caratteri visibili
-function lunghezzaVisibile(riga) {
+export function lunghezzaVisibile(riga) {
   return [...riga.replace(/\x1b\[[0-9;]*m/g, '')].length;
 }
 
@@ -580,22 +580,33 @@ const separatore = (larghezza) => `  ${grigio('─'.repeat(Math.max(10, larghezz
 
 // Glifi del riquadro attorno al prompt scelto: angoli arrotondati come la barra
 // di stato di Claude Code, cosi' le due interfacce si somigliano invece di
-// contendersi lo schermo.
-const BOX = { alto: '╭', altoDestra: '╮', basso: '╰', bassoDestra: '╯', lato: '│' };
+// contendersi lo schermo. Esportati perche' il riquadro e' lo stesso anche
+// attorno alla nota su cui si sta scrivendo (src/note.js): due riquadri disegnati
+// in due posti diverrebbero due riquadri diversi al primo cambio.
+export const BOX = { alto: '╭', altoDestra: '╮', basso: '╰', bassoDestra: '╯', lato: '│' };
 
 // Tasti da colorare nella barra in fondo. Una voce e' fatta di tasti seguiti da
 // cosa fanno ("←→ ad avanti e indietro"), e le voci sono separate da due spazi o
 // piu': si colora la testa di ogni voce e ci si ferma alla prima parola che non
 // e' un tasto. Riconoscerli cosi' — invece di spezzare ogni stringa in due dentro
 // lingua.js — tiene le frasi leggibili in un pezzo solo a chi le traduce.
-const RE_TASTO = /^(?:[←→↑↓]+|ad|ws|invio|enter|esc|\d-\d|[a-z])$/;
+// Un tasto puo' portarsi dietro `ctrl+` o `shift+`, e due tasti che fanno la
+// stessa cosa si scrivono insieme con la barra (`esc/canc`, `ctrl+s/x`): vanno
+// colorati tutt'e due, o meta' della voce resterebbe a sembrare una parola
+// qualunque.
+const TASTO = String.raw`(?:(?:ctrl|shift)\+)?(?:[←→↑↓~]+|ad|ws|invio|enter|esc|canc|spazio|space|\d-\d|[a-z])`;
+const RE_TASTO = new RegExp(`^${TASTO}(?:/${TASTO})?$`);
 
 // Colora di arancione i tasti di una barra, lasciando al primo piano le
 // spiegazioni: e' quello che si cerca con l'occhio quando si vuole solo sapere
 // che cosa premere.
+// Esportata perche' la legenda si colora **in ogni schermata**: cartelle,
+// conversazioni, coda, note, impostazioni e avvisi. Colorarla solo nell'albero
+// vorrebbe dire che i tasti si cercano con l'occhio in un posto e si leggono
+// come prosa in tutti gli altri.
 // barra: testo gia' composto, senza colori
 // ritorna: lo stesso testo con i tasti vestiti
-function coloraTasti(barra) {
+export function coloraTasti(barra) {
   return barra
     .split(/( {2,})/)
     .map((voce) => {
@@ -881,12 +892,31 @@ export function schermata(
   // in piu' valgono piu' della forma distesa delle spiegazioni, quindi la
   // variante che li nomina viene prima di quella piu' lunga che li tace.
   const pezzi = (...voci) => voci.filter(Boolean).join('   ');
+
+  // L'uscita, in fondo alla barra. I due tasti si nominano **sempre** e **sempre
+  // con la stessa parola**: esc = indietro, canc = esci. Il valore di due tasti
+  // uguali in ogni schermata sta tutto nel non doverci pensare, e chiamarli ogni
+  // volta con il nome del posto dove portano («esc albero», «esc elenco»)
+  // costringeva a rileggerli. Un tasto nominato solo sui terminali larghi ha lo
+  // stesso difetto: e' un tasto che non sai di avere.
+  //
+  // Quando fanno la stessa cosa — dall'albero e dagli avvisi si torna a Claude in
+  // tutt'e due i modi — si scrivono insieme, invece di ripetere due volte la
+  // stessa frase.
+  // dalloStessoPosto: true se qui Esc porta dove porta Canc
+  // ritorna: la coda della barra
+  const uscita = (dalloStessoPosto) =>
+    dalloStessoPosto
+      ? `esc/canc ${T.albero.esci}`
+      : `esc ${T.albero.indietro}   canc ${T.albero.esci}`;
+  const uscitaLunga = uscita(esc.lunga === T.albero.escLunga);
+  const uscitaCorta = uscitaLunga;
   const conExtra = extra.corta
     ? [
-        pezzi(T.albero.avantiIndietro, T.albero.cambiaRamo, cosaFaInvio, extra.lunga, `esc ${esc.lunga}`),
-        pezzi(T.albero.avantiIndietro, T.albero.ramo, cosaFaInvio, extra.corta, `esc ${esc.corta}`),
-        pezzi(T.albero.frecce, T.albero.ramo, cosaFaInvio, extra.corta, `esc ${esc.corta}`),
-        pezzi(T.albero.frecce, T.albero.ramo, T.albero.invioRiparti, extra.corta, `esc ${esc.corta}`),
+        pezzi(T.albero.avantiIndietro, T.albero.cambiaRamo, cosaFaInvio, extra.lunga, uscitaLunga),
+        pezzi(T.albero.avantiIndietro, T.albero.ramo, cosaFaInvio, extra.corta, uscitaCorta),
+        pezzi(T.albero.frecce, T.albero.ramo, cosaFaInvio, extra.corta, uscitaCorta),
+        pezzi(T.albero.frecce, T.albero.ramo, T.albero.invioRiparti, extra.corta, uscitaCorta),
       ]
     : [];
 
@@ -899,10 +929,10 @@ export function schermata(
       primaCheEntra(
         [
           ...conExtra,
-          pezzi(T.albero.avantiIndietro, T.albero.cambiaRamo, cosaFaInvio, `esc ${esc.lunga}`),
-          pezzi(T.albero.avantiIndietroCorto, T.albero.ramo, cosaFaInvio, `esc ${esc.corta}`),
-          pezzi(T.albero.frecce, T.albero.frecceCorte, T.albero.invioRiparti, `esc ${esc.corta}`),
-          T.albero.barraMinima(esc.corta),
+          pezzi(T.albero.avantiIndietro, T.albero.cambiaRamo, cosaFaInvio, uscitaLunga),
+          pezzi(T.albero.avantiIndietroCorto, T.albero.ramo, cosaFaInvio, uscitaCorta),
+          pezzi(T.albero.frecce, T.albero.frecceCorte, T.albero.invioRiparti, uscitaCorta),
+          T.albero.barraMinima(uscitaCorta),
         ],
         spazioColonne,
       ),

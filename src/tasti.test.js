@@ -6,6 +6,7 @@ import {
   azioniTastiera,
   azioniNavigazione,
   azioniCoda,
+  azioniNote,
   VK_ESCAPE,
   MODI_MOUSE,
   SPEGNI_MODI_INPUT,
@@ -205,6 +206,29 @@ function testAzioniDellaCoda() {
   assert.deepEqual(azioniCoda(testo(`${esc}[B`)), [{ tipo: 'freccia', valore: 'giu' }]);
   assert.deepEqual(azioniCoda(win32(38, 0)), [{ tipo: 'freccia', valore: 'su' }]);
 
+  // Con ctrl la stessa freccia sposta il prompt invece di scorrere l'elenco: e'
+  // il motivo per cui i modificatori delle sequenze CSI vanno letti e non
+  // scartati (ESC[1;5A, dove 5 = 1 + ctrl).
+  assert.deepEqual(azioniCoda(testo(`${esc}[1;5A`)), [{ tipo: 'sposta', valore: 'su' }], 'ANSI');
+  assert.deepEqual(azioniCoda(win32(40, 0, 1, 8)), [{ tipo: 'sposta', valore: 'giu' }], 'win32');
+  // Shift no: sposterebbe per sbaglio selezionando.
+  assert.deepEqual(azioniCoda(testo(`${esc}[1;2A`)), [{ tipo: 'freccia', valore: 'su' }], 'shift');
+  // Destra e sinistra non hanno dove andare: l'elenco e' verticale.
+  assert.deepEqual(azioniCoda(testo(`${esc}[1;5C`)), [], 'ctrl+destra non sposta niente');
+
+  // Ctrl+s e ctrl+x accendono gli interruttori. Con ctrl premuto il terminale
+  // consegna il carattere di controllo (0x13), non "s": si guarda il codice
+  // virtuale, e nei byte grezzi il carattere di controllo stesso.
+  assert.deepEqual(azioniCoda(win32(0x53, 0x13, 1, 8)), [{ tipo: 'commuta', valore: 'stop' }]);
+  assert.deepEqual(azioniCoda(win32(0x58, 0x18, 1, 8)), [{ tipo: 'commuta', valore: 'salta' }]);
+  assert.deepEqual(azioniCoda(testo('\x13')), [{ tipo: 'commuta', valore: 'stop' }], 'ctrl+s grezzo');
+  assert.deepEqual(azioniCoda(testo('\x18')), [{ tipo: 'commuta', valore: 'salta' }], 'ctrl+x grezzo');
+  // Senza ctrl restano lettere del prompt.
+  assert.deepEqual(azioniCoda(testo('sx')), [
+    { tipo: 'carattere', valore: 's' },
+    { tipo: 'carattere', valore: 'x' },
+  ]);
+
   // Backspace cancella una lettera del testo che stai scrivendo: un tasto solo
   // non puo' fare due cose a seconda di quanto hai scritto.
   assert.deepEqual(azioniCoda(testo('\x7f')), [{ tipo: 'cancella' }]);
@@ -226,6 +250,47 @@ function testAzioniDellaCoda() {
   // La rotella scorre l'elenco, che qui e' verticale: su e giu', non i lati.
   assert.deepEqual(azioniCoda(testo(`${esc}[<64;10;5M`)), [{ tipo: 'freccia', valore: 'su' }]);
   assert.deepEqual(azioniCoda(testo(`${esc}[<65;10;5M`)), [{ tipo: 'freccia', valore: 'giu' }]);
+}
+
+// Nelle note l'invio fa tre cose a seconda dei modificatori, e sono tutte
+// frequenti: e' il motivo per cui azioniCoda non basta.
+function testAzioniDelleNote() {
+  // Invio semplice: salva. Shift: a capo. Ctrl: manda la nota a Claude.
+  assert.deepEqual(azioniNote(testo('\r')), [{ tipo: 'invio' }], 'invio grezzo');
+  assert.deepEqual(azioniNote(win32(13, 13)), [{ tipo: 'invio' }], 'invio win32');
+  assert.deepEqual(azioniNote(win32(13, 13, 1, 16)), [{ tipo: 'acapo' }], 'shift+invio win32');
+  assert.deepEqual(azioniNote(win32(13, 13, 1, 8)), [{ tipo: 'manda' }], 'ctrl+invio win32');
+  // Codifica kitty: ESC[13;2u e' shift, ESC[13;5u e' ctrl.
+  assert.deepEqual(azioniNote(testo(`${esc}[13;2u`)), [{ tipo: 'acapo' }], 'shift+invio kitty');
+  assert.deepEqual(azioniNote(testo(`${esc}[13;5u`)), [{ tipo: 'manda' }], 'ctrl+invio kitty');
+  assert.deepEqual(azioniNote(testo(`${esc}[13u`)), [{ tipo: 'invio' }], 'invio kitty');
+
+  // Il testo e' testo: maiuscole comprese, e w/a/s/d sono lettere.
+  assert.deepEqual(azioniNote(win32(65, 65)), [{ tipo: 'carattere', valore: 'A' }], 'la A resta A');
+  assert.deepEqual(azioniNote(testo('was')), [
+    { tipo: 'carattere', valore: 'w' },
+    { tipo: 'carattere', valore: 'a' },
+    { tipo: 'carattere', valore: 's' },
+  ]);
+
+  // Le frecce cambiano nota, backspace corregge il testo.
+  assert.deepEqual(azioniNote(testo(`${esc}[A`)), [{ tipo: 'freccia', valore: 'su' }]);
+  assert.deepEqual(azioniNote(win32(40, 0)), [{ tipo: 'freccia', valore: 'giu' }]);
+  assert.deepEqual(azioniNote(testo('\x7f')), [{ tipo: 'cancella' }]);
+
+  // Esc risale di un passo, Canc esce da tutto: come in ogni altra schermata.
+  assert.deepEqual(azioniNote(win32(27, 27)), [{ tipo: 'annulla' }]);
+  assert.deepEqual(azioniNote(testo(`${esc}[3~`)), [{ tipo: 'esci' }], 'canc in ANSI');
+  assert.deepEqual(azioniNote(win32(46, 0)), [{ tipo: 'esci' }], 'e in win32');
+
+  // Ctrl+f apre la ricerca fra le note. Come per gli interruttori della coda, con
+  // ctrl premuto il terminale consegna il carattere di controllo (0x06), non "f":
+  // si guarda il codice virtuale, e nei byte grezzi il carattere di controllo.
+  assert.deepEqual(azioniNote(win32(0x46, 0x06, 1, 8)), [{ tipo: 'cerca' }], 'ctrl+f win32');
+  assert.deepEqual(azioniNote(testo('\x06')), [{ tipo: 'cerca' }], 'ctrl+f grezzo');
+  assert.deepEqual(azioniNote(testo('f')), [{ tipo: 'carattere', valore: 'f' }], 'senza ctrl e una f');
+
+  assert.deepEqual(azioniNote(win32(65, 65, 0)), [], 'il rilascio non scrive niente');
 }
 
 function testAzioniFrecce() {
@@ -364,6 +429,7 @@ const prove = [
   testAzioniIgnoranoIlMouse,
   testRotellaScorreOrizzontalmente,
   testAzioniDellaCoda,
+  testAzioniDelleNote,
   testAzioniFrecce,
   testTastiFunzione,
   testAzioniWasd,

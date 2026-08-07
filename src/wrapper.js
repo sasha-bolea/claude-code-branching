@@ -18,6 +18,7 @@ import {
   muovi,
   puntaRamoAttivo,
   primaCheEntra,
+  coloraTasti,
   VOCI_RIPRISTINO,
 } from './vista.js';
 import { arancioneForte, grigio, normale } from './stile.js';
@@ -28,7 +29,7 @@ import { senzaTitolo, sequenzaTitolo } from './titolo.js';
 import { impostazione, salvaImpostazione, percorsoImpostazioni } from './impostazioni.js';
 import { T } from './lingua.js';
 import { creaSessioneTroncata } from './ramo.js';
-import { trasferisci, leggiCoda, togli } from './coda.js';
+import { trasferisci, leggiCoda, togli, indiceProssimo } from './coda.js';
 import { leggiProfili, elencoProfili, ambienteConProfilo } from './profili.js';
 import {
   tokenizza,
@@ -80,6 +81,20 @@ const CODA_MOUSE = 9;
 // alla TUI come un blocco solo, e i suoi a capo non valgono come invio.
 const INIZIO_INCOLLA = '\x1b[200~';
 const FINE_INCOLLA = '\x1b[201~';
+
+// Svuota la barra di input di Claude prima di scriverci: ctrl+u, che nelle
+// interfacce a riga di comando cancella dal cursore all'inizio della riga.
+//
+// **Verificato su una sessione vera** (non dedotto): scritto del testo, mandato
+// ctrl+u, il testo sparisce, quello nuovo si scrive pulito e il residuo non
+// torna. Claude offre pure un ctrl+y per riprenderselo, quindi non e' nemmeno
+// perso davvero.
+//
+// Non e' ctrl+c, che in Claude Code svuota anch'esso ma **la seconda volta esce**:
+// mandato quando la barra e' gia' vuota comincerebbe la sequenza di uscita, e un
+// secondo invio ravvicinato chiuderebbe la sessione. Ctrl+u su una barra vuota
+// non fa niente, che e' esattamente quello che serve.
+const SVUOTA_BARRA = '\x15';
 
 // Millisecondi di silenzio dell'output dopo cui Claude e' considerato pronto a
 // ricevere tasti, e limite oltre il quale si scrive comunque (vedi programmaBarra).
@@ -158,6 +173,7 @@ function navigazioneDa(comando) {
   if (comando === 'conversazione') return { tipo: 'conversazione' };
   if (comando === 'profilo') return { tipo: 'profilo' };
   if (comando === 'coda') return { tipo: 'coda' };
+  if (comando === 'note') return { tipo: 'note' };
   return null;
 }
 
@@ -433,18 +449,28 @@ export class Wrapper {
     // quello che sta scrivendo, e l'invio manderebbe il miscuglio.
     if (Date.now() - (this.ultimoTasto ?? 0) < QUIETE_CODA) return;
 
-    const prossimo = leggiCoda(this.sessionId)[0];
-    if (!prossimo) return;
+    // Non e' per forza il primo: un prompt marcato «salta» si scavalca, e uno
+    // «stop» ferma anche tutti quelli dopo di lui.
+    const coda = leggiCoda(this.sessionId);
+    const indice = indiceProssimo(coda);
+    if (indice < 0) return;
+    const prossimo = coda[indice].testo;
 
     // Si toglie PRIMA di scrivere: se la scrittura fallisce si perde un prompt,
     // mentre togliendolo dopo un errore lo rimanderebbe a ogni quiete, per sempre.
-    togli(this.sessionId, 0);
+    togli(this.sessionId, indice);
     this.registra(`coda: mando un prompt (${prossimo.length} caratteri), ne restano ${leggiCoda(this.sessionId).length}`);
     // Su piu' righe va incollato: gli a capo grezzi verrebbero letti come invii,
     // e il prompt partirebbe a pezzi.
     const testo = prossimo.includes('\n')
       ? `${INIZIO_INCOLLA}${prossimo}${FINE_INCOLLA}`
       : prossimo;
+    // La barra si svuota prima di scrivere: quello che c'era va **sostituito**,
+    // non allungato. Un abbozzo lasciato li' da prima si incollerebbe in testa al
+    // prompt che parte, e l'invio manderebbe il miscuglio — cioe' lo stesso
+    // guaio che `ultimoTasto` evita mentre stai digitando, ma con un testo fermo
+    // da minuti, che nessuna quiete puo' rivelare.
+    this.processo.write(SVUOTA_BARRA);
     this.processo.write(`${testo}\r`);
   }
 
@@ -471,7 +497,6 @@ export class Wrapper {
     this.inOverlay = false;
     this.ridisegnaOverlay = null; // da qui in poi lo schermo e' di Claude
     clearTimeout(this.timerRidimensiona);
-    this.mouseOverlay(false); // prima si toglie il nostro, poi si rimette il suo
     this.mouse(true); // lo schermo torna a Claude, e il mouse e' suo
     this.scrivi(PULISCI_SCHERMO);
     this.forzaRidisegno();
@@ -525,17 +550,21 @@ export class Wrapper {
     this.scrivi([...this.mouseAcceso].map((modo) => `\x1b[?${modo}${finale}`).join(''));
   }
 
-  // Il tracciamento che serve all'overlay, al posto di quello di Claude: ?1000
-  // riporta clic e rotella, ?1006 ne da' le coordinate in SGR, che e' l'unica
-  // codifica che regge un terminale largo piu' di 223 colonne.
+  // Spegne ogni tracciamento del mouse, anche quello che cb stesso poteva aver
+  // acceso in una versione precedente.
   //
-  // E' il minimo che fa arrivare la rotella: ?1002 e ?1003, che Claude accende,
-  // riportano anche i movimenti, e con quelli il terminale smette del tutto di
-  // selezionare. Con ?1000 la selezione resta a portata tenendo premuto shift,
-  // che e' l'aggiramento standard del tracciamento.
-  // acceso: true mentre l'overlay e' a schermo
-  mouseOverlay(acceso) {
-    this.scrivi(acceso ? '\x1b[?1000h\x1b[?1006h' : '\x1b[?1006l\x1b[?1000l');
+  // Nelle schermate di cb non si accende **nessun** modo. Prima si accendeva il
+  // minimo che fa arrivare la rotella (?1000+?1006), e la selezione del testo
+  // restava a portata solo tenendo premuto shift: un aggiramento standard, ma
+  // pur sempre un aggiramento, e su alcuni terminali nemmeno quello. Fra la
+  // rotella e il poter copiare quello che c'e' a schermo vince il copiare —
+  // l'albero si scorre gia' con le frecce e con w/a/s/d, mentre un testo che
+  // non si riesce a prendere non ha alternative.
+  //
+  // Si spegne comunque, invece di non scrivere niente: chi aggiorna cb puo'
+  // avere un terminale con quei modi ancora accesi da una sessione precedente.
+  spegniMouse() {
+    this.scrivi(MODI_MOUSE.map((modo) => `\x1b[?${modo}l`).join(''));
   }
 
   // Reagisce al ridimensionamento della finestra del terminale.
@@ -576,6 +605,7 @@ export class Wrapper {
   mostraAvviso(righe, { conProfilo = false } = {}) {
     this.inOverlay = true;
     this.mouse(false); // schermo nostro: il mouse torni a selezionare il testo
+    this.spegniMouse(); // anche quello che poteva aver acceso cb stesso
     // Registrato come ridisegno cosi' anche questa schermata segue il
     // ridimensionamento della finestra (vedi ridisegnaOverlay).
     this.ridisegnaOverlay = () => {
@@ -595,7 +625,10 @@ export class Wrapper {
       // riga che dice come si esce.
       const pronta = pagina.slice(0, spazio);
       while (pronta.length < spazio) pronta.push('');
-      pronta.push(`  ${conProfilo ? T.wrapper.tastiAvvisoConProfilo : T.wrapper.tastiAvviso}`);
+      // I tasti in arancione, come in ogni altra schermata.
+      pronta.push(
+        `  ${coloraTasti(conProfilo ? T.wrapper.tastiAvvisoConProfilo : T.wrapper.tastiAvviso)}`,
+      );
 
       this.scrivi(MOSTRA_CURSORE + PULISCI_SCHERMO);
       this.scrivi(pronta.join('\r\n'));
@@ -729,9 +762,9 @@ export class Wrapper {
 
     this.inOverlay = true;
     this.mouse(false); // schermo nostro: via il tracciamento di Claude
-    // Al suo posto il minimo che fa arrivare la rotella, che qui scorre l'albero
-    // come le frecce. La selezione del testo resta con shift premuto.
-    this.mouseOverlay(true);
+    // E nessuno al suo posto: finche' una schermata di cb e' a video il mouse
+    // deve poter selezionare e copiare, senza shift e senza scorciatoie.
+    this.spegniMouse();
     this.scrivi(MOSTRA_CURSORE + PULISCI_SCHERMO); // cursore visibile, schermo pulito
 
     // I rami abbandonati prima di un fork vivono nel file della sessione di
@@ -829,6 +862,16 @@ export class Wrapper {
       // Canc invece si esce da tutto, senza ripassare dall'albero.
       if (azione.tipo === 'coda') {
         if ((await this.mostraCoda()) === 'esci') {
+          this.chiudiOverlay();
+          return;
+        }
+        continue;
+      }
+      // Le note stanno alla cartella come la coda sta alla sessione: non
+      // toccano ne' conversazione ne' processo, quindi si torna all'albero dove
+      // lo si era lasciato.
+      if (azione.tipo === 'note') {
+        if ((await this.mostraNote()) === 'esci') {
           this.chiudiOverlay();
           return;
         }
@@ -1092,7 +1135,8 @@ export class Wrapper {
     const spazio = Math.max(1, altezza - 1);
     const pronta = pagina.slice(0, spazio);
     while (pronta.length < spazio) pronta.push('');
-    pronta.push(`  ${grigio(primaCheEntra(T.albero.legendaProfili, colonne - 4))}`);
+    // I tasti in arancione, come in ogni altra schermata.
+    pronta.push(`  ${coloraTasti(primaCheEntra(T.albero.legendaProfili, colonne - 4))}`);
 
     this.scrivi(MOSTRA_CURSORE + PULISCI_SCHERMO);
     this.scrivi(pronta.join('\r\n'));
@@ -1208,6 +1252,58 @@ export class Wrapper {
       // Chiudendo la coda i tasti battuti qui dentro non contano come "l'utente
       // sta scrivendo a Claude": erano per cb. Senza azzerarli, il primo prompt
       // aspetterebbe un tempo che non ha motivo di aspettare.
+      this.ultimoTasto = 0;
+      this.rimandaConsegna();
+    }
+  }
+
+  // Le note della cartella di lavoro (vedi src/note.js).
+  //
+  // Legate alla cartella e non alla sessione: la schermata non ha niente da
+  // sapere sulla conversazione in corso, e le stesse note si vedono da ogni
+  // sessione aperta li' dentro.
+  //
+  // Con ctrl+invio il corpo della nota finisce **nella barra di input, non
+  // inviato**: si torna a Claude e il testo e' li', pronto da correggere,
+  // completare o mandare con un invio. E' la stessa cosa che fa il ripristino
+  // quando rimette indietro un prompt (`programmaBarra`), e la differenza con la
+  // coda e' tutta qui — la coda manda, questo consegna.
+  //
+  // La barra si svuota prima: quello che c'era va sostituito, non allungato.
+  //
+  // Lo stdin va rimesso come lo vuole il wrapper in un `finally`, come per tutti
+  // i selettori.
+  // ritorna: 'indietro' (Esc, si torna all'albero) o 'esci' (Canc, o una nota
+  //          consegnata: si torna a Claude, dove il testo aspetta nella barra)
+  // Apre la schermata delle note. Metodo a parte, come `apriCartelle`: i moduli
+  // ESM sono in sola lettura e non si possono sostituire da fuori, quindi senza
+  // questo le prove non potrebbero verificare **cosa arriva al pty** senza aprire
+  // davvero una schermata che si prende lo stdin.
+  // ritorna: quello che restituisce apriNote
+  async apriNote() {
+    const { apriNote } = await import('./note.js');
+    return apriNote({ cartella: this.cwd });
+  }
+
+  async mostraNote() {
+    try {
+      const esito = await this.apriNote();
+      if (typeof esito === 'string') return esito;
+      // Su piu' righe va incollato: gli a capo grezzi verrebbero letti come
+      // invii, cioe' proprio la cosa che questo modo esiste per non fare.
+      const testo = esito.manda.includes('\n')
+        ? `${INIZIO_INCOLLA}${esito.manda}${FINE_INCOLLA}`
+        : esito.manda;
+      this.processo?.write(SVUOTA_BARRA);
+      this.processo?.write(testo);
+      this.registra(`note: nota messa nella barra (${esito.manda.length} caratteri), non inviata`);
+      return 'esci';
+    } finally {
+      if (process.stdin.isTTY) process.stdin.setRawMode(true);
+      process.stdin.resume();
+      // Come per la coda: i tasti battuti dentro cb non sono "l'utente sta
+      // scrivendo a Claude", e la nota appena mandata non deve aspettare per
+      // colpa loro.
       this.ultimoTasto = 0;
       this.rimandaConsegna();
     }
@@ -1468,11 +1564,11 @@ export class Wrapper {
   chiudiProcesso() {
     if (!this.processo) return Promise.resolve();
 
-    // Il tracciamento acceso per la rotella dell'overlay non deve sopravvivere al
-    // processo: quello che parte dopo accende i suoi modi, e questo in piu' gli
-    // farebbe arrivare clic che non si aspetta. Qui si passa da ogni uscita
-    // dell'albero che non sia chiudiOverlay — cambio ramo, profilo, conversazione.
-    this.mouseOverlay(false);
+    // Nessun tracciamento deve sopravvivere al processo: quello che parte dopo
+    // accende i suoi modi, e uno in piu' gli farebbe arrivare eventi che non si
+    // aspetta. Qui si passa da ogni uscita dell'albero che non sia
+    // chiudiOverlay — cambio ramo, profilo, conversazione.
+    this.spegniMouse();
     // Stessa ragione per il conto della coda: scattando dopo il kill scriverebbe
     // in un pty morto, o peggio nel processo che nasce subito dopo, che sta
     // ancora avviandosi.

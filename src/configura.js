@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { azioniNavigazione, azioniTesto, FINESTRA_SCORCIATOIA } from './tasti.js';
+import { coloraTasti } from './vista.js';
 import { arancione, arancioneForte, grigio, normale, rosso } from './stile.js';
 import { radicePredefinita } from './cartelle.js';
 import { LINGUE, SCORCIATOIE, impostazione, aggiornaImpostazioni } from './impostazioni.js';
@@ -239,7 +240,8 @@ export function disegnaImpostazioni(stato, altezza = 30, larghezza = 100) {
   const legenda =
     varianti.find((testo) => testo.length + 2 <= larghezza) ?? varianti[varianti.length - 1];
   while (righe.length < altezza - 1) righe.push('');
-  righe.push(`  ${grigio(taglia(legenda))}`);
+  // I tasti in arancione, come in ogni altra schermata.
+  righe.push(`  ${coloraTasti(taglia(legenda))}`);
 
   return righe.slice(0, altezza);
 }
@@ -279,7 +281,11 @@ export function configura({ ingresso = process.stdin, uscita = process.stdout } 
     // senza che il ciclo cambi.
     const suDati = (dati) => {
       if (stato.modifica !== null) {
-        for (const azione of azioniTesto(dati)) {
+        const azioni = azioniTesto(dati);
+        // Niente da fare, niente da ridisegnare: vedi cartelle.js — un ctrl
+        // premuto da solo cancellava la selezione che si stava per copiare.
+        if (azioni.length === 0) return;
+        for (const azione of azioni) {
           applicaTesto(stato, azione);
           // Chiuso il campo, il resto della lettura non e' piu' testo: il tasto
           // Invio arriva come `\r\n` su molti terminali, cioe' due azioni, e la
@@ -289,7 +295,9 @@ export function configura({ ingresso = process.stdin, uscita = process.stdout } 
         return ridisegna();
       }
 
-      for (const azione of azioniNavigazione(dati)) {
+      const azioni = azioniNavigazione(dati);
+      if (azioni.length === 0) return; // vedi sopra: niente azioni, niente ridisegno
+      for (const azione of azioni) {
         const { esito } = applicaAzione(stato, azione);
         if (esito === 'fatto') return chiudi();
         // Invio sulla cartella apre il campo: da qui in poi i tasti sono testo,

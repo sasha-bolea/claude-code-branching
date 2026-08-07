@@ -235,7 +235,10 @@ const statoDiProva = (indice = 2) => {
     righe.some((r) => r.includes('▸') && r.includes('alfa')),
     'la riga selezionata e\' marcata',
   );
-  assert.match(righe[righe.length - 1], /esc annulla/, 'la legenda resta in fondo allo schermo');
+  // Anche su 60 colonne la legenda nomina canc: un tasto scritto solo sui
+  // terminali larghi e' un tasto che non sai di avere, e Canc vale proprio
+  // perche' e' lo stesso in ogni schermata.
+  assert.match(righe[righe.length - 1], /esc indietro {2}canc/, 'la legenda resta in fondo');
 }
 
 {

@@ -31,6 +31,9 @@ export const FINESTRA_SCORCIATOIA = 1000;
 // Esc in codifica kitty, con eventuali modificatori: ESC[27u, ESC[27;1u, …
 const RE_ESC_KITTY = /^\x1b\[27(;[0-9:]+)?u/;
 
+// Invio nella stessa codifica: ESC[13u, ESC[13;2u (shift), ESC[13;5u (ctrl).
+const RE_INVIO_KITTY = /^\x1b\[13(?:;([0-9]+))?u/;
+
 // Sequenza win32-input-mode: ESC[Vk;Sc;Uc;Kd;Cs;Rc_
 // Claude la abilita all'avvio (invia ESC[?9001h) e su Windows e' questa la
 // codifica che il terminale usa davvero: ogni tasto arriva come sequenza che
@@ -82,10 +85,28 @@ export const VK_GIU = 40;
 
 // Frecce nelle codifiche ANSI: CSI (ESC[A) e SS3 (ESCOA). Sono quelle che arrivano
 // quando win32-input-mode non e' attivo (terminali Unix, o Claude non ancora
-// avviato). Il gruppo di cifre accetta i modificatori (ESC[1;5C = ctrl+destra) e
-// li ignora: per navigare l'albero non servono.
-const RE_FRECCIA = /^\x1b(?:\[[0-9;]*|O)([ABCD])/;
+// avviato). I modificatori stanno nell'ultimo parametro (ESC[1;5C = ctrl+destra)
+// e vanno letti: nella coda ctrl+↑↓ sposta un prompt invece di scegliere, e
+// scartandoli quel tasto la' sarebbe una freccia qualunque.
+const RE_FRECCIA = /^\x1b(?:\[([0-9;]*)|O)([ABCD])/;
 const VK_DELLA_FRECCIA = { A: VK_SU, B: VK_GIU, C: VK_DESTRA, D: VK_SINISTRA };
+
+// Bit dei modificatori nelle sequenze CSI: il parametro vale 1 + la somma.
+const SHIFT_CSI = 1;
+const ALT_CSI = 2;
+const CTRL_CSI = 4;
+
+// Modificatori dell'ultimo parametro di una sequenza CSI.
+// parametri: la parte numerica della sequenza ("1;5"), eventualmente vuota
+// ritorna: { ctrl, alt, shift }
+function modificatoriCsi(parametri) {
+  const somma = Number((parametri || '').split(';').pop() || 1) - 1;
+  return {
+    ctrl: (somma & CTRL_CSI) !== 0,
+    alt: (somma & ALT_CSI) !== 0,
+    shift: (somma & SHIFT_CSI) !== 0,
+  };
+}
 
 // Codice virtuale del primo tasto funzione: VK_F2 = VK_F1 + 1, e cosi' via.
 const VK_F1 = 0x70;
@@ -165,11 +186,10 @@ export function tokenizza(dati) {
     if (freccia) {
       aggiungi(
         {
-          vk: VK_DELLA_FRECCIA[freccia[1]],
+          vk: VK_DELLA_FRECCIA[freccia[2]],
           carattere: null,
-          ctrl: false,
-          alt: false,
-          shift: false,
+          grezzo: null,
+          ...modificatoriCsi(freccia[1]),
           rilascio: false,
         },
         freccia[0].length,
@@ -196,6 +216,25 @@ export function tokenizza(dati) {
       }
       // Numero CSI che non e' un tasto funzione (Ins, Canc, PagSu…): lo lascio
       // ai byte non riconosciuti, che vengono inoltrati a Claude intatti.
+    }
+
+    // Invio con i modificatori, in codifica CSI-u: ESC[13;2u = shift+invio,
+    // ESC[13;5u = ctrl+invio. Serve alle note, dove i due fanno cose diverse
+    // (andare a capo e mandare la nota a Claude). Nei byte grezzi non esiste
+    // modo di distinguerli: sono tutti e tre `\r`.
+    const invio = RE_INVIO_KITTY.exec(resto);
+    if (invio) {
+      aggiungi(
+        {
+          vk: VK_INVIO,
+          carattere: null,
+          grezzo: null,
+          ...modificatoriCsi(invio[1]),
+          rilascio: false,
+        },
+        invio[0].length,
+      );
+      continue;
     }
 
     const kitty = RE_ESC_KITTY.exec(resto);
@@ -473,6 +512,7 @@ const COMANDI_LETTERA = {
   c: 'conversazione', // apre il navigatore delle cartelle: cartella e conversazione
   m: 'profilo', // rilancia la stessa conversazione con altre variabili d'ambiente
   p: 'coda', // la coda dei prompt che partono da soli a fine turno
+  n: 'note', // le note della cartella di lavoro, non della singola conversazione
 };
 
 const VK_CANC = 46;
@@ -480,9 +520,6 @@ const VK_CANC = 46;
 // la sua forma e' quella dei tasti funzione (ESC[<n>~) ma il 3 non e' un F.
 // I modificatori arrivano come parametro in mezzo: ESC[3;5~ e' ctrl+canc.
 const RE_CANC_ANSI = /\x1b\[3(?:;(\d+))?~/;
-// Bit dei modificatori nelle sequenze CSI: il parametro e' 1 + la somma, con
-// 4 = ctrl (1 = niente, 5 = ctrl, 6 = ctrl+shift).
-const CTRL_CSI = 4;
 
 // Vero se il blocco contiene Canc, e se era premuto con ctrl.
 // bytes: blocco non riconosciuto da tokenizza
@@ -490,9 +527,28 @@ const CTRL_CSI = 4;
 function cancNeiByte(bytes) {
   const trovato = RE_CANC_ANSI.exec(Buffer.from(bytes).toString('latin1'));
   if (!trovato) return { canc: false, ctrl: false };
-  const modificatori = Number(trovato[1] ?? 1) - 1;
-  return { canc: true, ctrl: (modificatori & CTRL_CSI) !== 0 };
+  return { canc: true, ctrl: modificatoriCsi(trovato[1]).ctrl };
 }
+
+// Interruttori della coda, sui tasti che restano liberi accanto a un campo di
+// testo: le lettere finiscono nel prompt, quindi servono con ctrl. Si guarda il
+// codice virtuale e non il carattere perche' con ctrl premuto il terminale
+// consegna il carattere di controllo (0x13), non "s".
+const VK_S = 0x53;
+const VK_X = 0x58;
+const COMMUTA_VK = { [VK_S]: 'stop', [VK_X]: 'salta' };
+const COMMUTA_BYTE = { 0x13: 'stop', 0x18: 'salta' }; // ctrl+s, ctrl+x grezzi
+
+// Ricerca fra le note: ctrl+f. Stessa ragione degli interruttori della coda —
+// accanto a un campo di testo le lettere sono testo, quindi serve un modificatore.
+const VK_F = 0x46;
+const CTRL_F_BYTE = 0x06;
+
+// Segna una nota per la cancellazione: ctrl+spazio. Lo spazio da solo e' un
+// carattere del testo, quindi serve il modificatore anche qui. Nei byte grezzi
+// ctrl+spazio arriva come NUL (0x00), che non e' prodotto da nessun altro tasto.
+const VK_SPAZIO = 0x20;
+const CTRL_SPAZIO_BYTE = 0x00;
 
 // Traduce i byte ricevuti in azioni per la coda dei prompt, dove si scrive testo
 // libero **e** si naviga un elenco.
@@ -508,8 +564,10 @@ function cancNeiByte(bytes) {
 // ma cedere il tasto semplice all'uscita e' il prezzo della coerenza.
 // Backspace resta per correggere il testo che stai scrivendo: un tasto solo non
 // puo' fare due cose a seconda di quanto hai scritto.
+// Ctrl e' quello che distingue le azioni sull'elenco da quelle sul testo:
+// ctrl+↑↓ sposta il prompt scelto, ctrl+s e ctrl+x accendono stop e salta.
 // dati: Buffer letto da stdin
-// ritorna: array di { tipo: 'carattere'|'invio'|'cancella'|'togli'|'freccia'|'annulla'|'esci', valore? }
+// ritorna: array di { tipo: 'carattere'|'invio'|'cancella'|'togli'|'freccia'|'sposta'|'commuta'|'annulla'|'esci', valore? }
 export function azioniCoda(dati) {
   const azioni = [];
 
@@ -522,7 +580,16 @@ export function azioniCoda(dati) {
         azioni.push({ tipo: voce.tasto.ctrl ? 'togli' : 'esci' });
       } else if (voce.tasto.vk === VK_ESCAPE) azioni.push({ tipo: 'annulla' });
       else if (DIREZIONE[voce.tasto.vk]) {
-        azioni.push({ tipo: 'freccia', valore: DIREZIONE[voce.tasto.vk] });
+        const direzione = DIREZIONE[voce.tasto.vk];
+        // Ctrl sposta, senza ctrl si scorre soltanto. Destra e sinistra qui non
+        // hanno un posto dove andare: l'elenco e' verticale.
+        if (voce.tasto.ctrl) {
+          if (direzione === 'su' || direzione === 'giu') {
+            azioni.push({ tipo: 'sposta', valore: direzione });
+          }
+        } else azioni.push({ tipo: 'freccia', valore: direzione });
+      } else if (voce.tasto.ctrl && COMMUTA_VK[voce.tasto.vk]) {
+        azioni.push({ tipo: 'commuta', valore: COMMUTA_VK[voce.tasto.vk] });
       } else if (voce.tasto.grezzo && !voce.tasto.ctrl && !voce.tasto.alt) {
         azioni.push({ tipo: 'carattere', valore: voce.tasto.grezzo });
       }
@@ -545,6 +612,80 @@ export function azioniCoda(dati) {
       if (byte === 0x0d || byte === 0x0a) azioni.push({ tipo: 'invio' });
       else if (byte === 0x7f || byte === 0x08) azioni.push({ tipo: 'cancella' });
       else if (byte === 0x03) azioni.push({ tipo: 'annulla' });
+      else if (COMMUTA_BYTE[byte]) azioni.push({ tipo: 'commuta', valore: COMMUTA_BYTE[byte] });
+      else if (byte >= 0x20 && byte < 0x7f) {
+        azioni.push({ tipo: 'carattere', valore: String.fromCharCode(byte) });
+      }
+    }
+  }
+
+  return azioni;
+}
+
+// Traduce l'invio nell'azione che gli spetta nelle note.
+// shift: a capo dentro il corpo — una nota e' un testo, non una riga
+// ctrl: manda la nota a Claude come prompt
+// niente: salva la nota e passa a quella nuova
+// ritorna: il tipo di azione
+function invioDelleNote({ ctrl, shift }) {
+  if (ctrl) return 'manda';
+  if (shift) return 'acapo';
+  return 'invio';
+}
+
+// Traduce i byte ricevuti in azioni per le note.
+//
+// Come la coda si scrive testo libero e si naviga un elenco, ma l'invio qui fa
+// tre cose a seconda dei modificatori (vedi `invioDelleNote`), e sono tutte
+// azioni frequenti: e' il motivo per cui non basta `azioniCoda`.
+//
+// **Su un terminale che manda i byte grezzi i tre invii sono lo stesso byte**
+// (`\r`), e shift+invio e ctrl+invio non si distinguono. Dentro cb su Windows non
+// succede — Claude accende win32-input-mode, che porta i modificatori — e la
+// codifica kitty li porta a sua volta (ESC[13;2u, riconosciuto da `tokenizza`);
+// altrove restano un invio semplice.
+// dati: Buffer letto da stdin
+// ritorna: array di { tipo: 'carattere'|'invio'|'acapo'|'manda'|'cancella'|'freccia'|
+//          'cerca'|'segna'|'togli'|'annulla'|'esci', valore? }
+export function azioniNote(dati) {
+  const azioni = [];
+
+  for (const voce of tokenizza(dati)) {
+    if (voce.tasto) {
+      if (voce.tasto.rilascio) continue;
+      if (voce.tasto.vk === VK_INVIO) azioni.push({ tipo: invioDelleNote(voce.tasto) });
+      else if (voce.tasto.vk === VK_BACKSPACE) azioni.push({ tipo: 'cancella' });
+      else if (voce.tasto.vk === VK_CANC) {
+        // Come nella coda: canc esce, ctrl+canc toglie. L'azione distruttiva
+        // paga il modificatore, l'uscita resta uguale in ogni schermata.
+        azioni.push({ tipo: voce.tasto.ctrl ? 'togli' : 'esci' });
+      } else if (voce.tasto.vk === VK_ESCAPE) azioni.push({ tipo: 'annulla' });
+      else if (DIREZIONE[voce.tasto.vk]) {
+        azioni.push({ tipo: 'freccia', valore: DIREZIONE[voce.tasto.vk] });
+      } else if (voce.tasto.ctrl && voce.tasto.vk === VK_F) azioni.push({ tipo: 'cerca' });
+      else if (voce.tasto.ctrl && voce.tasto.vk === VK_SPAZIO) azioni.push({ tipo: 'segna' });
+      else if (voce.tasto.grezzo && !voce.tasto.ctrl && !voce.tasto.alt) {
+        azioni.push({ tipo: 'carattere', valore: voce.tasto.grezzo });
+      }
+      continue;
+    }
+
+    if (voce.bytes[0] === 0x1b) {
+      const canc = cancNeiByte(voce.bytes);
+      if (canc.canc) azioni.push({ tipo: canc.ctrl ? 'togli' : 'esci' });
+      for (const azione of azioniRotella(voce.bytes)) {
+        // L'elenco delle note e' verticale, come quello della coda.
+        azioni.push({ tipo: 'freccia', valore: azione.valore === 'sinistra' ? 'su' : 'giu' });
+      }
+      continue;
+    }
+
+    for (const byte of voce.bytes) {
+      if (byte === 0x0d || byte === 0x0a) azioni.push({ tipo: 'invio' });
+      else if (byte === 0x7f || byte === 0x08) azioni.push({ tipo: 'cancella' });
+      else if (byte === 0x03) azioni.push({ tipo: 'annulla' });
+      else if (byte === CTRL_F_BYTE) azioni.push({ tipo: 'cerca' });
+      else if (byte === CTRL_SPAZIO_BYTE) azioni.push({ tipo: 'segna' });
       else if (byte >= 0x20 && byte < 0x7f) {
         azioni.push({ tipo: 'carattere', valore: String.fromCharCode(byte) });
       }

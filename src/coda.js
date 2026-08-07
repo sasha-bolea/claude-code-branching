@@ -14,6 +14,11 @@
 // arriva come motivo del blocco, **non** come un record `user` del transcript.
 // Nell'albero dei rami non diventa quindi un nodo, e da li' non si riparte.
 //
+// Due interruttori decidono cosa parte, e sono diversi apposta: **stop** e' una
+// barriera — quel prompt e tutti quelli dopo restano fermi finche' e' acceso —
+// mentre **salta** riguarda un prompt solo, che viene scavalcato. Il primo serve
+// per «da qui in poi fermati», il secondo per «questo non ancora».
+//
 // La coda e' legata alla singola sessione — due finestre sulla stessa cartella
 // non si rubano i prompt — e per questo va spostata a mano quando l'id cambia:
 // lo fa `trasferisci`, chiamata dal wrapper a ogni cambio di sessione (/clear e
@@ -29,6 +34,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { azioniCoda } from './tasti.js';
+import { coloraTasti } from './vista.js';
 import { T } from './lingua.js';
 import { arancione, arancioneForte, bianco, grigio, normale } from './stile.js';
 
@@ -46,29 +52,62 @@ export function percorsoCoda(sessione) {
   return path.join(cartellaCode(), `${sessione}.json`);
 }
 
+// Normalizza una voce della coda.
+// Sul disco puo' esserci una stringa — e' il formato delle code scritte prima
+// che stop e salta esistessero — oppure l'oggetto con i due interruttori. Si
+// accettano tutt'e due invece di migrare il file: una coda in attesa e' roba
+// dell'utente, e una migrazione che sbaglia la perde.
+// voce: stringa o { testo, stop, salta }
+// ritorna: { testo, stop, salta } | null se non e' una voce valida
+function normalizza(voce) {
+  if (typeof voce === 'string') return { testo: voce, stop: false, salta: false };
+  if (voce && typeof voce.testo === 'string') {
+    return { testo: voce.testo, stop: voce.stop === true, salta: voce.salta === true };
+  }
+  return null;
+}
+
 // Prompt in attesa, dal primo che partira' all'ultimo.
 // Un file assente, illeggibile o corrotto vale come coda vuota: la coda e' una
 // comodita', e non deve poter impedire niente.
 // sessione: id della sessione
-// ritorna: array di stringhe
+// ritorna: array di { testo, stop, salta }
 export function leggiCoda(sessione) {
   if (!sessione) return [];
   try {
     const dati = JSON.parse(fs.readFileSync(percorsoCoda(sessione), 'utf8'));
-    return Array.isArray(dati?.prompt) ? dati.prompt.filter((p) => typeof p === 'string') : [];
+    if (!Array.isArray(dati?.prompt)) return [];
+    return dati.prompt.map(normalizza).filter(Boolean);
   } catch {
     return [];
   }
+}
+
+// Il prompt che partirebbe adesso.
+//
+// Le due regole sono diverse apposta: **salta** riguarda un prompt solo e lo si
+// scavalca, **stop** e' una barriera e ferma anche tutti quelli dopo. Serve
+// perche' le due cose che si vogliono sono diverse: «questo non ancora» e «da
+// qui in poi non partire piu' finche' non lo dico io».
+// prompt: la coda gia' letta
+// ritorna: indice del prossimo, oppure -1 se non deve partire niente
+export function indiceProssimo(prompt) {
+  for (let i = 0; i < prompt.length; i += 1) {
+    if (prompt[i].stop) return -1;
+    if (!prompt[i].salta) return i;
+  }
+  return -1;
 }
 
 // Scrive la coda, creando la cartella se manca. Una coda vuota si cancella
 // invece di restare come file: e' cosi' che la pulizia non trova avanzi, e che
 // l'hook capisce a colpo d'occhio che non c'e' niente da mandare.
 // sessione: id della sessione
-// prompt: array di stringhe
+// prompt: array di { testo, stop, salta }, o di stringhe
 export function scriviCoda(sessione, prompt) {
   if (!sessione) return;
   const percorso = percorsoCoda(sessione);
+  prompt = prompt.map(normalizza).filter(Boolean);
   if (prompt.length === 0) {
     try {
       fs.unlinkSync(percorso);
@@ -89,7 +128,38 @@ export function scriviCoda(sessione, prompt) {
 export function accoda(sessione, testo) {
   const pulito = testo.trim();
   if (!pulito) return leggiCoda(sessione);
-  const prompt = [...leggiCoda(sessione), pulito];
+  const prompt = [...leggiCoda(sessione), { testo: pulito, stop: false, salta: false }];
+  scriviCoda(sessione, prompt);
+  return prompt;
+}
+
+// Accende o spegne uno dei due interruttori di un prompt.
+// sessione: id della sessione
+// indice: posizione del prompt
+// campo: 'stop' | 'salta'
+// ritorna: la coda aggiornata
+export function commuta(sessione, indice, campo) {
+  const prompt = leggiCoda(sessione);
+  if (indice < 0 || indice >= prompt.length) return prompt;
+  prompt[indice] = { ...prompt[indice], [campo]: !prompt[indice][campo] };
+  scriviCoda(sessione, prompt);
+  return prompt;
+}
+
+// Scambia un prompt con quello sopra o sotto.
+//
+// Lo scambio e non l'inserimento altrove: cosi' l'unica cosa che cambia sono due
+// righe, e il cursore la segue muovendosi di uno. Ai bordi non fa niente, il che
+// e' anche il modo in cui il chiamante non deve controllarli.
+// sessione: id della sessione
+// indice: posizione del prompt
+// direzione: 'su' | 'giu'
+// ritorna: la coda aggiornata
+export function sposta(sessione, indice, direzione) {
+  const prompt = leggiCoda(sessione);
+  const verso = indice + (direzione === 'su' ? -1 : 1);
+  if (indice < 0 || indice >= prompt.length || verso < 0 || verso >= prompt.length) return prompt;
+  [prompt[indice], prompt[verso]] = [prompt[verso], prompt[indice]];
   scriviCoda(sessione, prompt);
   return prompt;
 }
@@ -155,14 +225,24 @@ export function disegnaCoda(stato, { colonne = 100, altezza = 30 } = {}) {
     righe.push(`  ${grigio(taglia(T.coda.vuota))}`);
   } else {
     righe.push(`  ${normale(taglia(T.coda.quanti(stato.prompt.length)))}`, '');
-    // Il numero dice l'ordine di partenza, e il primo porta scritto che e' il
-    // prossimo: senza, l'ordine andrebbe dedotto dalla numerazione.
+    // Il numero dice l'ordine di partenza, e il prossimo porta scritto che e'
+    // lui: con stop e salta di mezzo non e' piu' per forza il primo, e dedurlo
+    // dalla numerazione non basta.
+    const prossimo = indiceProssimo(stato.prompt);
+    // Uno stop ferma anche tutti quelli dopo: si spengono insieme a lui, o
+    // l'elenco direbbe che partono.
+    const primoStop = stato.prompt.findIndex((prompt) => prompt.stop);
     stato.prompt.forEach((prompt, i) => {
       const scelto = i === stato.indice;
-      const nota = i === 0 ? `  ${T.coda.prossimo}` : '';
+      const fermo = (primoStop >= 0 && i >= primoStop) || prompt.salta;
+      const marchi = [prompt.stop ? T.coda.marchioStop : '', prompt.salta ? T.coda.marchioSalta : '']
+        .filter(Boolean)
+        .join(' ');
+      const nota = i === prossimo ? `  ${T.coda.prossimo}` : marchi ? `  ${marchi}` : '';
       const spazio = Math.max(10, larghezza - 6 - nota.length);
-      const riga = `  ${scelto ? '▸' : ' '} ${String(i + 1).padStart(2)}. ${suUnaRiga(prompt, spazio)}`;
-      righe.push(scelto ? arancioneForte(taglia(riga + nota)) : normale(taglia(riga + nota)));
+      const riga = `  ${scelto ? '▸' : ' '} ${String(i + 1).padStart(2)}. ${suUnaRiga(prompt.testo, spazio)}`;
+      const colore = scelto ? arancioneForte : fermo ? grigio : normale;
+      righe.push(colore(taglia(riga + nota)));
     });
   }
 
@@ -176,9 +256,23 @@ export function disegnaCoda(stato, { colonne = 100, altezza = 30 } = {}) {
     T.coda.legende.find((testo) => testo.length + 2 <= larghezza) ??
     T.coda.legende[T.coda.legende.length - 1];
   while (righe.length < altezza - 2) righe.push('');
-  righe.push(`  ${grigio('─'.repeat(larghezza))}`, `  ${grigio(taglia(legenda))}`);
+  // I tasti in arancione, come in ogni altra schermata.
+  righe.push(`  ${grigio('─'.repeat(larghezza))}`, `  ${coloraTasti(taglia(legenda))}`);
 
   return righe.slice(0, altezza);
+}
+
+// Il cursore dopo una freccia, dentro i bordi dell'elenco.
+// Vale sia per scorrere sia per spostare: quando lo spostamento non e' avvenuto
+// perche' si era al bordo, il taglio qui dentro rimette il cursore dov'era.
+// stato: { prompt, indice }
+// direzione: 'su' | 'giu' | altro (che non muove niente)
+// ritorna: il nuovo indice
+function muoviIndice(stato, direzione) {
+  const ultimo = Math.max(0, stato.prompt.length - 1);
+  if (direzione === 'su') return Math.max(0, stato.indice - 1);
+  if (direzione === 'giu') return Math.min(ultimo, stato.indice + 1);
+  return Math.min(ultimo, stato.indice);
 }
 
 // Mostra la coda e la lascia modificare, finche' non si esce con Esc.
@@ -214,7 +308,11 @@ export function apriCoda({ sessione, ingresso = process.stdin, uscita = process.
     };
 
     const suDati = (dati) => {
-      for (const azione of azioniCoda(dati)) {
+      const azioni = azioniCoda(dati);
+      // Niente da fare, niente da ridisegnare: vedi cartelle.js — un ctrl premuto
+      // da solo cancellava la selezione del testo che si stava per copiare.
+      if (azioni.length === 0) return;
+      for (const azione of azioni) {
         if (azione.tipo === 'annulla') return chiudi('indietro');
         if (azione.tipo === 'esci') return chiudi('esci');
         if (azione.tipo === 'invio') {
@@ -224,13 +322,17 @@ export function apriCoda({ sessione, ingresso = process.stdin, uscita = process.
           stato.testo = stato.testo.slice(0, -1);
         } else if (azione.tipo === 'togli') {
           stato.prompt = togli(sessione, stato.indice);
+        } else if (azione.tipo === 'commuta') {
+          stato.prompt = commuta(sessione, stato.indice, azione.valore);
         } else if (azione.tipo === 'carattere') {
           stato.testo += azione.valore;
+        } else if (azione.tipo === 'sposta') {
+          // Il cursore segue il prompt spostato, o dopo il primo scambio
+          // starebbe su un altro e il secondo ctrl+↑ sposterebbe quello.
+          stato.prompt = sposta(sessione, stato.indice, azione.valore);
+          stato.indice = muoviIndice(stato, azione.valore);
         } else if (azione.tipo === 'freccia') {
-          if (azione.valore === 'su') stato.indice = Math.max(0, stato.indice - 1);
-          else if (azione.valore === 'giu') {
-            stato.indice = Math.min(Math.max(0, stato.prompt.length - 1), stato.indice + 1);
-          }
+          stato.indice = muoviIndice(stato, azione.valore);
         }
       }
       ridisegna();
