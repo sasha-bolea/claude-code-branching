@@ -21,6 +21,10 @@ import { T } from './lingua.js';
 // spostano insieme: se serve, si ripiega su ● ○ ─ ┳ ┃ ┣ └ cambiando qui.
 const PIENO = '⬤'; // U+2B24, prompt non selezionato
 const VUOTO = '◯'; // U+25EF, prompt selezionato: e' il punto da cui si riparte
+// U+00A9: il punto in cui la conversazione e' stata compattata. Non e' un prompt
+// digitato ma un fatto del CLI, e nell'albero si distingue a colpo d'occhio senza
+// occupare piu' di una cella: la griglia ne ha una sola per nodo.
+const COMPATTAZIONE = '©';
 const TRATTO = '━'; // U+2501, pesante come le giunzioni
 const FORCA = '┳'; // da qui nasce almeno un ramo alternativo
 const VERTICALE = '┃'; // discesa dalla forca verso la riga del ramo
@@ -186,7 +190,7 @@ export function componiVista(albero) {
 
     let voce = lavoro.voce;
     while (voce) {
-      poni(riga, colonna, PIENO, { uuid: voce.uuid });
+      poni(riga, colonna, voce.isCompattazione ? COMPATTAZIONE : PIENO, { uuid: voce.uuid });
       posizioni.set(voce.uuid, { riga, colonna });
       nodi.push(voce.uuid);
 
@@ -282,7 +286,11 @@ function coloraRiga(celle, selezione, percorso) {
       // La guardia su uuid non e' ridondante: i raccordi hanno uuid null, e senza
       // di essa con selezione null (nessun cursore) diventerebbero tutti cerchi.
       if (cella.uuid && cella.uuid === selezione) {
-        ch = VUOTO;
+        // Il nodo selezionato si svuota per dire «e' da qui che si riparte». La
+        // compattazione no: e' l'unico punto che non e' un prompt digitato, e
+        // cambiargli glifo nasconderebbe cos'e' proprio mentre lo si guarda. Che
+        // sia selezionato lo dice il colore, come per ogni altra cella.
+        if (ch !== COMPATTAZIONE) ch = VUOTO;
         suo = arancioneForte;
       } else if (cella.uuid) {
         suo = percorso.has(cella.uuid) ? arancione : grigio;

@@ -1,4 +1,5 @@
 import { catenaFinoA } from './transcript.js';
+import { T } from './lingua.js';
 
 // Costruisce l'albero collassato dei soli prompt utente.
 // L'albero grezzo ha centinaia di nodi (risultati tool, attachment, system):
@@ -57,7 +58,12 @@ export function alberoPrompt(albero) {
     if (!nodo.isPromptUtente) continue;
     perUuid.set(nodo.uuid, {
       uuid: nodo.uuid,
-      testo: nodo.testo,
+      // Il riassunto di una compattazione e' un record 'user' lungo migliaia di
+      // caratteri: mostrarlo darebbe a quel punto della conversazione l'aspetto
+      // di un prompt digitato, per giunta che dichiara di venire da un'altra
+      // conversazione. Il punto va segnalato per quello che e'.
+      testo: nodo.isCompattazione ? T.albero.compattazione : nodo.testo,
+      isCompattazione: nodo.isCompattazione === true,
       timestamp: nodo.timestamp,
       ...cambiamentiDelTurno(nodo),
       figli: [],

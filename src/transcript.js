@@ -124,13 +124,30 @@ export async function leggiTranscript(percorso) {
 
     const cambiate = righeCambiate(record);
 
+    // Una compattazione scrive un record `system` (`subtype: 'compact_boundary'`)
+    // con `parentUuid: null`, e tutto ciò che segue si attacca a quello: il file
+    // resta uno solo, ma l'albero si spezza in tronconi che partono tutti dal bordo
+    // sinistro, come se si fossero biforcati prima del primo messaggio — e il
+    // riassunto che apre il troncone dice di venire da un'altra conversazione.
+    // Il padre vero il CLI ce lo scrive in `logicalParentUuid`: è l'ultimo messaggio
+    // del ramo che sta venendo compattato, cioè il punto da cui la conversazione
+    // prosegue davvero. Senza questa ricucitura la catena del ramo attivo si ferma
+    // all'ultima compattazione (misurato: 9 prompt invece di 47).
+    const padre = record.parentUuid ?? record.logicalParentUuid ?? null;
+
     ultimoNodo = record.uuid;
     nodi.set(record.uuid, {
       uuid: record.uuid,
-      parentUuid: record.parentUuid ?? null,
+      parentUuid: padre,
       tipo: record.type,
       testo,
       timestamp: record.timestamp ?? null,
+      // Confine di una compattazione: nell'albero è un punto della catena da
+      // etichettare, non un ramo nuovo (vedi il commento sopra). Il riassunto che
+      // il CLI scrive subito dopo (`isCompactSummary`) è un record `user` con un
+      // testo lungo, quindi passerebbe per un prompt digitato: è lo stesso punto,
+      // e nell'albero ne va mostrata l'etichetta, non il riassunto.
+      isCompattazione: record.subtype === 'compact_boundary' || record.isCompactSummary === true,
       // Righe cambiate da questo record: chi collassa l'albero le somma sul
       // turno (vedi alberoPrompt).
       aggiunte: cambiate.aggiunte,
@@ -189,6 +206,46 @@ export function unisciAlberi(alberi, percorsi) {
   const attivo = alberi[0];
   const nodi = new Map();
 
+  // Dove si trova la conversazione adesso. Di norma e' `alberi[0]`, la sessione
+  // che il chiamante sta seguendo — e con un fork appena fatto DEVE restare
+  // quella: la sessione creata da cb copia i record dell'originale, quindi porta
+  // timestamp vecchi, e «il piu' recente» sceglierebbe il ramo appena abbandonato
+  // (prova `testAlberoRestaDopoIlCambioRamo`).
+  //
+  // Cede solo a una sessione **strettamente** piu' recente: e' il caso di
+  // `--resume`, dove l'id lo sceglie Claude e la famiglia arriva in ordine di
+  // cartella, cosi' la punta finiva su un file fermo da ore e l'albero si apriva
+  // su un ramo vecchio invece che sull'ultimo su cui si e' lavorato. A parita' di
+  // istante vince quella da cui si e' partiti — stessa regola di `trovaTranscript`
+  // nel wrapper. Il confronto e' sui timestamp dentro il transcript, non sulle
+  // date del filesystem, che su Windows mentono (vedi percorsi.js).
+  // Se la sessione da cui si e' partiti e' una copia mai proseguita — i suoi uuid
+  // stanno tutti dentro un'altra — allora e' un fork appena creato, e la punta
+  // giusta e' la sua: cb ci ha appena portato l'utente, e i record che porta sono
+  // copiati, quindi vecchi. Difenderla e' cio' che tiene in piedi
+  // `testAlberoRestaDopoIlCambioRamo`.
+  const uuidAltrove = new Set();
+  for (const albero of alberi) {
+    if (albero === attivo) continue;
+    for (const uuid of albero.nodi.keys()) uuidAltrove.add(uuid);
+  }
+  let copiaMaiProseguita = attivo.nodi.size > 0;
+  for (const uuid of attivo.nodi.keys()) {
+    if (!uuidAltrove.has(uuid)) {
+      copiaMaiProseguita = false;
+      break;
+    }
+  }
+
+  let piuRecente = attivo;
+  if (!copiaMaiProseguita) {
+    for (const albero of alberi) {
+      if (String(albero.ultimoTimestamp ?? '') > String(piuRecente.ultimoTimestamp ?? '')) {
+        piuRecente = albero;
+      }
+    }
+  }
+
   alberi.forEach((albero, indice) => {
     // L'id da passare a --resume e' quello del file: i record copiati da un fork
     // possono portarsi dietro riferimenti alla sessione di provenienza.
@@ -215,6 +272,11 @@ export function unisciAlberi(alberi, percorsi) {
 
   return {
     ...attivo,
+    // La punta viene dalla sessione scritta per ultima (vedi sopra); tutto il
+    // resto — sessionId, cwd, titolo — resta quello della sessione da cui si e'
+    // partiti, che e' l'identita' con cui il chiamante ci sta lavorando.
+    ultimoNodo: piuRecente.ultimoNodo,
+    leafAttivo: piuRecente.leafAttivo,
     nodi,
     radici,
     famiglia: percorsi.length,

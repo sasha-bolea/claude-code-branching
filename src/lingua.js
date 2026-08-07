@@ -16,6 +16,7 @@ import { impostazione } from './impostazioni.js';
 // qui servono solo per comporre il testo della legenda.
 const VUOTO = '◯';
 const FORCA = '┳';
+const COMPATTAZIONE = '©';
 
 export const EN = {
   aiuto: (scorciatoia) => `
@@ -91,7 +92,8 @@ with CB_LINGUA (en, it).
   // src/vista.js — l'albero dentro la sessione
   albero: {
     legenda: [
-      `${VUOTO} restart here   ${FORCA} fork   orange = history of this point`,
+      `${VUOTO} restart here   ${FORCA} fork   ${COMPATTAZIONE} compacted   orange = history of this point`,
+      `${VUOTO} restart here   ${FORCA} fork   ${COMPATTAZIONE} compacted`,
       `${VUOTO} restart here   ${FORCA} fork`,
       `${VUOTO} restart here`,
     ],
@@ -109,6 +111,7 @@ with CB_LINGUA (en, it).
     promptPrima: (n) => `← ${n} prompts back`,
     promptDopo: (n) => `${n} prompts ahead →`,
     ripartiDaQui: 'restart here',
+    compattazione: '© conversation compacted',
     precedenti: (n) => `earlier: ${n}`,
     riportaIndietro: 'what do I roll back?',
     // Il prompt scelto: due stati, e si mostra per intero quello attivo. E' una
@@ -390,7 +393,8 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
 
   albero: {
     legenda: [
-      `${VUOTO} riparti da qui   ${FORCA} biforcazione   arancione = storia di questo punto`,
+      `${VUOTO} riparti da qui   ${FORCA} biforcazione   ${COMPATTAZIONE} compattata   arancione = storia di questo punto`,
+      `${VUOTO} riparti da qui   ${FORCA} biforcazione   ${COMPATTAZIONE} compattata`,
       `${VUOTO} riparti da qui   ${FORCA} biforcazione`,
       `${VUOTO} riparti da qui`,
     ],
@@ -408,6 +412,7 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     promptPrima: (n) => `← ${n} prompt prima`,
     promptDopo: (n) => `${n} prompt dopo →`,
     ripartiDaQui: 'riparti da qui',
+    compattazione: '© conversazione compattata',
     precedenti: (n) => `precedenti: ${n}`,
     riportaIndietro: 'cosa riporto indietro?',
     // Il prompt scelto: due stati, e si mostra per intero quello attivo. E' una

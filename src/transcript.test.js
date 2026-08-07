@@ -5,6 +5,7 @@ import path from 'node:path';
 import { leggiTranscript, biforcazioni, foglie, catenaFinoA, unisciAlberi } from './transcript.js';
 import { attivaRamoDi, nelRamoAttivo } from './attiva.js';
 import { alberoPrompt } from './albero.js';
+import { T } from './lingua.js';
 
 // Scrive un .jsonl temporaneo da un array di record.
 // record: array di oggetti da serializzare una riga ciascuno
@@ -265,7 +266,98 @@ async function testRigheCambiateDaiRisultatiTool() {
   fs.unlinkSync(file);
 }
 
+// Una compattazione non deve aprire una conversazione nuova.
+//
+// Il CLI la scrive come record `system` con `parentUuid: null` e il padre vero in
+// `logicalParentUuid`: leggendo solo `parentUuid` l'albero si spezzava in tronconi
+// che partivano tutti dal bordo sinistro, e il riassunto che li apriva sembrava un
+// prompt digitato che diceva di venire da un'altra conversazione. Misurato su una
+// sessione vera: 3 radici invece di 1, e la catena del ramo attivo ferma a 9 prompt
+// su 47.
+async function testCompattazioneNonSpezzaLaConversazione() {
+  const file = scriviTemporaneo([
+    msg('a', null, 'user', 'primo prompt'),
+    msg('b', 'a', 'assistant', 'prima risposta'),
+    // Il confine: parentUuid nullo, il padre vero sta in logicalParentUuid.
+    {
+      type: 'system',
+      subtype: 'compact_boundary',
+      uuid: 'comp',
+      parentUuid: null,
+      logicalParentUuid: 'b',
+      sessionId: 'sess-test',
+      timestamp: '2026-07-29T10:05:00.000Z',
+      content: 'Conversation compacted',
+    },
+    // Il riassunto che il CLI scrive subito dopo: un 'user' lungo, non un prompt.
+    {
+      ...msg('sunto', 'comp', 'user', 'This session is being continued from a previous conversation'),
+      isCompactSummary: true,
+    },
+    msg('dopo', 'sunto', 'user', 'prompt dopo la compattazione'),
+  ]);
+
+  const albero = await leggiTranscript(file);
+  assert.equal(albero.radici.length, 1, 'la compattazione non apre una radice nuova');
+  assert.equal(albero.nodi.get('comp').parentUuid, 'b', 'il confine si aggancia al ramo compattato');
+
+  // La catena del ramo attivo deve risalire oltre la compattazione.
+  const catena = catenaFinoA(albero, 'dopo').map((n) => n.uuid);
+  assert.ok(catena.includes('a'), 'la catena risale fino al primo prompt');
+
+  // Nell'albero dei prompt il punto si chiama 'compact', non col testo del riassunto.
+  const { perUuid } = alberoPrompt(albero);
+  assert.equal(perUuid.get('sunto').testo, T.albero.compattazione, 'il riassunto porta l\'etichetta');
+
+  fs.unlinkSync(file);
+}
+
+// Con --resume l'albero deve aprirsi sul ramo dove si e' lavorato per ultimo.
+//
+// L'id lo sceglie Claude e la famiglia arriva in ordine di cartella, quindi
+// `alberi[0]` e' spesso un file fermo da ore: prendendo di li' la punta, l'albero
+// si apriva selezionando un ramo vecchio. Vince la sessione scritta per ultima —
+// tranne quando quella di partenza e' una copia mai proseguita, cioe' un fork
+// appena fatto: li' i record sono copiati e quindi vecchi per costruzione, e la
+// punta giusta resta la sua (vedi testAlberoRestaDopoIlCambioRamo in overlay).
+async function testConResumeSiApreSulRamoPiuRecente() {
+  // I nomi dei file temporanei si distinguono per numero di record: due file di
+  // pari lunghezza si sovrascriverebbero a vicenda.
+  const vecchio = scriviTemporaneo([
+    msg('a', null, 'user', 'primo prompt'),
+    msg('b', 'a', 'assistant', 'prima risposta'),
+    { ...msg('vecchio', 'b', 'user', 'ramo lasciato'), timestamp: '2026-07-29T10:00:00.000Z' },
+  ]);
+  // Stessa radice: e' la stessa conversazione, proseguita altrove.
+  const recente = scriviTemporaneo([
+    msg('a', null, 'user', 'primo prompt'),
+    msg('b', 'a', 'assistant', 'prima risposta'),
+    msg('c', 'b', 'assistant', 'altra risposta'),
+    { ...msg('nuovo', 'c', 'user', 'ramo di adesso'), timestamp: '2026-07-29T18:00:00.000Z' },
+  ]);
+
+  const alberi = [await leggiTranscript(vecchio), await leggiTranscript(recente)];
+  // L'ordine e' quello che darebbe --resume: per primo il file vecchio.
+  const unito = unisciAlberi(alberi, [vecchio, recente]);
+  assert.equal(unito.ultimoNodo, 'nuovo', 'la punta viene dalla sessione scritta per ultima');
+
+  // Un fork appena fatto e' un sottoinsieme: li' la punta resta quella di partenza.
+  const copia = scriviTemporaneo([
+    msg('a', null, 'user', 'primo prompt'),
+    msg('b', 'a', 'assistant', 'prima risposta'),
+  ]);
+  const conFork = unisciAlberi(
+    [await leggiTranscript(copia), await leggiTranscript(recente)],
+    [copia, recente],
+  );
+  assert.equal(conFork.ultimoNodo, 'b', 'una copia mai proseguita tiene la sua punta');
+
+  [vecchio, recente, copia].forEach((f) => fs.unlinkSync(f));
+}
+
 const prove = [
+  testConResumeSiApreSulRamoPiuRecente,
+  testCompattazioneNonSpezzaLaConversazione,
   testAlberoConBiforcazione,
   testRigheCambiateDaiRisultatiTool,
   testUnioneRitrovaIlRamoDelPadre,
