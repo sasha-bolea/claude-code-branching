@@ -24,6 +24,7 @@ import {
   VOCI_RIPRISTINO,
 } from './vista.js';
 import { azioniNavigazione, azioniTastiera } from './tasti.js';
+import { sovrapposizioneIstruzioni } from './istruzioni.js';
 import { arancioneForte, grigio, normale } from './stile.js';
 import { testoLeggibile } from './albero.js';
 import { T } from './lingua.js';
@@ -433,12 +434,21 @@ export async function selezionaConversazione({
     ripristinaCodice,
   };
 
+  // Due pagine di istruzioni perche' le schermate sono due: l'elenco con il suo
+  // albero, e il menu di cosa riportare indietro — che e' lo stesso menu che
+  // apre F2, e merita la stessa spiegazione.
+  const istruzioni = {
+    elenco: sovrapposizioneIstruzioni(T.istruzioni.conversazioni),
+    menu: sovrapposizioneIstruzioni(T.istruzioni.menu),
+  };
+  let aperte = null;
+
   return new Promise((risolvi) => {
+    const dimensioni = () => ({ colonne: uscita.columns || 120, altezza: uscita.rows || 30 });
     const ridisegna = () => {
-      const righe = disegnaConversazioni(stato, {
-        colonne: uscita.columns || 120,
-        altezza: uscita.rows || 30,
-      });
+      const righe = aperte
+        ? aperte.disegna(dimensioni())
+        : disegnaConversazioni(stato, dimensioni());
       uscita.write(`\x1b[H\x1b[2J${righe.join('\r\n')}`);
     };
 
@@ -482,6 +492,17 @@ export async function selezionaConversazione({
     const suDati = (dati) => {
       let daRicaricare = false;
 
+      // Con le istruzioni aperte i tasti sono loro: la schermata sotto resta
+      // dov'era, elenco o menu che sia.
+      if (aperte) {
+        const azioni = stato.modo === 'menu' ? azioniTastiera(dati) : azioniNavigazione(dati);
+        if (azioni.length === 0) return;
+        const esito = aperte.tasti(azioni, dimensioni());
+        if (esito === 'esci') return chiudi('esci');
+        if (esito === 'chiusa') aperte = null;
+        return ridisegna();
+      }
+
       // Nel menu servono anche le cifre, che la navigazione dell'albero scarta:
       // si decodifica con azioniTastiera, come fa il wrapper nello stesso punto.
       if (stato.modo === 'menu') {
@@ -505,6 +526,11 @@ export async function selezionaConversazione({
           // Canc esce dall'interfaccia intera, da qualunque schermata: qui vuol
           // dire senza scegliere niente, come Esc ma fino in fondo.
           if (azione.tipo === 'esci') return chiudi('esci');
+          if (azione.tipo === 'istruzioni') {
+            aperte = istruzioni.menu;
+            aperte.apri();
+            return ridisegna();
+          }
           if (azione.tipo === 'invio') return chiudi(esito(stato.menu));
           if (azione.tipo === 'cifra') {
             const scelto = Number.parseInt(azione.valore, 10) - 1;
@@ -527,6 +553,13 @@ export async function selezionaConversazione({
         // Canc vale prima di tutto il resto e in ogni modo della schermata —
         // elenco, albero, cartella vuota — perche' e' l'uscita, non una scelta.
         if (azione === 'esci') return chiudi('esci');
+        // Le istruzioni valgono in ogni modo per la stessa ragione: anche una
+        // cartella senza conversazioni e' una schermata da spiegare.
+        if (azione === 'istruzioni') {
+          aperte = istruzioni.elenco;
+          aperte.apri();
+          return ridisegna();
+        }
 
         if (stato.famiglie.length === 0) {
           // Niente da riprendere: qualunque conferma vale come "parti da zero",

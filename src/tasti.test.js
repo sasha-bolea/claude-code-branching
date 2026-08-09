@@ -388,6 +388,82 @@ function testAzioniByteGrezzi() {
   assert.deepEqual(azioniTastiera(buf(ESC)), [{ tipo: 'annulla' }]);
 }
 
+// Il testo incollato arriva in due forme, e vanno riconosciute tutt'e due.
+//
+// Coi marcatori del bracketed paste il blocco comincia con ESC: senza
+// riconoscerlo finiva fra i byte non riconosciuti, che le schermate scartano
+// come sequenze di controllo — si incollava e non compariva niente. Senza
+// marcatori i byte passano uno per uno, e gli a capo diventano invii: un prompt
+// di tre righe si accodava come tre prompt.
+function testIncollaRiconosciutoNelleDueForme() {
+  const atteso = [{ tipo: 'incolla', valore: 'due\nrighe' }];
+
+  assert.deepEqual(azioniCoda(testo(`${esc}[200~due\nrighe${esc}[201~`)), atteso, 'coi marcatori');
+  assert.deepEqual(azioniCoda(testo('due\nrighe')), atteso, 'e senza');
+  assert.deepEqual(azioniNote(testo(`${esc}[200~due\nrighe${esc}[201~`)), atteso, 'anche le note');
+
+  // Gli a capo si normalizzano in tutt'e due le strade, e non e' cosmesi: un \r
+  // che arriva fino allo schermo riporta il cursore a inizio riga, e il disegno
+  // si riscrive sopra se stesso. E' cosi' che un titolo incollato usciva dal
+  // riquadro delle note — non era troppo lungo, erano i suoi \r.
+  assert.deepEqual(azioniCoda(testo('due\r\nrighe')), atteso, 'i \\r\\n diventano \\n');
+  assert.deepEqual(azioniCoda(testo(`${esc}[200~due\r\nrighe${esc}[201~`)), atteso, 'anche coi marcatori');
+  assert.deepEqual(azioniCoda(testo(`${esc}[200~due\rrighe${esc}[201~`)), atteso, 'e il \\r da solo');
+  assert.deepEqual(azioniNote(testo(`${esc}[200~due\r\nrighe${esc}[201~`)), atteso, 'e nelle note');
+
+  // Gli accenti sopravvivono: dentro un incolla il testo si rilegge in utf8, non
+  // byte per byte come i tasti.
+  assert.deepEqual(
+    azioniCoda(Buffer.from(`${esc}[200~perché\nquà${esc}[201~`, 'utf8')),
+    [{ tipo: 'incolla', valore: 'perché\nquà' }],
+    'gli accenti restano quelli',
+  );
+
+  // Dentro i marcatori il terminale mette **eventi di tastiera**, non caratteri:
+  // con win32-input-mode acceso — e dentro cb lo e' sempre — gli a capo del
+  // testo incollato arrivano come ESC[13;…_, con tanto di evento di rilascio.
+  // Copiati alla lettera finivano nella nota come una fila di numeri.
+  const invio = `${esc}[13;28;13;1;0;1_`;
+  const rilasciato = `${esc}[13;28;13;0;0;1_`;
+  assert.deepEqual(
+    azioniNote(testo(`${esc}[200~prima riga${invio}${rilasciato}seconda riga${esc}[201~`)),
+    [{ tipo: 'incolla', valore: 'prima riga\nseconda riga' }],
+    'gli eventi invio dentro l incolla diventano a capo',
+  );
+  // Anche le lettere possono arrivare come eventi, e sono testo pure loro.
+  const lettera = (vk, uc) => testo(`${esc}[${vk};1;${uc};1;32;1_`);
+  const pezzi = Buffer.concat([
+    testo(`${esc}[200~`),
+    lettera(65, 97),
+    lettera(66, 98),
+    testo(invio),
+    lettera(67, 99),
+    testo(`${esc}[201~`),
+  ]);
+  assert.deepEqual(azioniCoda(pezzi), [{ tipo: 'incolla', valore: 'ab\nc' }], 'e le lettere pure');
+
+  // Un incolla lungo arriva spezzato fra due letture: si prende quello che c'e',
+  // e la fine che arriva da sola si consuma senza lasciare traccia a schermo.
+  assert.deepEqual(azioniCoda(testo(`${esc}[200~meta del`)), [
+    { tipo: 'incolla', valore: 'meta del' },
+  ]);
+  assert.deepEqual(azioniCoda(testo(`${esc}[201~`)), [], 'la fine da sola non produce niente');
+
+  // Digitare resta digitare: un invio da solo invia, e una lettera sola non e'
+  // un incolla nemmeno se la segue un a capo.
+  assert.deepEqual(azioniCoda(testo('\r')), [{ tipo: 'invio' }]);
+  assert.deepEqual(azioniCoda(testo('a\r')), [
+    { tipo: 'carattere', valore: 'a' },
+    { tipo: 'invio' },
+  ]);
+
+  // Dove non si scrive testo, un incolla si butta: letto lettera per lettera
+  // diventerebbe una raffica di comandi — "c" e "p" aprono schermate.
+  assert.deepEqual(azioniNavigazione(testo(`${esc}[200~cp\nnm${esc}[201~`)), []);
+  assert.deepEqual(azioniNavigazione(testo('cp\nnm')), [], 'anche senza marcatori');
+  assert.deepEqual(azioniTastiera(testo('12\n34')), [], 'e nel menu del ripristino');
+}
+
 function testSpegneOgniModoDiInput() {
   // Un modo dimenticato qui e' una shell inutilizzabile dopo un'uscita anomala:
   // il terminale continua a mandare le sue sequenze e PowerShell le stampa.
@@ -434,6 +510,7 @@ const prove = [
   testTastiFunzione,
   testAzioniWasd,
   testAzioniByteGrezzi,
+  testIncollaRiconosciutoNelleDueForme,
   testSpegneOgniModoDiInput,
 ];
 

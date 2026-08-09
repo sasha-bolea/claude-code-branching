@@ -529,10 +529,13 @@ function cambiamenti(voce) {
 // una riga piu' larga del terminale verrebbe mandata a capo, e quel capo sfasa
 // tutte le righe sotto. Meglio una riga mozza che un disegno sfasato.
 //
+// Esportata perche' serve anche dentro il riquadro delle note, che ha un bordo
+// destro da rispettare: li' una riga piu' lunga usciva dal riquadro e finiva a
+// capo, sfasando tutto il disegno sotto.
 // riga: testo gia' colorato
 // massimo: colonne visibili consentite
 // ritorna: la riga, tagliata se serve
-function tagliaVisibile(riga, massimo) {
+export function tagliaVisibile(riga, massimo) {
   let visibili = 0;
   let risultato = '';
   let colorato = false;
@@ -585,6 +588,33 @@ const separatore = (larghezza) => `  ${grigio('─'.repeat(Math.max(10, larghezz
 // in due posti diverrebbero due riquadri diversi al primo cambio.
 export const BOX = { alto: '╭', altoDestra: '╮', basso: '╰', bassoDestra: '╯', lato: '│' };
 
+// Il riquadro attorno al testo che si sta scrivendo: quello delle note e quello
+// della coda sono lo stesso riquadro, e disegnarli in due posti vorrebbe dire
+// due riquadri diversi al primo ritocco.
+//
+// Il contenuto arriva gia' colorato e gia' della misura giusta: il riempimento
+// fino al bordo si misura sulle **colonne visibili**, o ogni sequenza ANSI
+// contata come testo farebbe traballare il bordo destro. Il taglio e' la rete di
+// sicurezza: una riga piu' lunga uscirebbe dal riquadro e il terminale la
+// manderebbe a capo, sfasando tutto il disegno sotto.
+// contenuto: righe da mettere dentro, gia' composte
+// larghezza: colonne del riquadro, bordi compresi
+// ritorna: array di righe, bordo superiore e inferiore compresi
+export function riquadro(contenuto, larghezza) {
+  const dentro = Math.max(6, larghezza - 4);
+  const orlo = '─'.repeat(Math.max(0, larghezza - 2));
+
+  return [
+    `  ${arancione(`${BOX.alto}${orlo}${BOX.altoDestra}`)}`,
+    ...contenuto.map((riga) => {
+      const tagliata = tagliaVisibile(riga, dentro);
+      const vuoto = ' '.repeat(Math.max(0, dentro - lunghezzaVisibile(tagliata)));
+      return `  ${arancione(BOX.lato)} ${tagliata}${vuoto} ${arancione(BOX.lato)}`;
+    }),
+    `  ${arancione(`${BOX.basso}${orlo}${BOX.bassoDestra}`)}`,
+  ];
+}
+
 // Tasti da colorare nella barra in fondo. Una voce e' fatta di tasti seguiti da
 // cosa fanno ("←→ ad avanti e indietro"), e le voci sono separate da due spazi o
 // piu': si colora la testa di ogni voce e ci si ferma alla prima parola che non
@@ -594,8 +624,17 @@ export const BOX = { alto: '╭', altoDestra: '╮', basso: '╰', bassoDestra: 
 // stessa cosa si scrivono insieme con la barra (`esc/canc`, `ctrl+s/x`): vanno
 // colorati tutt'e due, o meta' della voce resterebbe a sembrare una parola
 // qualunque.
-const TASTO = String.raw`(?:(?:ctrl|shift)\+)?(?:[←→↑↓~]+|ad|ws|invio|enter|esc|canc|spazio|space|\d-\d|[a-z])`;
+const TASTO = String.raw`(?:(?:ctrl|shift)\+)?(?:[←→↑↓~]+|wasd|ad|ws|invio|enter|esc|canc|spazio|space|f\d{1,2}|\d-\d|[a-z])`;
 const RE_TASTO = new RegExp(`^${TASTO}(?:/${TASTO})?$`);
+
+// Lo stesso, senza il ramo della lettera singola. Vale dalla **seconda** parola
+// in poi: "shift+invio a capo" ha un tasto solo, e la "a" e' la preposizione di
+// quello che fa — colorata, sembrava un secondo tasto da premere. Una lettera
+// singola e' un tasto quando apre la voce ("i istruzioni", "r modo"), mai
+// quando segue un tasto gia' riconosciuto.
+const RE_TASTO_DOPO = new RegExp(
+  `^${TASTO.replace('|[a-z]', '')}(?:/${TASTO.replace('|[a-z]', '')})?$`,
+);
 
 // Colora di arancione i tasti di una barra, lasciando al primo piano le
 // spiegazioni: e' quello che si cerca con l'occhio quando si vuole solo sapere
@@ -613,7 +652,9 @@ export function coloraTasti(barra) {
       if (/^ +$/.test(voce) || voce === '') return voce;
       const parole = voce.split(' ');
       let quanti = 0;
-      while (quanti < parole.length && RE_TASTO.test(parole[quanti])) quanti += 1;
+      while (quanti < parole.length && (quanti === 0 ? RE_TASTO : RE_TASTO_DOPO).test(parole[quanti])) {
+        quanti += 1;
+      }
       if (quanti === 0) return normale(voce);
       const tasti = parole.slice(0, quanti).join(' ');
       const resto = parole.slice(quanti).join(' ');
@@ -633,18 +674,69 @@ export function primaCheEntra(varianti, spazio) {
   return scelta ?? varianti[varianti.length - 1].slice(0, Math.max(0, spazio));
 }
 
+// La legenda su piu' righe, invece che accorciata fino a perdere dei tasti.
+//
+// Le schermate fitte — la coda, le note — hanno piu' tasti di quanti ne stiano
+// su una riga di terminale, e la scala delle varianti risolveva la cosa
+// buttandone via: quelli che cadevano erano tasti che non sapevi di avere.
+// Meglio una riga in piu' in fondo allo schermo che un tasto invisibile.
+//
+// Le voci si spezzano dove sono gia' separate (due spazi o piu'), quindi un
+// tasto non si divide mai dalla sua descrizione. Si prende la variante piu'
+// ricca che entra nelle righe concesse: solo se non entra nemmeno la piu' scarna
+// si taglia, come faceva `primaCheEntra` da sola.
+// varianti: testi in ordine di preferenza, dal piu' ricco al piu' scarno
+// spazio: colonne disponibili
+// massimo: righe concesse (2 per difetto)
+// ritorna: array di righe, da una a `massimo`
+export function legendaSuRighe(varianti, spazio, massimo = 2) {
+  // Impacchetta le voci di una variante, riempiendo una riga alla volta.
+  // ritorna: array di righe, o null se non ci stanno in `massimo`
+  const impacca = (variante) => {
+    const righe = [];
+    let corrente = '';
+    // Le voci si riuniscono con lo stesso passo che avevano: allargarlo a tre
+    // spazi costerebbe una colonna per voce, ed e' proprio quello che decide se
+    // l'ultima ci sta o va a finire su una terza riga.
+    const passo = / {3,}/.test(variante) ? '   ' : '  ';
+    for (const voce of variante.split(/ {2,}/)) {
+      const unita = corrente ? `${corrente}${passo}${voce}` : voce;
+      if ([...unita].length <= spazio) {
+        corrente = unita;
+        continue;
+      }
+      if (corrente) righe.push(corrente);
+      // Una voce piu' larga dello schermo da sola: non c'e' modo di spezzarla
+      // ancora, e questa variante non va bene.
+      if ([...voce].length > spazio) return null;
+      corrente = voce;
+    }
+    if (corrente) righe.push(corrente);
+    return righe.length <= massimo ? righe : null;
+  };
+
+  for (const variante of varianti) {
+    const righe = impacca(variante);
+    if (righe) return righe;
+  }
+  return [primaCheEntra(varianti, spazio)];
+}
+
 // Chiude la pagina tenendo l'ultima riga — barra dei tasti, legenda del menu o
 // dei profili — in fondo allo schermo e non subito sotto il contenuto: il testo
 // del prompt scelto e lo storico cambiano altezza a ogni spostamento del
 // cursore, e una barra che sale e scende si legge peggio di una ferma.
 // Il contenuto si taglia prima del riempimento, o a sparire sarebbe proprio la
 // riga che dice come si esce.
+// Esportata perche' la pagina delle istruzioni (src/istruzioni.js) si chiude
+// esattamente allo stesso modo: una legenda che stesse in fondo qui e a meta'
+// schermo la' sarebbe una legenda che si cerca in due posti.
 // righe: pagina senza l'ultima riga
 // ultima: riga da tenere in fondo
 // altezza: righe del terminale
 // colonne: colonne del terminale
 // ritorna: array alto esattamente `altezza`, nessuna riga piu' larga di `colonne`
-function chiudiPagina(righe, ultima, altezza, colonne) {
+export function chiudiPagina(righe, ultima, altezza, colonne) {
   // Due righe in fondo, non una: il separatore stacca la barra dal riempimento,
   // altrimenti dopo una pagina corta sembra galleggiare in mezzo al vuoto.
   const corpo = righe.slice(0, Math.max(0, altezza - 2));
@@ -913,10 +1005,10 @@ export function schermata(
   const uscitaCorta = uscitaLunga;
   const conExtra = extra.corta
     ? [
-        pezzi(T.albero.avantiIndietro, T.albero.cambiaRamo, cosaFaInvio, extra.lunga, uscitaLunga),
-        pezzi(T.albero.avantiIndietro, T.albero.ramo, cosaFaInvio, extra.corta, uscitaCorta),
-        pezzi(T.albero.frecce, T.albero.ramo, cosaFaInvio, extra.corta, uscitaCorta),
-        pezzi(T.albero.frecce, T.albero.ramo, T.albero.invioRiparti, extra.corta, uscitaCorta),
+        pezzi(T.albero.puntoLungo, cosaFaInvio, extra.lunga, uscitaLunga),
+        pezzi(T.albero.punto, cosaFaInvio, extra.corta, uscitaCorta),
+        pezzi(T.albero.puntoCorto, cosaFaInvio, extra.corta, uscitaCorta),
+        pezzi(T.albero.puntoCorto, T.albero.invioRiparti, extra.corta, uscitaCorta),
       ]
     : [];
 
@@ -929,9 +1021,9 @@ export function schermata(
       primaCheEntra(
         [
           ...conExtra,
-          pezzi(T.albero.avantiIndietro, T.albero.cambiaRamo, cosaFaInvio, uscitaLunga),
-          pezzi(T.albero.avantiIndietroCorto, T.albero.ramo, cosaFaInvio, uscitaCorta),
-          pezzi(T.albero.frecce, T.albero.frecceCorte, T.albero.invioRiparti, uscitaCorta),
+          pezzi(T.albero.puntoLungo, cosaFaInvio, uscitaLunga),
+          pezzi(T.albero.punto, cosaFaInvio, uscitaCorta),
+          pezzi(T.albero.puntoCorto, T.albero.invioRiparti, uscitaCorta),
           T.albero.barraMinima(uscitaCorta),
         ],
         spazioColonne,

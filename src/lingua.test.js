@@ -25,6 +25,17 @@ function confronta(en, it, strada, verifica) {
     const a = en[chiave];
     const b = it[chiave];
     assert.equal(typeof a, typeof b, `tipi diversi in ${dove}`);
+    // Le pagine delle istruzioni sono prosa: quante righe servano a dire la
+    // stessa cosa dipende dalla lingua, e pretendere lo stesso numero
+    // costringerebbe a riempire di righe vuote la traduzione piu' corta. Si
+    // verifica che ci sia del testo, non che sia lungo uguale.
+    if (/^istruzioni\..+\.righe$/.test(dove)) {
+      for (const [lingua, righe] of [['inglese', a], ['italiana', b]]) {
+        assert.ok(Array.isArray(righe) && righe.length > 0, `pagina ${lingua} vuota: ${dove}`);
+        for (const riga of righe) assert.equal(typeof riga, 'string', `riga non testo in ${dove}`);
+      }
+      continue;
+    }
     if (Array.isArray(a)) {
       assert.equal(a.length, b.length, `varianti diverse in ${dove}`);
       confronta({ ...a }, { ...b }, dove, verifica);

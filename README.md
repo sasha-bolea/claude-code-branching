@@ -241,7 +241,7 @@ carries with it, back to the root.
     24-07 15:10  let's do the customer list
 
   ──────────────────────────────────────────────────────────────────────
-  ←→ ad back and forth   ↑↓ ws branch   enter restart   p queue   n notes   esc/canc exit
+  ←→↑↓ wasd pick the point   enter restart   p queue   n notes   i help   esc/canc exit
 ```
 
 The tree holds only the prompts you typed. Background-task notifications, system reminders,
@@ -263,6 +263,12 @@ down. The price is that the wheel does not scroll the tree — the arrows do.
 list back to the folders, from the restore menu back to the tree — hitting the wrong key
 should not cost you the exit. `canc` instead leaves everything and drops you straight back
 into Claude, from any depth, without climbing back through the screens one by one.
+
+**`i` opens the help for the screen you are on**: what it does, every one of its keys, and the
+things a one-line bar cannot say — why the queue removes with `ctrl+canc` and not `canc`, or
+why notes belong to the folder and not to the conversation. You read it and come back where
+you were, without losing your place. In the queue and the notes, where `i` is a letter of the
+text you are typing, the key is `f1` — which works in every screen anyway.
 
 The commands from outside (`cb tree`, `cb pick`, `cb open`) use the numbered vertical list
 instead, because `cb open <session> 3` needs a number to refer to:
@@ -293,20 +299,33 @@ the previous one produced.
 
   4 prompts waiting
 
-     1. fix the failing test  next
+  ─────────────────────────────────────────────────────────────────────────────────────
+     1. fix the failing test
+  ─────────────────────────────────────────────────────────────────────────────────────
      2. update the README  ⤼ skip
-  ▸  3. bump the version  ⏸ stop
+  ─────────────────────────────────────────────────────────────────────────────────────
+  ╭───────────────────────────────────────────────────────────────────────────────────╮
+  │  3. ‖ stop bump the version█                                                      │
+  ╰───────────────────────────────────────────────────────────────────────────────────╯
+  ─────────────────────────────────────────────────────────────────────────────────────
      4. make the commit
-
-  > typing the fifth one█
+  ─────────────────────────────────────────────────────────────────────────────────────
+    queue a prompt
 
   ─────────────────────────────────────────────────────────────────────────────────────
-  enter queue  ↑↓ pick  ctrl+↑↓ move  ctrl+s/x stop,skip  ctrl+canc remove  esc  canc
+  enter queue  ←→ in the text  ↑↓ pick and edit  ctrl+↑↓ move  ctrl+canc remove  esc  canc
 ```
 
-Enter queues what you typed and leaves the field ready for the next one. `↑` `↓` pick a row,
-`ctrl+↑` `ctrl+↓` move it up and down the list, and `ctrl+canc` removes it — backspace stays
-for fixing what you are typing. Esc goes back to the tree, right where you left it.
+Enter queues what you typed and leaves the field ready for the next one. `↑` `↓` pick a prompt
+in the queue: **the box moves onto it and you edit it right there**, like a note — queueing it
+is not the last chance to fix it, and emptying it removes it. `←` `→` move the cursor inside the
+text, `shift+enter` starts a new line, `ctrl+↑` `ctrl+↓` move the prompt up and down,
+`ctrl+canc` removes it — backspace stays for fixing a letter. The spot to queue a new one is
+always at the bottom, and that is where the screen opens. Esc goes back to the tree, right where
+you left it.
+
+The prompt that will go out first is **orange**: with a stop or a skip in the way it is not
+necessarily the first in the list, and a colour is seen without being read.
 
 Two switches decide what actually goes out, and they are different on purpose:
 

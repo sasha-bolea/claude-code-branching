@@ -37,6 +37,8 @@ Sasha, singolo sviluppatore.
 | `src/profili.js` | Insiemi di variabili d'ambiente con un nome: rilancia Claude altrove senza uscire dalla conversazione |
 | `src/coda.js` | La coda dei prompt: si scrivono mentre Claude lavora, ne parte uno per turno |
 | `src/note.js` | Le note della cartella di lavoro: le stesse in ogni sessione aperta lì dentro |
+| `src/campo.js` | Il cursore dentro un campo di testo: inserire, cancellare, muoversi, la finestra visibile |
+| `src/istruzioni.js` | La pagina di istruzioni di ogni schermata (`i`, `f1`), e la sua sovrapposizione |
 | `src/pulizia.js` | I tre accumuli che non scadono: `cb prune` a mano, e la pulizia automatica |
 | `src/configura.js` | Schermata del primo avvio: lingua, cartella di lavoro, scorciatoia |
 | `src/prove.js` | Esecutore delle prove: un processo per file, lingua fissata a `it` |
@@ -497,6 +499,45 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   stessa ragione di `apriCartelle` — i moduli ESM sono in sola lettura, e senza quel metodo le
   prove non potrebbero verificare *cosa arriva al pty* senza aprire una schermata che si prende lo
   stdin.
+- **Le schermate del wrapper stanno sul buffer alternativo** (`apriSchermo`/`chiudiSchermo`), come
+  già facevano i selettori. Scrivendo sul buffer normale la rotella scorreva lo **storico del
+  terminale** e sopra la pagina di cb ricompariva la chat di Claude, come se fossero due pezzi
+  della stessa. `apriSchermo` si riafferma a ogni schermata invece di fidarsi del flag: i selettori
+  aprono e chiudono il buffer per conto loro, e al ritorno da uno di quelli si è già fuori.
+  `lampeggia` esce prima di scrivere, o il messaggio d'errore sparirebbe con la pagina.
+- **Il testo incollato non si legge come stringa.** Col bracketed paste acceso (lo accende Claude)
+  il blocco arriva fra `ESC[200~` e `ESC[201~`, e **dentro** ci sono eventi di tastiera
+  win32-input-mode, non caratteri: gli a capo sono `ESC[13;…_`, con tanto di rilascio. Il contenuto
+  va **ri-tokenizzato** (`testoDelBlocco`) tenendo solo ciò che è testo. Gli a capo si normalizzano
+  in un punto solo (`aCapoNormali`): un `\r` che arriva a schermo riporta il cursore a inizio riga
+  e il disegno si riscrive sopra se stesso. Dove i marcatori non arrivano vale l'euristica
+  dichiarata di `sembraIncollato` — in **una lettura sola**, due caratteri e un a capo sono un
+  incolla, perché nessuno digita così in un tick.
+- **Un incolla resta nel campo in cui stai scrivendo**, tutto: spezzarlo fra titolo e corpo (o
+  accodarne uno per riga) vuol dire dividere un testo in punti che l'utente non ha scelto.
+- **Il cursore dentro un campo è uno solo** (`src/campo.js`), condiviso da coda e note: due copie
+  divergerebbero al primo ritocco. Conta i **caratteri** e non i byte, o un'emoji lo farebbe cadere
+  in mezzo a sé stessa. Il glifo si **infila** nel testo e non copre il carattere sotto — e va
+  infilato **prima** di mandare a capo, come segnaposto non colorato: le sequenze ANSI contano
+  come caratteri e il capo cadrebbe nel posto sbagliato.
+- **Ogni schermata ha una pagina di istruzioni** (`i`; `f1` dove si scrive testo, che lì la `i` è
+  una lettera). Nel wrapper è una schermata che si prende lo stdin; nei selettori è una
+  **sovrapposizione** (`sovrapposizioneIstruzioni`) che lascia lo stdin al ciclo che c'è già —
+  senza, aprire una schermata dentro l'altra vorrebbe dire staccare e riattaccare l'ascoltatore.
+- **La legenda si spezza su due righe invece di perdere tasti** (`legendaSuRighe`). Nella scala
+  delle varianti si perdono **voci intere**, mai le parole che le spiegano: una barra di soli nomi
+  di tasto si legge come una formula. La legenda si compone **prima** del calcolo della finestra
+  dell'elenco: occupa righe che l'elenco non ha, e contarne sempre una farebbe scivolare il
+  riquadro sotto il bordo proprio sugli schermi stretti.
+- **Una lettera singola è un tasto solo se apre la voce** della legenda (`coloraTasti`): dopo un
+  tasto già riconosciuto è una parola — la «a» di «a capo» veniva colorata come se si premesse.
+- **Coda e note sono la stessa schermata**: stessa impaginazione, e il riquadro è una funzione sola
+  (`riquadro` in `vista.js`). Il riquadro sta sulla voce scelta e la voce si **modifica** lì
+  dentro; l'ultima posizione è quella nuova, dove si apre la schermata. La bozza della voce nuova
+  **non** si salva muovendo il cursore: nelle note salvarla è giusto, nella coda vorrebbe dire
+  vedere partire da sola una richiesta scritta a metà.
+- **Niente emoji nei marchi e nei glifi** (`‖` e non `⏸`): un terminale che li rende a doppia
+  larghezza sfasa la riga di una colonna, come per i glifi dell'albero.
 - Le prove stanno in `src/transcript.test.js`, `src/tasti.test.js`, `src/titolo.test.js`,
   `src/vista.test.js`, `src/wrapper.test.js`, `src/overlay.test.js`, `src/cartelle.test.js`,
   `src/conversazioni.test.js` e `src/pulizia.test.js`, con `assert`. Quelle che toccano

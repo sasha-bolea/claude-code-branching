@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { azioniNavigazione, azioniTesto, FINESTRA_SCORCIATOIA } from './tasti.js';
+import { sovrapposizioneIstruzioni } from './istruzioni.js';
 import { coloraTasti } from './vista.js';
 import { arancione, arancioneForte, grigio, normale, rosso } from './stile.js';
 import { radicePredefinita } from './cartelle.js';
@@ -131,6 +132,11 @@ export function applicaTesto(stato, azione) {
   switch (azione.tipo) {
     case 'carattere':
       stato.modifica += azione.valore;
+      break;
+    // Un percorso incollato: gli a capo se ne vanno, invece di valere come
+    // invio. Copiando un percorso dal gestore file ne viene dietro spesso uno.
+    case 'incolla':
+      stato.modifica += azione.valore.replace(/\n/g, '').trim();
       break;
     case 'cancella':
       stato.modifica = stato.modifica.slice(0, -1);
@@ -252,10 +258,14 @@ export function disegnaImpostazioni(stato, altezza = 30, larghezza = 100) {
 // ritorna: Promise<{ lingua, radice, scorciatoia }> — sempre un valore, mai null
 export function configura({ ingresso = process.stdin, uscita = process.stdout } = {}) {
   const stato = statoIniziale();
+  const istruzioni = sovrapposizioneIstruzioni(T.istruzioni.configura);
 
   return new Promise((risolvi) => {
+    const dimensioni = () => ({ colonne: uscita.columns || 100, altezza: uscita.rows || 30 });
     const ridisegna = () => {
-      const righe = disegnaImpostazioni(stato, uscita.rows || 30, uscita.columns || 100);
+      const righe = istruzioni.aperta
+        ? istruzioni.disegna(dimensioni())
+        : disegnaImpostazioni(stato, uscita.rows || 30, uscita.columns || 100);
       uscita.write(`\x1b[H\x1b[2J${righe.join('\r\n')}`);
     };
 
@@ -280,12 +290,26 @@ export function configura({ ingresso = process.stdin, uscita = process.stdout } 
     // Va deciso a ogni lettura, non una volta sola: si entra e si esce dal campo
     // senza che il ciclo cambi.
     const suDati = (dati) => {
+      // Con le istruzioni aperte i tasti sono loro. Si decodifica come sotto,
+      // perche' anche qui dipende da dove eravamo: nel campo del percorso F1 e'
+      // l'unico tasto che le apre, fuori vale anche "i".
+      if (istruzioni.aperta) {
+        const azioni = stato.modifica !== null ? azioniTesto(dati) : azioniNavigazione(dati);
+        if (azioni.length === 0) return;
+        istruzioni.tasti(azioni, dimensioni());
+        return ridisegna();
+      }
+
       if (stato.modifica !== null) {
         const azioni = azioniTesto(dati);
         // Niente da fare, niente da ridisegnare: vedi cartelle.js — un ctrl
         // premuto da solo cancellava la selezione che si stava per copiare.
         if (azioni.length === 0) return;
         for (const azione of azioni) {
+          if (azione.tipo === 'istruzioni') {
+            istruzioni.apri();
+            return ridisegna();
+          }
           applicaTesto(stato, azione);
           // Chiuso il campo, il resto della lettura non e' piu' testo: il tasto
           // Invio arriva come `\r\n` su molti terminali, cioe' due azioni, e la
@@ -298,6 +322,10 @@ export function configura({ ingresso = process.stdin, uscita = process.stdout } 
       const azioni = azioniNavigazione(dati);
       if (azioni.length === 0) return; // vedi sopra: niente azioni, niente ridisegno
       for (const azione of azioni) {
+        if (azione === 'istruzioni') {
+          istruzioni.apri();
+          return ridisegna();
+        }
         const { esito } = applicaAzione(stato, azione);
         if (esito === 'fatto') return chiudi();
         // Invio sulla cartella apre il campo: da qui in poi i tasti sono testo,

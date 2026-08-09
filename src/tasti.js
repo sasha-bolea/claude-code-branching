@@ -122,6 +122,62 @@ const F_DA_CSI = {
   20: 9, 21: 10, 23: 11, 24: 12,
 };
 
+// Testo incollato (bracketed paste): il terminale lo avvolge fra ESC[200~ e
+// ESC[201~ quando il modo `?2004h` e' acceso — e dentro cb lo e', perche' lo
+// accende Claude.
+//
+// Va riconosciuto per due ragioni opposte, ed e' la stessa sequenza a risolverle
+// tutt'e due. Senza riconoscerlo il blocco comincia con ESC e finisce fra i byte
+// non riconosciuti, che le schermate scartano come sequenza di controllo: si
+// incollava e non compariva niente. E dove invece i marcatori non arrivano — un
+// terminale che il modo non ce l'ha acceso — i byte passano uno per uno, e gli a
+// capo del testo incollato diventano invii: un prompt incollato si spezzava in
+// tanti prompt quante erano le righe.
+//
+// Il terminatore puo' mancare: un incolla lungo arriva spezzato in piu' letture
+// di stdin. In quel caso si prende tutto quello che c'e', e la coda del testo
+// arrivera' come caratteri normali — meglio un incolla che finisce digitato che
+// un incolla che sparisce.
+// Gli a capo di un testo incollato in una forma sola. I terminali mandano \r,
+// \n o \r\n a seconda di dove il testo e' stato copiato, e un \r che sopravvive
+// fino allo schermo riporta il cursore a inizio riga: il disegno si scrive sopra
+// se stesso. Vale per tutt'e due le strade — coi marcatori e senza.
+const aCapoNormali = (testo) => testo.replace(/\r\n?/g, '\n');
+
+// Il testo vero dentro un blocco incollato.
+//
+// Non basta leggere i byte come stringa: con win32-input-mode acceso — e dentro
+// cb lo e' sempre, lo accende Claude — il terminale codifica **anche il
+// contenuto dell'incolla** come eventi di tastiera, uno per carattere. Gli a
+// capo del testo che incolli arrivano quindi come `ESC[13;28;13;1;0;1_`, e
+// copiati alla lettera finivano nella nota come una fila di numeri (visto
+// davvero: «…righe restano fuori. ESC[13;28;13;1;0;1_ ESC[13;28;13;0;0;1_…»).
+//
+// Si ri-tokenizza il contenuto e si tiene solo quello che e' testo: i caratteri
+// dei tasti premuti, l'invio come a capo, e i byte che nessuno ha riconosciuto.
+// Le sequenze di controllo che restano non sono testo e si buttano.
+// bytes: contenuto fra i due marcatori
+// ritorna: il testo da consegnare alla schermata
+function testoDelBlocco(bytes) {
+  let testo = '';
+  for (const voce of tokenizza(bytes)) {
+    if (voce.tasto) {
+      if (voce.tasto.rilascio) continue; // il rilascio non e' un carattere
+      if (voce.tasto.vk === VK_INVIO) testo += '\n';
+      else if (voce.tasto.grezzo) testo += voce.tasto.grezzo;
+      continue;
+    }
+    if (voce.bytes[0] === 0x1b) continue; // una sequenza di controllo non e' testo
+    testo += Buffer.from(voce.bytes).toString('utf8');
+  }
+  return testo;
+}
+
+const RE_INCOLLA = /^\x1b\[200~([\s\S]*?)(?:\x1b\[201~|$)/;
+// Fine incolla arrivata da sola, dopo un blocco spezzato: si consuma e basta, o
+// finirebbe fra i byte non riconosciuti.
+const RE_FINE_INCOLLA = /^\x1b\[201~/;
+
 // Descrive un tasto in modo indipendente dalla codifica del terminale.
 // vk: codice virtuale (VK_ESCAPE, 71 per G, …)
 // carattere: carattere prodotto, minuscolo, se applicabile
@@ -173,8 +229,45 @@ export function tokenizza(dati) {
     posizione += lunghezza;
   };
 
+  // Registra un blocco di testo incollato. Non e' un tasto — non ha un codice
+  // ne' modificatori — quindi viaggia in un campo suo, che chi non lo gestisce
+  // ignora come ogni altro token che non gli riguarda.
+  const aggiungiIncolla = (testo, lunghezza) => {
+    chiudiAltro(posizione);
+    token.push({
+      tasto: null,
+      // Gli a capo si normalizzano **qui**, non a valle: un \r che arriva fino
+      // allo schermo riporta il cursore a inizio riga, e il testo ricomincia a
+      // scriversi sopra quello che c'era. E' cosi' che un titolo incollato
+      // usciva dal riquadro delle note — non era troppo lungo, erano i suoi \r a
+      // rimandarlo a capo da soli, sotto al riquadro.
+      incolla: aCapoNormali(testo),
+      bytes: dati.subarray(posizione, posizione + lunghezza),
+    });
+    posizione += lunghezza;
+  };
+
   while (posizione < dati.length) {
     const resto = dati.subarray(posizione).toString('latin1');
+
+    // Prima di tutto il resto: dentro un incolla non si cercano tasti, o un
+    // testo che contenga "ESC[" verrebbe letto come una sequenza di controllo.
+    const incollato = RE_INCOLLA.exec(resto);
+    if (incollato) {
+      // Il contenuto si rilegge dai byte: `resto` e' latin1 — la codifica giusta
+      // per riconoscere le sequenze di controllo, sbagliata per un testo che
+      // puo' contenere accenti.
+      const inizio = posizione + '\x1b[200~'.length;
+      const dentro = dati.subarray(inizio, inizio + Buffer.byteLength(incollato[1], 'latin1'));
+      aggiungiIncolla(testoDelBlocco(dentro), incollato[0].length);
+      continue;
+    }
+    const fine = RE_FINE_INCOLLA.exec(resto);
+    if (fine) {
+      chiudiAltro(posizione);
+      posizione += fine[0].length;
+      continue;
+    }
 
     const win32 = RE_WIN32.exec(resto);
     if (win32) {
@@ -347,6 +440,35 @@ const DIREZIONE = {
 // non contano: sono scorciatoie, non movimenti.
 const DIREZIONE_WASD = { w: 'su', s: 'giu', a: 'sinistra', d: 'destra' };
 
+// Un blocco di byte che ha tutta l'aria di essere testo incollato.
+//
+// Serve dove i marcatori del bracketed paste non arrivano: li' l'unico indizio
+// e' che in **una sola lettura** di stdin siano arrivati piu' caratteri e almeno
+// un a capo. Nessuno digita due parole e un invio dentro lo stesso tick: quando
+// succede, e' roba che il terminale ha versato tutta insieme.
+//
+// Il prezzo, dichiarato: battendo l'ultima lettera e l'invio nello stesso
+// istante, quel testo finisce nel campo senza essere inviato. Si preme invio e
+// parte — mentre l'errore opposto, un prompt spezzato in dieci, non si rimedia.
+// bytes: blocco non riconosciuto da tokenizza
+// ritorna: true se va trattato come un incolla
+function sembraIncollato(bytes) {
+  let stampabili = 0;
+  let aCapo = false;
+  for (const byte of bytes) {
+    if (byte === 0x0d || byte === 0x0a) aCapo = true;
+    else if (byte >= 0x20) stampabili += 1;
+    else return false; // altri caratteri di controllo: non e' un testo incollato
+  }
+  return aCapo && stampabili >= 2;
+}
+
+// Il testo di un blocco incollato, con gli a capo in una forma sola (vedi
+// `aCapoNormali`).
+// bytes: blocco di byte
+// ritorna: stringa
+const testoIncollato = (bytes) => aCapoNormali(Buffer.from(bytes).toString('utf8'));
+
 // Traduce i byte ricevuti in azioni per un campo dove si scrive testo libero.
 //
 // Separata da azioniTastiera perche' quella mappa w/a/s/d sulle direzioni: in un
@@ -354,16 +476,23 @@ const DIREZIONE_WASD = { w: 'su', s: 'giu', a: 'sinistra', d: 'destra' };
 // carattere stampabile, e si usa `grezzo` invece di `carattere` perche' le
 // maiuscole contano — in un percorso "C:" non e' "c:".
 // dati: Buffer letto da stdin
-// ritorna: array di { tipo: 'carattere'|'invio'|'cancella'|'annulla', valore? }
+// ritorna: array di { tipo: 'carattere'|'invio'|'cancella'|'annulla'|'istruzioni', valore? }
 export function azioniTesto(dati) {
   const azioni = [];
 
   for (const voce of tokenizza(dati)) {
+    if (voce.incolla !== undefined) {
+      azioni.push({ tipo: 'incolla', valore: voce.incolla });
+      continue;
+    }
     if (voce.tasto) {
       if (voce.tasto.rilascio) continue;
       if (voce.tasto.vk === VK_INVIO) azioni.push({ tipo: 'invio' });
       else if (voce.tasto.vk === VK_BACKSPACE) azioni.push({ tipo: 'cancella' });
       else if (voce.tasto.vk === VK_ESCAPE) azioni.push({ tipo: 'annulla' });
+      // Anche in un campo di testo le istruzioni restano raggiungibili: F1 non
+      // e' un carattere, quindi non c'e' niente da contendere.
+      else if (voce.tasto.vk === VK_F1) azioni.push({ tipo: 'istruzioni' });
       else if (voce.tasto.grezzo && !voce.tasto.ctrl && !voce.tasto.alt) {
         azioni.push({ tipo: 'carattere', valore: voce.tasto.grezzo });
       }
@@ -373,6 +502,11 @@ export function azioniTesto(dati) {
     // Blocco non riconosciuto: se comincia con ESC e' una sequenza di controllo
     // (frecce, mouse) e non e' testo.
     if (voce.bytes[0] === 0x1b) continue;
+    // Testo versato tutto insieme dal terminale, senza i marcatori dell'incolla.
+    if (sembraIncollato(voce.bytes)) {
+      azioni.push({ tipo: 'incolla', valore: testoIncollato(voce.bytes) });
+      continue;
+    }
     for (const byte of voce.bytes) {
       if (byte === 0x0d || byte === 0x0a) azioni.push({ tipo: 'invio' });
       else if (byte === 0x7f || byte === 0x08) azioni.push({ tipo: 'cancella' });
@@ -439,17 +573,23 @@ export function azioniRotella(bytes) {
 // che si accendono con un tasto loro (la scelta ricordata, nel menu del
 // ripristino). Chi non le usa le ignora, come ogni altro tipo che non gli
 // riguarda.
-// ritorna: array di { tipo: 'cifra'|'invio'|'cancella'|'annulla'|'freccia'|'lettera', valore? }
+// ritorna: array di { tipo: 'cifra'|'invio'|'cancella'|'annulla'|'freccia'|'lettera'|
+//          'istruzioni', valore? }
 export function azioniTastiera(dati) {
   const azioni = [];
 
   for (const voce of tokenizza(dati)) {
+    // Qui non si scrive testo: un incolla capitato per sbaglio si butta invece
+    // di leggerlo lettera per lettera, o le sue lettere diventerebbero una
+    // raffica di comandi — nel menu del ripristino, una scelta a caso.
+    if (voce.incolla !== undefined) continue;
     if (voce.tasto) {
       if (voce.tasto.rilascio) continue; // il rilascio non e' un input
       if (voce.tasto.vk === VK_INVIO) azioni.push({ tipo: 'invio' });
       else if (voce.tasto.vk === VK_BACKSPACE) azioni.push({ tipo: 'cancella' });
       else if (voce.tasto.vk === VK_CANC) azioni.push({ tipo: 'esci' });
       else if (voce.tasto.vk === VK_ESCAPE) azioni.push({ tipo: 'annulla' });
+      else if (voce.tasto.vk === VK_F1) azioni.push({ tipo: 'istruzioni' });
       else if (DIREZIONE[voce.tasto.vk]) {
         azioni.push({ tipo: 'freccia', valore: DIREZIONE[voce.tasto.vk] });
       } else if (
@@ -468,7 +608,11 @@ export function azioniTastiera(dati) {
         voce.tasto.carattere &&
         /^[a-z]$/.test(voce.tasto.carattere)
       ) {
-        azioni.push({ tipo: 'lettera', valore: voce.tasto.carattere });
+        // "i" apre le istruzioni in ogni schermata che non raccoglie testo: esce
+        // gia' come azione sua, invece che come lettera qualsiasi, perche' la
+        // schermata che la gestisse come lettera dovrebbe conoscerne il nome.
+        if (voce.tasto.carattere === 'i') azioni.push({ tipo: 'istruzioni' });
+        else azioni.push({ tipo: 'lettera', valore: voce.tasto.carattere });
       }
       continue;
     }
@@ -482,6 +626,7 @@ export function azioniTastiera(dati) {
       azioni.push(...azioniRotella(voce.bytes));
       continue;
     }
+    if (sembraIncollato(voce.bytes)) continue; // vedi sopra: qui non si scrive
     for (const byte of voce.bytes) {
       if (byte === 0x0d || byte === 0x0a) azioni.push({ tipo: 'invio' });
       else if (byte === 0x7f || byte === 0x08) azioni.push({ tipo: 'cancella' });
@@ -495,6 +640,7 @@ export function azioniTastiera(dati) {
         const lettera = String.fromCharCode(byte).toLowerCase();
         const direzione = DIREZIONE_WASD[lettera];
         if (direzione) azioni.push({ tipo: 'freccia', valore: direzione });
+        else if (lettera === 'i') azioni.push({ tipo: 'istruzioni' });
         else if (/^[a-z]$/.test(lettera)) azioni.push({ tipo: 'lettera', valore: lettera });
       }
     }
@@ -513,6 +659,7 @@ const COMANDI_LETTERA = {
   m: 'profilo', // rilancia la stessa conversazione con altre variabili d'ambiente
   p: 'coda', // la coda dei prompt che partono da soli a fine turno
   n: 'note', // le note della cartella di lavoro, non della singola conversazione
+  i: 'istruzioni', // la pagina che spiega la schermata da cui la si apre
 };
 
 const VK_CANC = 46;
@@ -566,16 +713,30 @@ const CTRL_SPAZIO_BYTE = 0x00;
 // puo' fare due cose a seconda di quanto hai scritto.
 // Ctrl e' quello che distingue le azioni sull'elenco da quelle sul testo:
 // ctrl+↑↓ sposta il prompt scelto, ctrl+s e ctrl+x accendono stop e salta.
+// Shift+invio va a capo dentro al prompt, come nelle note: nei byte grezzi i due
+// invii non si distinguono (sono lo stesso \r), e li' resta un invio semplice.
 // dati: Buffer letto da stdin
-// ritorna: array di { tipo: 'carattere'|'invio'|'cancella'|'togli'|'freccia'|'sposta'|'commuta'|'annulla'|'esci', valore? }
+// ritorna: array di { tipo: 'carattere'|'invio'|'acapo'|'cancella'|'togli'|'freccia'|'sposta'|
+//          'commuta'|'istruzioni'|'annulla'|'esci', valore? }
 export function azioniCoda(dati) {
   const azioni = [];
 
   for (const voce of tokenizza(dati)) {
+    // Un testo incollato e' un prompt solo, anche quando ha degli a capo dentro:
+    // e' l'unica differenza fra incollare e digitare, e senza di essa un prompt
+    // di dieci righe si accodava come dieci prompt.
+    if (voce.incolla !== undefined) {
+      azioni.push({ tipo: 'incolla', valore: voce.incolla });
+      continue;
+    }
     if (voce.tasto) {
       if (voce.tasto.rilascio) continue;
-      if (voce.tasto.vk === VK_INVIO) azioni.push({ tipo: 'invio' });
-      else if (voce.tasto.vk === VK_BACKSPACE) azioni.push({ tipo: 'cancella' });
+      // Shift+invio va a capo dentro al prompt, come nelle note: un prompt lungo
+      // ha le sue righe, e senza questo l'unico modo di averle era incollarlo da
+      // fuori. Invio semplice accoda, che e' l'azione frequente.
+      if (voce.tasto.vk === VK_INVIO) {
+        azioni.push({ tipo: voce.tasto.shift ? 'acapo' : 'invio' });
+      } else if (voce.tasto.vk === VK_BACKSPACE) azioni.push({ tipo: 'cancella' });
       else if (voce.tasto.vk === VK_CANC) {
         azioni.push({ tipo: voce.tasto.ctrl ? 'togli' : 'esci' });
       } else if (voce.tasto.vk === VK_ESCAPE) azioni.push({ tipo: 'annulla' });
@@ -590,6 +751,10 @@ export function azioniCoda(dati) {
         } else azioni.push({ tipo: 'freccia', valore: direzione });
       } else if (voce.tasto.ctrl && COMMUTA_VK[voce.tasto.vk]) {
         azioni.push({ tipo: 'commuta', valore: COMMUTA_VK[voce.tasto.vk] });
+      } else if (voce.tasto.vk === VK_F1) {
+        // Le istruzioni qui stanno su F1 e non su "i": accanto a un campo di
+        // testo la i e' una lettera del prompt che stai scrivendo.
+        azioni.push({ tipo: 'istruzioni' });
       } else if (voce.tasto.grezzo && !voce.tasto.ctrl && !voce.tasto.alt) {
         azioni.push({ tipo: 'carattere', valore: voce.tasto.grezzo });
       }
@@ -605,6 +770,11 @@ export function azioniCoda(dati) {
         // La rotella dell'albero scorre in orizzontale, qui l'elenco e' verticale.
         azioni.push({ tipo: 'freccia', valore: azione.valore === 'sinistra' ? 'su' : 'giu' });
       }
+      continue;
+    }
+
+    if (sembraIncollato(voce.bytes)) {
+      azioni.push({ tipo: 'incolla', valore: testoIncollato(voce.bytes) });
       continue;
     }
 
@@ -646,11 +816,16 @@ function invioDelleNote({ ctrl, shift }) {
 // altrove restano un invio semplice.
 // dati: Buffer letto da stdin
 // ritorna: array di { tipo: 'carattere'|'invio'|'acapo'|'manda'|'cancella'|'freccia'|
-//          'cerca'|'segna'|'togli'|'annulla'|'esci', valore? }
+//          'cerca'|'segna'|'togli'|'istruzioni'|'annulla'|'esci', valore? }
 export function azioniNote(dati) {
   const azioni = [];
 
   for (const voce of tokenizza(dati)) {
+    // Come nella coda: quello che incolli e' una nota sola, a capo compresi.
+    if (voce.incolla !== undefined) {
+      azioni.push({ tipo: 'incolla', valore: voce.incolla });
+      continue;
+    }
     if (voce.tasto) {
       if (voce.tasto.rilascio) continue;
       if (voce.tasto.vk === VK_INVIO) azioni.push({ tipo: invioDelleNote(voce.tasto) });
@@ -664,6 +839,8 @@ export function azioniNote(dati) {
         azioni.push({ tipo: 'freccia', valore: DIREZIONE[voce.tasto.vk] });
       } else if (voce.tasto.ctrl && voce.tasto.vk === VK_F) azioni.push({ tipo: 'cerca' });
       else if (voce.tasto.ctrl && voce.tasto.vk === VK_SPAZIO) azioni.push({ tipo: 'segna' });
+      // Come nella coda: qui la i e' una lettera, quindi le istruzioni sono su F1.
+      else if (voce.tasto.vk === VK_F1) azioni.push({ tipo: 'istruzioni' });
       else if (voce.tasto.grezzo && !voce.tasto.ctrl && !voce.tasto.alt) {
         azioni.push({ tipo: 'carattere', valore: voce.tasto.grezzo });
       }
@@ -677,6 +854,11 @@ export function azioniNote(dati) {
         // L'elenco delle note e' verticale, come quello della coda.
         azioni.push({ tipo: 'freccia', valore: azione.valore === 'sinistra' ? 'su' : 'giu' });
       }
+      continue;
+    }
+
+    if (sembraIncollato(voce.bytes)) {
+      azioni.push({ tipo: 'incolla', valore: testoIncollato(voce.bytes) });
       continue;
     }
 
@@ -700,15 +882,20 @@ export function azioniNote(dati) {
 // Rispetto ad azioniTastiera non ci sono cifre da digitare, e in piu' ci sono
 // spazio (apre e chiude) e "r" (cambia modo).
 // dati: Buffer letto da stdin
-// ritorna: array di stringhe: 'su'|'giu'|'sinistra'|'destra'|'apri'|'conferma'|'modo'|'annulla'
+// ritorna: array di stringhe: 'su'|'giu'|'sinistra'|'destra'|'apri'|'conferma'|'modo'|
+//          'istruzioni'|'annulla'|'esci'
 export function azioniNavigazione(dati) {
   const azioni = [];
 
   for (const voce of tokenizza(dati)) {
+    // Come in azioniTastiera: qui non si scrive, e un incolla letto lettera per
+    // lettera aprirebbe schermate a caso — "c" e "p" sono comandi.
+    if (voce.incolla !== undefined) continue;
     if (voce.tasto) {
       if (voce.tasto.rilascio) continue; // il rilascio non e' un comando
       const direzione = DIREZIONE[voce.tasto.vk];
       if (direzione) azioni.push(direzione);
+      else if (voce.tasto.vk === VK_F1) azioni.push('istruzioni');
       else if (voce.tasto.vk === VK_INVIO) azioni.push('conferma');
       else if (voce.tasto.vk === VK_CANC) azioni.push('esci');
       else if (voce.tasto.vk === VK_ESCAPE) azioni.push('annulla');
@@ -728,6 +915,7 @@ export function azioniNavigazione(dati) {
       for (const azione of azioniRotella(voce.bytes)) azioni.push(azione.valore);
       continue;
     }
+    if (sembraIncollato(voce.bytes)) continue; // vedi sopra: qui non si scrive
     for (const byte of voce.bytes) {
       if (byte === 0x0d || byte === 0x0a) azioni.push('conferma');
       else if (byte === 0x03) azioni.push('annulla');

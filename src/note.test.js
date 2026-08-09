@@ -176,6 +176,146 @@ function testIlGiroDeiTreInvii() {
   assert.equal(stato.bozza.titolo, 'sbagliato');
 }
 
+// Un testo incollato e' una nota sola, a capo compresi: prima ogni a capo
+// arrivava come invio, e incollare tre righe faceva tre note (quando il blocco
+// non veniva scartato in blocco dai marcatori del bracketed paste).
+//
+// Incollando sul titolo — dove il cursore parte sempre — la prima riga fa da
+// titolo e il resto scende nel corpo: l'alternativa e' un titolo di dieci righe
+// schiacciate su una.
+function testIncollareFaUnaNotaSola() {
+  scriviNote(CARTELLA, []);
+  const stato = statoIniziale(CARTELLA);
+  const batti = (tipo, valore) => applicaAzione(stato, { tipo, valore });
+
+  // Quello che incolli resta nel campo in cui stai scrivendo, tutto: spezzarlo
+  // fra titolo e corpo vorrebbe dire dividere un testo in due punti che non hai
+  // scelto tu. Nel titolo, che e' una riga sola, gli a capo diventano spazi.
+  batti('incolla', 'Porte del progetto\nla 4310 e la 4311\nla 4312 e libera');
+  assert.equal(
+    stato.bozza.titolo,
+    'Porte del progetto la 4310 e la 4311 la 4312 e libera',
+    'tutto nel titolo, con gli a capo come spazi',
+  );
+  assert.equal(stato.bozza.corpo, '', 'niente e finito nel corpo');
+  assert.equal(stato.campo, 'titolo', 'e il cursore resta dove stavi scrivendo');
+  assert.deepEqual(leggiNote(CARTELLA), [], 'niente e stato salvato per conto suo');
+
+  // Nel corpo invece gli a capo restano quelli che sono.
+  batti('invio');
+  batti('incolla', 'la 4310 e la 4311\nla 4312 e libera');
+  assert.equal(stato.bozza.corpo, 'la 4310 e la 4311\nla 4312 e libera', 'nel corpo restano');
+
+  batti('invio');
+  assert.deepEqual(
+    righe(CARTELLA),
+    ['Porte del progetto la 4310 e la 4311 la 4312 e libera|la 4310 e la 4311\nla 4312 e libera'],
+    'una nota sola',
+  );
+}
+
+// Le frecce ← → muovono il cursore dentro al campo, e da li' si scrive e si
+// cancella: prima il testo si poteva solo allungare in fondo, e una parola
+// sbagliata a meta' di una nota lunga costringeva a cancellare tutto il resto.
+// Su e giu' restano il passaggio da una nota all'altra.
+function testIlCursoreSiMuoveNelTesto() {
+  scriviNote(CARTELLA, []);
+  const stato = statoIniziale(CARTELLA);
+  const batti = (tipo, valore) => applicaAzione(stato, { tipo, valore });
+  const scrivi = (testo) => [...testo].forEach((c) => batti('carattere', c));
+
+  scrivi('Prte');
+  assert.equal(stato.cursore, 4, 'scrivendo, il cursore sta in coda');
+
+  // Tre frecce a sinistra e la lettera che mancava, subito dopo la P.
+  batti('freccia', 'sinistra');
+  batti('freccia', 'sinistra');
+  batti('freccia', 'sinistra');
+  assert.equal(stato.cursore, 1);
+  scrivi('o');
+  assert.equal(stato.bozza.titolo, 'Porte', 'la lettera entra dove sta il cursore');
+  assert.equal(stato.cursore, 2, 'che si sposta di uno');
+
+  // In testa la freccia si ferma, e il backspace non ha niente da togliere.
+  batti('freccia', 'sinistra');
+  batti('freccia', 'sinistra');
+  batti('freccia', 'sinistra');
+  batti('freccia', 'sinistra');
+  assert.equal(stato.cursore, 0, 'il cursore si ferma in testa');
+  batti('cancella');
+  assert.equal(stato.bozza.titolo, 'Porte', 'e li backspace non mangia niente');
+
+  // Scendendo al corpo il cursore ci arriva in fondo a quello che c'e' gia'.
+  batti('freccia', 'destra');
+  batti('invio');
+  assert.equal(stato.campo, 'corpo');
+  assert.equal(stato.cursore, 0, 'corpo vuoto: il cursore e in testa');
+  scrivi('la 4310');
+  batti('freccia', 'sinistra');
+  batti('freccia', 'sinistra');
+  scrivi('0');
+  assert.equal(stato.bozza.corpo, 'la 43010', 'anche nel corpo si scrive dove sta il cursore');
+
+  // Salvata e riaperta, il cursore torna in fondo al titolo: la si riapre per
+  // continuarla, non per riscriverla da capo.
+  batti('invio');
+  batti('freccia', 'su');
+  assert.equal(stato.campo, 'titolo');
+  assert.equal(stato.cursore, [...stato.bozza.titolo].length, 'in fondo al titolo');
+}
+
+// Un titolo piu' largo del riquadro scorre invece di uscirne.
+//
+// Uscendo veniva mandato a capo dal terminale, e quel capo sfasava tutto il
+// disegno sotto: il riquadro si apriva e non si chiudeva piu' (visto su una
+// nota vera, con un titolo incollato lungo due righe).
+function testUnTitoloLungoRestaDentroAlRiquadro() {
+  scriviNote(CARTELLA, []);
+  const lungo = 'si deve poter incollare un testo lungo nel titolo, molto piu largo del riquadro che lo contiene, senza che ne esca';
+  const stato = statoIniziale(CARTELLA);
+  stato.bozza = { titolo: lungo, corpo: 'un corpo qualunque' };
+  stato.campo = 'titolo';
+
+  // Il cursore in fondo, a meta' e in testa: sono i tre casi in cui la finestra
+  // si sposta, e in tutti il bordo destro deve restare dov'e'.
+  for (const cursore of [lungo.length, 40, 0]) {
+    stato.cursore = cursore;
+    const righe = disegnaNote(stato, { colonne: 100, altezza: 16 });
+    const box = righe.filter((r) => r.includes('│'));
+    assert.ok(box.length >= 3, `cursore ${cursore}: il riquadro c e`);
+    assert.equal(
+      new Set(box.map((r) => r.length)).size,
+      1,
+      `cursore ${cursore}: il bordo destro sta su una colonna sola`,
+    );
+    assert.ok(
+      righe.every((r) => r.length <= 100),
+      `cursore ${cursore}: nessuna riga eccede il terminale`,
+    );
+    // Il cursore si vede sempre: tagliato via, si scriverebbe alla cieca.
+    assert.ok(righe.join('\n').includes('█'), `cursore ${cursore}: il cursore resta visibile`);
+  }
+
+  // Il taglio si dichiara con i puntini invece di far sparire il testo in
+  // silenzio: un titolo troncato zitto si legge come un titolo intero.
+  stato.cursore = lungo.length;
+  assert.match(disegnaNote(stato, { colonne: 100, altezza: 16 }).join('\n'), /…/, 'e si dice');
+
+  // Un carattere di controllo rimasto nel titolo non manda a capo il terminale:
+  // un \r riporterebbe il cursore a inizio riga e il disegno si riscriverebbe
+  // sopra se stesso, che e' il modo in cui il riquadro si e' rotto davvero.
+  // Normalizzarlo all'ingresso non basta come garanzia: qui c'e' la rete.
+  stato.bozza = { titolo: 'prima\rdopo e ancora', corpo: 'un corpo' };
+  stato.cursore = 3;
+  const conControlli = disegnaNote(stato, { colonne: 100, altezza: 16 });
+  assert.ok(
+    conControlli.every((r) => !/[\u0000-\u0008\u000b-\u001f]/.test(r.replace(/\u001b\[[0-9;]*m/g, ''))),
+    'niente caratteri di controllo a schermo',
+  );
+  const bordi = conControlli.filter((r) => r.includes('│'));
+  assert.equal(new Set(bordi.map((r) => r.length)).size, 1, 'e il riquadro resta dritto');
+}
+
 function testLeFrecceSalvanoEsiSpostano() {
   scriviNote(CARTELLA, [{ titolo: 'una', corpo: 'prima' }, { titolo: 'due', corpo: 'seconda' }]);
   const stato = statoIniziale(CARTELLA);
@@ -250,6 +390,11 @@ function testDisegno() {
   stato.indice = 2;
   stato.bozza = { titolo: 'Nuova', corpo: 'riga uno\nriga due' };
   stato.campo = 'corpo';
+  // Il cursore sta dove lo stato dice, non per forza in fondo: da quando le
+  // frecce lo muovono, la schermata deve disegnarlo nel punto in cui la
+  // prossima lettera andra' davvero a finire. Qui lo si mette in fondo, che e'
+  // il caso di chi sta scrivendo.
+  stato.cursore = stato.bozza.corpo.length;
 
   const disegno = disegnaNote(stato, { colonne: 90, altezza: 26 });
   const testo = disegno.join('\n');
@@ -271,16 +416,28 @@ function testDisegno() {
   // nell'albero e come la barra di stato di Claude Code.
   assert.match(testo, /╭─+╮/, 'il riquadro e attorno a quella attiva');
   assert.match(testo, /│ riga due█/, 'con il cursore nel campo attivo');
-  assert.match(disegno[25], /invio/, 'la legenda e l ultima riga');
-  assert.match(disegno[24], /^ +─+$/, 'con il separatore sopra');
+  // La legenda sta in fondo, e qui i tasti sono tanti: se non ci stanno su una
+  // riga si spezza su due invece di perderne. Ogni tasto della schermata
+  // compare, o sarebbe un tasto che non sai di avere.
+  const barra = `${disegno[24]}${disegno[25]}`;
+  for (const tasto of ['invio', 'shift+invio', '←→', 'ctrl+invio', 'ctrl+f', 'ctrl+canc', 'f1', 'esc', 'canc']) {
+    assert.ok(barra.includes(tasto), `la legenda nomina ${tasto}`);
+  }
+  assert.match(disegno[23], /^ +─+$/, 'col separatore sopra a tutt e due');
 
   // Con il cursore su una nota di prima, il posto della nota nuova resta
   // annunciato in fondo: senza, l'elenco sembrerebbe finire con l'ultima nota.
   stato.indice = 0;
   stato.bozza = { titolo: 'Porte', corpo: 'la 4310 e presa' };
   const suUnaVecchia = disegnaNote(stato, { colonne: 90, altezza: 26 });
-  const ultimaPiena = suUnaVecchia.filter((r) => r.trim() !== '').at(-3);
   assert.match(suUnaVecchia.join('\n'), /nota nuova/, 'il posto della nota nuova si vede');
+  // L'ultima riga piena **prima** del separatore che chiude la pagina: si conta
+  // da li' e non dal fondo, perche' la legenda puo' essere alta una riga o due.
+  const chiusura = suUnaVecchia.findLastIndex((r) => /^ +─+$/.test(r));
+  const ultimaPiena = suUnaVecchia
+    .slice(0, chiusura)
+    .filter((r) => r.trim() !== '')
+    .at(-1);
   assert.match(ultimaPiena, /nota nuova/, 'ed e in fondo all elenco');
 
   // I campi vuoti si annunciano, o non si saprebbe cosa scrivere. Solo il titolo
@@ -472,8 +629,11 @@ function testLaRicerca() {
   assert.equal(stato.indice, 1, 'e la nota trovata resta selezionata');
   assert.equal(stato.bozza.titolo, 'Deploy', 'pronta da modificare');
 
-  // Da qui i caratteri tornano nella nota.
-  stato.campo = 'corpo';
+  // Da qui i caratteri tornano nella nota. Si scende al corpo con l'invio e non
+  // spostando il campo a mano: e' l'invio a portarci anche il cursore, in fondo
+  // a quello che c'e' gia'.
+  batti('invio');
+  assert.equal(stato.campo, 'corpo');
   scrivi('!');
   batti('invio');
   assert.match(righe(CARTELLA)[1], /!$/, 'la nota trovata si modifica');
@@ -552,6 +712,9 @@ const prove = [
   testTestoDaMandare,
   testSenzaCorpoNonSiSalvaNeSiPerde,
   testIlGiroDeiTreInvii,
+  testIncollareFaUnaNotaSola,
+  testIlCursoreSiMuoveNelTesto,
+  testUnTitoloLungoRestaDentroAlRiquadro,
   testLeFrecceSalvanoEsiSpostano,
   testMandaESce,
   testDisegno,

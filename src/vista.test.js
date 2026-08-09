@@ -13,6 +13,8 @@ import {
   antenati,
   aCapo,
   schermata,
+  coloraTasti,
+  legendaSuRighe,
 } from './vista.js';
 
 // Costruisce un albero nella forma che restituisce leggiTranscript.
@@ -840,18 +842,73 @@ function testITastiDellaBarraSonoArancioni() {
   process.env.CB_COLORI = '1';
   try {
     const barra = schermata(vista, 'a', { colonne: 100, altezza: 30 }).at(-1);
-    assert.match(barra, /\x1b\[38;2;255;140;102m←→ ad\x1b\[0m avanti e indietro/, 'tasti e testo');
+    // Le quattro frecce e le quattro lettere sono una voce sola: muovere il
+    // cursore e' un gesto solo, e leggerlo in due voci costava due letture.
+    assert.match(barra, /\x1b\[38;2;255;140;102m←→↑↓ wasd\x1b\[0m scegli il punto/, 'tasti e testo');
     // Dall'albero Esc e Canc portano tutt'e due a Claude: si scrivono insieme,
     // e vanno colorati tutt'e due — mezza voce arancione e mezza no sembrerebbe
     // una parola qualunque.
     assert.match(barra, /\x1b\[38;2;255;140;102mesc\/canc\x1b\[0m esci/, 'l ultima voce');
     // La spiegazione non e' colorata: fra la chiusura del tasto e il separatore
     // di voce non deve ricomparire una sequenza.
-    assert.doesNotMatch(barra, /\x1b\[38;2;255;140;102mavanti/, 'la spiegazione resta in chiaro');
+    assert.doesNotMatch(barra, /\x1b\[38;2;255;140;102mscegli/, 'la spiegazione resta in chiaro');
+
+    // Una lettera singola e' un tasto quando **apre** la voce ("i istruzioni"),
+    // mai quando segue un tasto gia' riconosciuto: in "shift+invio a capo" la
+    // "a" e' la preposizione di quello che fa, e colorata sembrava un secondo
+    // tasto da premere.
+    const arancio = '\x1b[38;2;255;140;102m';
+    assert.equal(
+      coloraTasti('shift+invio a capo'),
+      `${arancio}shift+invio\x1b[0m a capo`,
+      'la a resta chiara',
+    );
+    assert.ok(coloraTasti('i istruzioni').startsWith(arancio), 'ma in testa la lettera e un tasto');
+    assert.ok(coloraTasti('r modo').startsWith(arancio), 'come la r del modo');
   } finally {
     process.env.CB_COLORI = '';
     process.env.NO_COLOR = '1';
   }
+}
+
+// Le schermate fitte hanno piu' tasti di quanti ne stiano su una riga: la
+// legenda si spezza su due invece di accorciarsi fino a perderne. Un tasto che
+// cade dalla barra e' un tasto che non sai di avere.
+function testLaLegendaSiSpezzaInveceDiPerdereTasti() {
+  const ricca = 'invio accoda  shift+invio a capo  ←→ nel testo  ctrl+canc togli  esc indietro';
+  const scarna = 'invio accoda  esc indietro';
+
+  // Se ci sta su una riga, resta una riga sola: la seconda si paga solo quando
+  // serve davvero.
+  assert.deepEqual(legendaSuRighe([ricca, scarna], 100), [ricca.replace(/ {2}/g, '  ')]);
+
+  // Stretto: due righe, e ci sono ancora **tutti** i tasti della variante ricca.
+  const due = legendaSuRighe([ricca, scarna], 45);
+  assert.equal(due.length, 2, 'si spezza in due');
+  assert.ok(
+    due.every((r) => [...r].length <= 45),
+    'e nessuna riga eccede lo spazio',
+  );
+  for (const tasto of ['invio', 'shift+invio', '←→', 'ctrl+canc', 'esc']) {
+    assert.ok(due.join(' ').includes(tasto), `${tasto} c e ancora`);
+  }
+  // Le voci non si spezzano a meta': un tasto resta con la sua descrizione.
+  assert.ok(due[0].endsWith('nel testo') || due[0].endsWith('a capo'), 'si taglia fra le voci');
+
+  // Troppo stretto anche per due righe: si scende alla variante piu' scarna,
+  // che e' il vecchio comportamento — meglio meno tasti che un disegno sfasato.
+  const strettissima = legendaSuRighe([ricca, scarna], 26);
+  assert.ok(
+    strettissima.every((r) => [...r].length <= 26),
+    'nemmeno li si sfora',
+  );
+
+  // Con piu' righe concesse si arriva a tenere tutto anche piu' stretti: a 34
+  // colonne la variante ricca non entra in due righe, in tre si'.
+  assert.equal(legendaSuRighe([ricca], 34).length, 1, 'in due righe non ci sta, e si taglia');
+  const tre = legendaSuRighe([ricca], 34, 3);
+  assert.equal(tre.length, 3, 'il massimo si puo alzare');
+  assert.ok(tre.join(' ').includes('ctrl+canc togli'), 'e allora i tasti ci sono tutti');
 }
 
 function testMenuDelRipristino() {
@@ -1123,6 +1180,7 @@ const prove = [
   testIlPromptSceltoStaInUnRiquadro,
   testITastiDellaBarraSonoArancioni,
   testRigheCambiateNellIntestazione,
+  testLaLegendaSiSpezzaInveceDiPerdereTasti,
   testMenuDelRipristino,
   testSceltaDelProfilo,
   testBarraETestateSiAccorcianoSuTerminaleStretto,

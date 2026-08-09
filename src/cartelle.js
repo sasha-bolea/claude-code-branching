@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { azioniNavigazione } from './tasti.js';
+import { sovrapposizioneIstruzioni } from './istruzioni.js';
 import { coloraTasti } from './vista.js';
 import { arancione, arancioneForte, grigio, normale } from './stile.js';
 import { impostazione } from './impostazioni.js';
@@ -322,9 +323,18 @@ export function selezionaCartella({
   // prima ancora di sapere dove, ed e' il momento in cui la scelta costa meno.
   const stato = { contesto, righe, indice, ripresa, profili: elencoProfili(leggiProfili()), profilo };
 
+  // Le istruzioni si sovrappongono al selettore invece di aprire una schermata
+  // a parte: lo stdin resta di questo ciclo, e sotto non si perde niente.
+  const istruzioni = sovrapposizioneIstruzioni(T.istruzioni.cartelle);
+
   return new Promise((risolvi) => {
+    const dimensioni = () => ({ colonne: uscita.columns || 100, altezza: uscita.rows || 30 });
     const ridisegna = () =>
-      uscita.write(disegna(stato, uscita.rows || 30, uscita.columns || 100));
+      uscita.write(
+        istruzioni.aperta
+          ? `\x1b[H\x1b[2J${istruzioni.disegna(dimensioni()).join('\r\n')}`
+          : disegna(stato, uscita.rows || 30, uscita.columns || 100),
+      );
 
     // Ripristina il terminale e restituisce la scelta.
     const chiudi = (risultato) => {
@@ -343,7 +353,17 @@ export function selezionaCartella({
       // ripuliva lo schermo: la selezione del testo se ne andava proprio mentre
       // si stava premendo ctrl per copiarla.
       if (azioni.length === 0) return;
+      // Con le istruzioni aperte i tasti sono loro: la schermata sotto resta
+      // ferma, e alla chiusura si ritrova com'era.
+      if (istruzioni.aperta) {
+        if (istruzioni.tasti(azioni, dimensioni()) === 'esci') return chiudi('esci');
+        return ridisegna();
+      }
       for (const azione of azioni) {
+        if (azione === 'istruzioni') {
+          istruzioni.apri();
+          return ridisegna();
+        }
         const { esito } = applicaAzione(stato, azione);
         if (esito === 'annulla') return chiudi(null);
         if (esito === 'esci') return chiudi('esci');

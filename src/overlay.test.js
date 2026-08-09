@@ -118,11 +118,14 @@ async function premiTasti(...tasti) {
 }
 
 // Attende che l'overlay abbia finito di disegnare e sia in ascolto dei tasti.
-// L'attesa e' sulla barra dei tasti a schermo (che nomina sempre l'invio), non
-// su un numero fisso di tick: il disegno passa da una lettura di file asincrona.
+// L'attesa e' sulla barra dei tasti a schermo, non su un numero fisso di tick:
+// il disegno passa da una lettura di file asincrona. Si guardano due parole
+// perche' le barre non sono uguali: l'albero nomina l'invio, gli avvisi che ne
+// prendono il posto no — li' invio non riparte da nessun punto, e la barra
+// elenca i tasti che portano altrove.
 async function attendiPrompt(schermo) {
   for (let tentativo = 0; tentativo < 200; tentativo += 1) {
-    if (schermo().includes('invio')) return;
+    if (/invio|esci/.test(schermo())) return;
     await new Promise((r) => setTimeout(r, 5));
   }
   throw new Error('overlay non pronto: la barra dei tasti non e mai comparsa');
@@ -1499,6 +1502,78 @@ async function testIlTastoNApreLeNoteESiTornaAllAlbero() {
   pulisciCartella();
 }
 
+// "i" apre le istruzioni della schermata da cui la premi, e si torna dov'eri:
+// l'albero resta aperto dietro, con la stessa vista e lo stesso cursore. Una
+// pagina di aiuto che costasse la posizione nell'albero non la aprirebbe
+// nessuno.
+async function testIlTastoIApreLeIstruzioniESiTornaAllAlbero() {
+  const sessionId = '00000000-0000-4000-8000-0000000000cf';
+  creaTranscript(sessionId, CARTELLA, [
+    msg('a', null, 'user', 'primo prompt', 1),
+    msg('b', 'a', 'assistant', 'prima risposta', 2),
+    { type: 'last-prompt', leafUuid: 'b', sessionId },
+  ]);
+
+  const { wrapper, schermo } = wrapperFinto(sessionId, CARTELLA);
+
+  const attesa = wrapper.mostraOverlay();
+  await attendiPrompt(schermo);
+  assert.match(schermo(), /i istruzioni/, 'la barra annuncia il tasto');
+
+  await premiTasti('i');
+  assert.match(schermo(), /istruzioni: i rami/, 'la pagina spiega questa schermata');
+  assert.match(schermo(), /riavvia il processo/, 'e dice cio che una legenda non puo dire');
+
+  // Esc torna all'albero, non a Claude.
+  await premiTasti(ANNULLA);
+  assert.match(schermo(), /riparti/, 'l albero e ancora li');
+  assert.equal(wrapper.inOverlay, true, 'e l overlay non si e chiuso');
+
+  await premiTasti(ANNULLA);
+  await attesa;
+  assert.equal(wrapper.inOverlay, false, 'il secondo esc chiude come sempre');
+
+  pulisciCartella();
+}
+
+// La schermata che compare quando l'albero non c'e' accetta gli stessi tasti
+// dell'albero: coda e note non hanno bisogno di una conversazione gia'
+// cominciata, e prima del primo prompt e' proprio il momento in cui si scrive
+// quello che si vuole far fare dopo. Prima li' rispondeva solo "c": "p" e "n"
+// erano annunciati nella barra dell'albero e morivano qui, cioe' nell'unica
+// schermata dove l'albero non c'e'.
+async function testDallAvvisoSenzaTranscriptSiApronoCodaENote() {
+  for (const [tasto, metodo] of [
+    ['p', 'mostraCoda'],
+    ['n', 'mostraNote'],
+  ]) {
+    pulisciCartella();
+    const { wrapper, schermo } = wrapperFinto('00000000-0000-4000-8000-00000000dea1', CARTELLA);
+    let aperture = 0;
+    wrapper[metodo] = async () => {
+      aperture += 1;
+      return 'indietro';
+    };
+
+    const attesa = wrapper.mostraOverlay();
+    await attendiPrompt(schermo);
+    assert.match(schermo(), /non ha ancora un transcript/, 'siamo sull avviso, non sull albero');
+    assert.match(schermo(), /p coda .* n note/, 'la barra li annuncia');
+
+    await premiTasti(tasto);
+    assert.equal(aperture, 1, `"${tasto}" apre la schermata`);
+
+    // Si torna all'avviso, non a Claude: si esce con Canc, come da ogni altra
+    // schermata.
+    await attendiPrompt(schermo);
+    await premiTasti(ESCI);
+    await attesa;
+    assert.equal(wrapper.inOverlay, false, 'e da li si esce');
+  }
+
+  pulisciCartella();
+}
+
 // Canc esce dall'interfaccia da **ogni** schermata, senza risalirle una per una.
 //
 // Esc risale di un passo, ed e' giusto — sbagliare tasto non deve costare
@@ -1587,9 +1662,11 @@ const prove = [
   testCancEsceDaOgniSchermata,
   testIlTastoPApreLaCodaESiTornaAllAlbero,
   testIlTastoNApreLeNoteESiTornaAllAlbero,
+  testIlTastoIApreLeIstruzioniESiTornaAllAlbero,
   testTastiPerCambiareConversazioneOCartella,
   testOverlaySenzaTranscript,
   testSenzaTranscriptSiArrivaAiSelettori,
+  testDallAvvisoSenzaTranscriptSiApronoCodaENote,
   testLaLegendaDellAvvisoStaInFondo,
   testEscNeiSelettoriTornaAllAlbero,
   testEscDalleConversazioniTornaAlleCartelle,

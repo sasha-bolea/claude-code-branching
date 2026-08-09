@@ -27,9 +27,30 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { azioniNote } from './tasti.js';
+// `dentro` arriva con un altro nome: qui dentro esiste gia' una variabile che si
+// chiama cosi' (le righe dentro al riquadro), e la sua dichiarazione piu' in
+// basso metterebbe l'import in zona morta proprio dove serve.
+import {
+  inserisci,
+  cancella,
+  muovi,
+  conCursore,
+  finestra,
+  dentro as dentroAlTesto,
+} from './campo.js';
+import { sovrapposizioneIstruzioni } from './istruzioni.js';
 import { slugProgetto } from './percorsi.js';
 import { T } from './lingua.js';
-import { BOX, lunghezzaVisibile, primaCheEntra, aCapo, coloraTasti } from './vista.js';
+// Il riquadro arriva con un altro nome: qui dentro `riquadro` e' gia' la
+// funzione che compone titolo e corpo della bozza, e che di quello di vista.js
+// si serve per i bordi.
+import {
+  legendaSuRighe,
+  aCapo,
+  coloraTasti,
+  tagliaVisibile,
+  riquadro as disegnaRiquadro,
+} from './vista.js';
 import { arancione, arancioneForte, bianco, grigio, normale } from './stile.js';
 
 // Cartella delle note, accanto alle altre cose di cb. La variabile CB_NOTE ha la
@@ -198,13 +219,6 @@ export function disegnaNote(stato, { colonne = 100, altezza = 30 } = {}) {
   const larghezzaBox = Math.max(10, larghezza);
   const dentroBox = Math.max(6, larghezzaBox - 4);
 
-  // Una riga dentro il riquadro: il contenuto arriva gia' colorato, quindi il
-  // riempimento fino al bordo si misura sulle colonne visibili.
-  const rigaBox = (contenuto) => {
-    const vuoto = ' '.repeat(Math.max(0, dentroBox - lunghezzaVisibile(contenuto)));
-    return `  ${arancione(BOX.lato)} ${contenuto}${vuoto} ${arancione(BOX.lato)}`;
-  };
-
   // L'indice oltre l'ultima nota e' la nota nuova: non e' un caso a parte da
   // gestire, e' la posizione in cui si sta sempre appena aperta la schermata.
   const nuova = stato.indice >= stato.note.length;
@@ -225,7 +239,7 @@ export function disegnaNote(stato, { colonne = 100, altezza = 30 } = {}) {
     const nota = stato.note[i];
     elenco.push(`  ${grigio('─'.repeat(larghezzaBox))}`);
     if (i === stato.indice) {
-      elenco.push(...riquadro(stato.bozza, stato.campo));
+      elenco.push(...riquadro(stato.bozza, stato.campo, stato.cursore));
       fineBox = elenco.length - 1;
     } else {
       // Una nota segnata porta un marchio davanti alla prima riga: e' l'unica
@@ -251,7 +265,7 @@ export function disegnaNote(stato, { colonne = 100, altezza = 30 } = {}) {
   if (!cercando) {
     elenco.push(`  ${grigio('─'.repeat(larghezzaBox))}`);
     if (nuova) {
-      elenco.push(...riquadro(stato.bozza, stato.campo));
+      elenco.push(...riquadro(stato.bozza, stato.campo, stato.cursore));
       fineBox = elenco.length - 1;
     } else {
       // Con il cursore su una nota di prima, il posto della nota nuova resta
@@ -269,8 +283,13 @@ export function disegnaNote(stato, { colonne = 100, altezza = 30 } = {}) {
   // Quante righe restano fuori si dice, ma **nell'intestazione**: un avviso messo
   // dentro la finestra si mangerebbe una riga del riquadro, cioe' proprio quella
   // che si voleva tenere.
+  //
+  // La legenda si compone **prima**: puo' occupare piu' di una riga, e sono
+  // righe che l'elenco non ha. Contandone sempre una, il riquadro scivolerebbe
+  // sotto il bordo proprio sugli schermi stretti, dove la legenda si allunga.
+  const legenda = legendaSuRighe(cercando ? T.note.legendeRicerca : T.note.legende, larghezza);
   const TESTATA = 5; // le due righe di titolo, una vuota, il conto, una vuota
-  const spazio = Math.max(1, altezza - 2 - TESTATA);
+  const spazio = Math.max(1, altezza - 1 - legenda.length - TESTATA);
   const da = Math.max(0, fineBox - spazio + 1);
   const fuori = da + Math.max(0, elenco.length - (da + spazio));
 
@@ -290,7 +309,9 @@ export function disegnaNote(stato, { colonne = 100, altezza = 30 } = {}) {
     `  ${arancioneForte('cb')}  ${normale(taglia(T.note.titolo))}`,
     `  ${grigio(taglia(T.note.sottotitolo(stato.cartella ?? '')))}`,
     '',
-    `  ${conto}`,
+    // Come nella coda: il conto si taglia sulle colonne visibili, o sommandogli
+    // le segnate e le righe fuori schermo puo' superare il terminale.
+    `  ${tagliaVisibile(conto, larghezza)}`,
     '',
     ...elenco.slice(da, da + spazio),
   ];
@@ -300,7 +321,7 @@ export function disegnaNote(stato, { colonne = 100, altezza = 30 } = {}) {
   // bozza: { titolo, corpo }
   // campo: quale dei due ha il cursore
   // ritorna: array di righe
-  function riquadro(bozza, campo) {
+  function riquadro(bozza, campo, posizione) {
     const cursore = arancioneForte('█');
 
     // Un campo vuoto porta il proprio nome in grigio, **anche** quando ha il
@@ -308,32 +329,73 @@ export function disegnaNote(stato, { colonne = 100, altezza = 30 } = {}) {
     // a dire che si sta scrivendo un titolo e non il testo della nota.
     const vuoto = (attivo, nome) => `${attivo ? cursore : ''}${grigio(nome)}`;
 
+    // Il cursore sta dove sta davvero, non per forza in fondo: da quando le
+    // frecce lo muovono, disegnarlo sempre in coda direbbe una bugia proprio sul
+    // punto in cui la prossima lettera andra' a finire.
+    //
+    // Si infila nel testo **prima** di mandarlo a capo, cosi' finisce sulla riga
+    // giusta — ma come segnaposto e non gia' colorato: le sequenze ANSI si
+    // contano come caratteri, e il capo cadrebbe nel posto sbagliato. Il colore
+    // arriva dopo, spezzando la riga sul segnaposto: colorare tutto in un pezzo
+    // solo non si puo', perche' il reset del cursore spegnerebbe il bianco di
+    // quello che viene dopo.
+    const SEGNAPOSTO = '\u0000';
+    const conIlCursore = (testo) => conCursore(testo, dentroAlTesto(testo, posizione), SEGNAPOSTO);
+    const vestita = (riga) => {
+      const dove = riga.indexOf(SEGNAPOSTO);
+      if (dove < 0) return bianco(riga);
+      return `${bianco(riga.slice(0, dove))}${cursore}${bianco(riga.slice(dove + 1))}`;
+    };
+
+    // Il titolo e' una riga sola: piu' lungo del riquadro scorre invece di
+    // uscirne. Uscendo veniva mandato a capo dal terminale, e il capo sfasava
+    // tutto il disegno sotto — il riquadro si apriva senza chiudersi.
+    // Lo spazio tolto e' quello del cursore, che si infila e allunga di uno.
+    // Una colonna se ne va per il cursore, e due per i puntini che dicono da che
+    // parte si e' tagliato: senza tenerne conto, il cursore in fondo al titolo
+    // finiva proprio sotto la lama della rete di sicurezza e spariva.
+    // Rete di sicurezza: nel titolo, che e' una riga sola, un carattere di
+    // controllo rimasto dentro manderebbe a capo il terminale da se' — e nessuna
+    // finestra puo' impedirlo, perche' non occupa colonne. Diventa uno spazio.
+    const suUnaRigaSola = (testo) => testo.replace(/[\u0000-\u001f]/g, ' ');
+    bozza = { ...bozza, titolo: suUnaRigaSola(bozza.titolo) };
+    const titoloLungo = [...bozza.titolo].length > dentroBox - 1;
+    const largoTitolo = titoloLungo ? dentroBox - 3 : dentroBox - 1;
+    const vistaTitolo = finestra(bozza.titolo, campo === 'titolo' ? posizione : 0, largoTitolo);
+    const segnaTaglio = (vista, testo) =>
+      `${vista.prima ? grigio('…') : ''}${testo}${vista.dopo ? grigio('…') : ''}`;
+
     const titolo = bozza.titolo
-      ? `${bianco(bozza.titolo)}${campo === 'titolo' ? cursore : ''}`
+      ? segnaTaglio(
+          vistaTitolo,
+          vestita(campo === 'titolo' ? conCursore(vistaTitolo.testo, vistaTitolo.cursore, SEGNAPOSTO) : vistaTitolo.testo),
+        )
       : vuoto(campo === 'titolo', T.note.titoloNota);
 
+    // Il corpo va a capo da se', ma il cursore occupa una colonna: senza
+    // toglierla, la riga che finisce esatta sul bordo sfora di uno.
+    const largoCorpo = campo === 'corpo' ? dentroBox - 1 : dentroBox;
+    const scritto = campo === 'corpo' ? conIlCursore(bozza.corpo) : bozza.corpo;
     const righeCorpo = bozza.corpo
-      ? righeDelCorpo(bozza.corpo, dentroBox).map((riga) => bianco(riga))
+      ? righeDelCorpo(scritto, largoCorpo).map(vestita)
       : [vuoto(campo === 'corpo', T.note.corpo)];
-    if (bozza.corpo && campo === 'corpo') righeCorpo[righeCorpo.length - 1] += cursore;
 
-    const dentro = [titolo, '', ...righeCorpo];
-
-    return [
-      `  ${arancione(`${BOX.alto}${'─'.repeat(Math.max(0, larghezzaBox - 2))}${BOX.altoDestra}`)}`,
-      ...dentro.map((riga) => rigaBox(riga)),
-      `  ${arancione(`${BOX.basso}${'─'.repeat(Math.max(0, larghezzaBox - 2))}${BOX.bassoDestra}`)}`,
-    ];
+    // Il riquadro e' quello di vista.js, lo stesso che disegna il campo della
+    // coda: bordi e riempimento stanno in un posto solo.
+    return disegnaRiquadro([titolo, '', ...righeCorpo], larghezzaBox);
   }
 
   // La legenda in fondo allo schermo, come in ogni altra schermata: l'elenco
   // cresce a ogni nota, e una legenda che scende si legge peggio.
-  const legenda = primaCheEntra(cercando ? T.note.legendeRicerca : T.note.legende, larghezza);
-  const corpo = righe.slice(0, Math.max(0, altezza - 2));
-  while (corpo.length < altezza - 2) corpo.push('');
+  //
+  // Su piu' righe se serve, come nella coda: qui i tasti sono tanti, e
+  // accorciare fino a farceli stare su una riga sola voleva dire buttarne via.
+  const corpo = righe.slice(0, Math.max(0, altezza - 1 - legenda.length));
+  while (corpo.length < altezza - 1 - legenda.length) corpo.push('');
   // I tasti in arancione, come in ogni altra schermata: e' quello che si cerca
   // con l'occhio quando si vuole solo sapere che cosa premere.
-  corpo.push(`  ${grigio('─'.repeat(larghezza))}`, `  ${coloraTasti(taglia(legenda))}`);
+  corpo.push(`  ${grigio('─'.repeat(larghezza))}`);
+  for (const riga of legenda) corpo.push(`  ${coloraTasti(taglia(riga))}`);
   return corpo;
 }
 
@@ -359,11 +421,21 @@ export function applicaAzione(stato, azione) {
       stato.ricerca += azione.valore;
       return vaiAllaPrimaTrovata(stato);
     }
+    // Cercando, un incolla e' una parola da cercare: gli a capo diventano spazi,
+    // perche' la ricerca e' una riga.
+    if (azione.tipo === 'incolla') {
+      stato.ricerca += azione.valore.replace(/\n+/g, ' ');
+      return vaiAllaPrimaTrovata(stato);
+    }
     if (azione.tipo === 'cancella') {
       stato.ricerca = stato.ricerca.slice(0, -1);
       return vaiAllaPrimaTrovata(stato);
     }
     if (azione.tipo === 'freccia') {
+      // Solo su e giu': destra e sinistra qui non hanno dove andare, e
+      // `scorriTrovate` le avrebbe prese per un "giu'" — una freccia orizzontale
+      // faceva saltare alla nota dopo senza che nessuno l'avesse chiesto.
+      if (azione.valore !== 'su' && azione.valore !== 'giu') return null;
       scorriTrovate(stato, azione.valore);
       return null;
     }
@@ -391,27 +463,48 @@ export function applicaAzione(stato, azione) {
   if (azione.tipo === 'segna') return segna(stato);
   if (azione.tipo === 'togli') return togliSegnate(stato);
 
-  if (azione.tipo === 'carattere') {
-    stato.bozza[stato.campo] += azione.valore;
+  // Scrivere, cancellare e incollare avvengono nel punto del cursore: le frecce
+  // ← → lo muovono, e senza inserire li' correggere una parola in mezzo a una
+  // nota lunga vorrebbe dire cancellare tutto quello che viene dopo.
+  const scrivi = (aggiunta) => {
+    const dopo = inserisci(stato.bozza[stato.campo], stato.cursore, aggiunta);
+    stato.bozza[stato.campo] = dopo.testo;
+    stato.cursore = dopo.cursore;
     return null;
+  };
+
+  if (azione.tipo === 'carattere') return scrivi(azione.valore);
+
+  // Un incolla e' una nota sola, con i suoi a capo dentro: prima si spezzava in
+  // una nota per riga, perche' ogni a capo arrivava come un invio.
+  //
+  // Quello che incolli resta **nel campo in cui stai scrivendo**, tutto. Per un
+  // po' la prima riga faceva da titolo e il resto scendeva nel corpo: sembrava
+  // comodo, ed era invece un testo che si spezza da solo in due punti che non
+  // hai scelto tu. Nel titolo, che e' una riga per definizione, gli a capo
+  // diventano spazi; nel corpo restano quelli che sono.
+  if (azione.tipo === 'incolla') {
+    return scrivi(stato.campo === 'titolo' ? azione.valore.replace(/\n+/g, ' ') : azione.valore);
   }
 
   if (azione.tipo === 'cancella') {
-    stato.bozza[stato.campo] = stato.bozza[stato.campo].slice(0, -1);
+    const dopo = cancella(stato.bozza[stato.campo], stato.cursore);
+    stato.bozza[stato.campo] = dopo.testo;
+    stato.cursore = dopo.cursore;
     return null;
   }
 
   if (azione.tipo === 'acapo') {
     // A capo solo nel corpo: il titolo e' una riga per definizione, e shift+invio
     // li' vale come l'invio che porta al corpo.
-    if (stato.campo === 'titolo') stato.campo = 'corpo';
-    else stato.bozza.corpo += '\n';
+    if (stato.campo === 'titolo') passaAlCorpo(stato);
+    else scrivi('\n');
     return null;
   }
 
   if (azione.tipo === 'invio') {
     if (stato.campo === 'titolo') {
-      stato.campo = 'corpo';
+      passaAlCorpo(stato);
       return null;
     }
     // Senza corpo non si salva: il titolo scritto resta li' ad aspettarlo, invece
@@ -425,6 +518,12 @@ export function applicaAzione(stato, azione) {
   }
 
   if (azione.tipo === 'freccia') {
+    // Destra e sinistra muovono il cursore dentro al campo, su e giu' passano da
+    // una nota all'altra: due cose diverse su tasti diversi, come nella coda.
+    if (azione.valore === 'sinistra' || azione.valore === 'destra') {
+      stato.cursore = muovi(stato.bozza[stato.campo], stato.cursore, azione.valore);
+      return null;
+    }
     if (azione.valore !== 'su' && azione.valore !== 'giu') return null;
     if (senzaCorpo(stato)) return null; // non salvabile: non la si lascia indietro
     // Spostandosi si salva quello che si stava scrivendo: perderlo per una
@@ -554,6 +653,15 @@ function scorriTrovate(stato, direzione) {
   vaiA(stato, visibili[prossimo]);
 }
 
+// Scende dal titolo al corpo, portandoci il cursore in fondo a quello che c'e'
+// gia': su una nota vecchia il corpo e' scritto, e ripartire dal suo inizio
+// vorrebbe dire scrivere il seguito davanti a quello che avevi scritto prima.
+// stato: stato della schermata
+function passaAlCorpo(stato) {
+  stato.campo = 'corpo';
+  stato.cursore = [...stato.bozza.corpo].length;
+}
+
 // Porta il cursore su una nota, caricandola nella bozza.
 // L'indice pari al numero di note e' la nota nuova, che e' una posizione valida.
 // stato: stato della schermata
@@ -563,6 +671,10 @@ function vaiA(stato, indice) {
   if (indice >= stato.note.length) return apriNuova(stato);
   const nota = stato.note[indice];
   stato.bozza = { titolo: nota.titolo, corpo: nota.corpo };
+  // Il cursore in fondo al titolo, non in testa: aprendo una nota vecchia la
+  // cosa che si fa e' continuarla, e da li' una freccia sinistra basta per
+  // tornare dentro.
+  stato.cursore = [...nota.titolo].length;
   // Il cursore parte **sempre** dal titolo, anche su una nota che ha gia' tutto.
   // Non perche' sia il campo che si modifica piu' spesso, ma perche' e' l'unico
   // dei due da cui si puo' raggiungere l'altro: dal titolo si scende al corpo con
@@ -577,6 +689,7 @@ function apriNuova(stato) {
   stato.indice = stato.note.length;
   stato.bozza = { titolo: '', corpo: '' };
   stato.campo = 'titolo';
+  stato.cursore = 0;
 }
 
 // Lo stato iniziale: le note della cartella, e il cursore sulla nota nuova.
@@ -590,6 +703,9 @@ export function statoIniziale(cartella) {
     indice: 0,
     bozza: null,
     campo: 'titolo',
+    // Posizione del cursore dentro il campo attivo: le frecce ← → lo muovono, e
+    // scrivere, cancellare e incollare avvengono li'.
+    cursore: 0,
     // `null` = non si sta cercando. La stringa vuota vuol dire «ricerca aperta,
     // ancora senza niente scritto», che e' un altro stato: li' i tasti vanno
     // nella ricerca, non nella nota.
@@ -616,13 +732,16 @@ export function apriNote({
   uscita = process.stdout,
 } = {}) {
   const stato = statoIniziale(cartella);
+  // Come nella coda le istruzioni stanno su F1: qui la i e' una lettera del
+  // titolo o del corpo che stai scrivendo.
+  const istruzioni = sovrapposizioneIstruzioni(T.istruzioni.note);
 
   return new Promise((risolvi) => {
+    const dimensioni = () => ({ colonne: uscita.columns || 100, altezza: uscita.rows || 30 });
     const ridisegna = () => {
-      const righe = disegnaNote(stato, {
-        colonne: uscita.columns || 100,
-        altezza: uscita.rows || 30,
-      });
+      const righe = istruzioni.aperta
+        ? istruzioni.disegna(dimensioni())
+        : disegnaNote(stato, dimensioni());
       uscita.write(`\x1b[H\x1b[2J${righe.join('\r\n')}`);
     };
 
@@ -640,7 +759,17 @@ export function apriNote({
       // Niente da fare, niente da ridisegnare: ogni ridisegno cancella la
       // selezione del testo fatta col mouse (vedi cartelle.js).
       if (azioni.length === 0) return;
+      // Con le istruzioni aperte i tasti sono loro: la nota che stavi scrivendo
+      // resta dov'era, e alla chiusura la ritrovi.
+      if (istruzioni.aperta) {
+        if (istruzioni.tasti(azioni, dimensioni()) === 'esci') return chiudi('esci');
+        return ridisegna();
+      }
       for (const azione of azioni) {
+        if (azione.tipo === 'istruzioni') {
+          istruzioni.apri();
+          return ridisegna();
+        }
         const esito = applicaAzione(stato, azione);
         if (esito !== null) return chiudi(esito);
       }

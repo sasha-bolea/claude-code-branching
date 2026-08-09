@@ -21,6 +21,7 @@ import {
   coloraTasti,
   VOCI_RIPRISTINO,
 } from './vista.js';
+import { paginaIstruzioni, massimoScorrimento } from './istruzioni.js';
 import { arancioneForte, grigio, normale } from './stile.js';
 import { attivaRamoDi, fineDelTurno } from './attiva.js';
 import { ripristinaA, riassumiRipristino } from './codice.js';
@@ -48,6 +49,15 @@ import {
 // controllo nel sorgente sarebbero invisibili in fase di lettura.
 const PULISCI_SCHERMO = '[2J[H';
 const MOSTRA_CURSORE = '[?25h';
+
+// Schermo alternativo: la pagina di cb va su un buffer suo, come fanno gia' i
+// selettori (cartelle, conversazioni, coda, note). Senza, la rotella scorreva lo
+// storico del terminale e sopra la schermata di cb ricompariva la chat di
+// Claude, come se fossero due pezzi della stessa pagina. Il buffer alternativo
+// non ha storico: non c'e' niente da scorrere, e all'uscita il terminale torna
+// esattamente com'era.
+const SCHERMO_ALTERNATIVO = '\x1b[?1049h';
+const SCHERMO_NORMALE = '\x1b[?1049l';
 
 // Vero se `candidato` e' stato scritto dopo `riferimento`.
 // A parita' di istante vince il riferimento: due file scritti nello stesso
@@ -174,6 +184,7 @@ function navigazioneDa(comando) {
   if (comando === 'profilo') return { tipo: 'profilo' };
   if (comando === 'coda') return { tipo: 'coda' };
   if (comando === 'note') return { tipo: 'note' };
+  if (comando === 'istruzioni') return { tipo: 'istruzioni' };
   return null;
 }
 
@@ -224,6 +235,7 @@ export class Wrapper {
     this.processo = null;
     this.sessionId = null;
     this.inOverlay = false; // true mentre mostriamo l'albero: lo stdin e' nostro
+    this.schermoAlternativo = false; // true mentre la pagina di cb ha il buffer suo
     this.mouseAcceso = new Set(); // modi mouse che Claude ha chiesto, per rimetterli
     this.codaMouse = ''; // fine dell'ultimo blocco, per le sequenze spezzate
     this.timerEsc = null;
@@ -492,12 +504,32 @@ export class Wrapper {
     setTimeout(() => this.processo?.resize(colonne, righe), 40);
   }
 
+  // Porta la pagina di cb sul buffer alternativo del terminale.
+  //
+  // Si riafferma a ogni schermata invece di fidarsi del flag: i selettori
+  // (cartelle, coda, note) aprono e chiudono il buffer alternativo per conto
+  // loro, e al ritorno da uno di quelli il terminale e' gia' tornato su quello
+  // normale. Chiederlo di nuovo quando ci si e' gia' dentro non costa niente.
+  apriSchermo() {
+    this.schermoAlternativo = true;
+    this.scrivi(SCHERMO_ALTERNATIVO);
+  }
+
+  // Restituisce il terminale com'era: fuori dal buffer alternativo, con lo
+  // schermo di Claude dove l'aveva lasciato.
+  chiudiSchermo() {
+    if (!this.schermoAlternativo) return;
+    this.schermoAlternativo = false;
+    this.scrivi(SCHERMO_NORMALE);
+  }
+
   // Chiude l'overlay e restituisce il terminale a Claude.
   chiudiOverlay() {
     this.inOverlay = false;
     this.ridisegnaOverlay = null; // da qui in poi lo schermo e' di Claude
     clearTimeout(this.timerRidimensiona);
     this.mouse(true); // lo schermo torna a Claude, e il mouse e' suo
+    this.chiudiSchermo();
     this.scrivi(PULISCI_SCHERMO);
     this.forzaRidisegno();
   }
@@ -597,13 +629,15 @@ export class Wrapper {
   // un albero da mostrare, cioe' prima del primo prompt, l'unica cosa che si
   // poteva fare era tornare indietro.
   // righe: testo da mostrare
-  // conProfilo: se `m` deve valere anche qui. Serve sulle schermate che
-  //   sostituiscono l'albero — senza, proprio quando l'albero non c'e' il tasto
-  //   annunciato nella barra smetterebbe di funzionare. Non sulla schermata dei
-  //   profili stessa, che altrimenti si riaprirebbe da sola.
-  // ritorna: Promise<'selettori' | 'profilo' | null> — null se si torna a Claude
-  mostraAvviso(righe, { conProfilo = false } = {}) {
+  // conExtra: se `m`, `p` e `n` devono valere anche qui. Serve sulle schermate
+  //   che sostituiscono l'albero — senza, proprio quando l'albero non c'e' i
+  //   tasti annunciati nella barra smetterebbero di funzionare. Non sulla
+  //   schermata dei profili stessa, che altrimenti si riaprirebbe da sola.
+  // ritorna: Promise<'selettori'|'profilo'|'coda'|'note'|'istruzioni'|null> — null
+  //          se si torna a Claude
+  mostraAvviso(righe, { conExtra = false } = {}) {
     this.inOverlay = true;
+    this.apriSchermo(); // pagina nostra, su un buffer suo: niente da scorrere
     this.mouse(false); // schermo nostro: il mouse torni a selezionare il testo
     this.spegniMouse(); // anche quello che poteva aver acceso cb stesso
     // Registrato come ridisegno cosi' anche questa schermata segue il
@@ -627,7 +661,7 @@ export class Wrapper {
       while (pronta.length < spazio) pronta.push('');
       // I tasti in arancione, come in ogni altra schermata.
       pronta.push(
-        `  ${coloraTasti(conProfilo ? T.wrapper.tastiAvvisoConProfilo : T.wrapper.tastiAvviso)}`,
+        `  ${coloraTasti(conExtra ? T.wrapper.tastiAvvisoCompleta : T.wrapper.tastiAvviso)}`,
       );
 
       this.scrivi(MOSTRA_CURSORE + PULISCI_SCHERMO);
@@ -643,9 +677,20 @@ export class Wrapper {
             process.stdin.off('data', ascoltatore);
             return risolvi('selettori');
           }
-          if (conProfilo && comando === 'profilo') {
+          // Profilo, coda e note: gli stessi tasti dell'albero, perche' questa
+          // schermata sta al suo posto. La coda e le note non hanno bisogno che
+          // la conversazione sia gia' cominciata — anzi, e' proprio prima del
+          // primo prompt che si scrive quello che si vuole far fare dopo.
+          if (conExtra && (comando === 'profilo' || comando === 'coda' || comando === 'note')) {
             process.stdin.off('data', ascoltatore);
-            return risolvi('profilo');
+            return risolvi(comando);
+          }
+          // Le istruzioni valgono anche sugli avvisi che non hanno gli extra: la
+          // pagina spiega la schermata, e una schermata senza spiegazione e'
+          // proprio quella su cui si resta piantati.
+          if (comando === 'istruzioni') {
+            process.stdin.off('data', ascoltatore);
+            return risolvi('istruzioni');
           }
           // Da un avviso non si risale da nessuna parte: dietro c'e' Claude, e
           // Canc ci porta come Esc. Restano tutt'e due perche' Canc deve
@@ -658,6 +703,104 @@ export class Wrapper {
       };
       process.stdin.on('data', ascoltatore);
     });
+  }
+
+  // La pagina delle istruzioni della schermata da cui la si apre.
+  //
+  // Non porta da nessuna parte: si legge e si torna dov'eri. E' il motivo per
+  // cui non chiude l'overlay ne' tocca il processo — la schermata di partenza
+  // resta esattamente com'era, e chi la riapre ritrova il suo cursore.
+  //
+  // Lo stdin se lo prende come ogni altra schermata di cb; l'ascoltatore del
+  // chiamante va staccato prima di chiamarla, o i tasti arriverebbero a tutt'e
+  // due.
+  // pagina: { titolo, righe } da T.istruzioni
+  // ritorna: Promise<'indietro' | 'esci'> — Esc torna alla schermata, Canc esce
+  //          da tutto, come in ogni altra schermata
+  mostraIstruzioni(pagina) {
+    this.inOverlay = true;
+    this.apriSchermo();
+    this.mouse(false);
+    this.spegniMouse();
+    let scorrimento = 0;
+
+    this.ridisegnaOverlay = () => {
+      const opzioni = {
+        colonne: process.stdout.columns || 120,
+        altezza: process.stdout.rows || 30,
+        scorrimento,
+      };
+      this.scrivi(MOSTRA_CURSORE + PULISCI_SCHERMO);
+      this.scrivi(paginaIstruzioni(pagina, opzioni).join('\r\n'));
+    };
+    this.ridisegnaOverlay();
+
+    return new Promise((risolvi) => {
+      const ascoltatore = (dati) => {
+        const azioni = azioniNavigazione(dati);
+        // Un tasto che non produce niente non ridisegna: il ridisegno pulisce lo
+        // schermo, e con lui se ne andrebbe la selezione fatta col mouse.
+        if (azioni.length === 0) return;
+        for (const comando of azioni) {
+          if (comando === 'annulla' || comando === 'esci') {
+            process.stdin.off('data', ascoltatore);
+            return risolvi(comando === 'esci' ? 'esci' : 'indietro');
+          }
+          const massimo = massimoScorrimento(pagina, {
+            colonne: process.stdout.columns || 120,
+            altezza: process.stdout.rows || 30,
+          });
+          if (comando === 'giu') scorrimento = Math.min(massimo, scorrimento + 1);
+          else if (comando === 'su') scorrimento = Math.max(0, scorrimento - 1);
+        }
+        this.ridisegnaOverlay();
+      };
+
+      process.stdin.on('data', ascoltatore);
+    });
+  }
+
+  // Le due schermate che compaiono al posto dell'albero quando un albero non
+  // c'e': prima del primo scambio, e quando il transcript non ha messaggi.
+  //
+  // Accettano gli stessi tasti dell'albero — c, m, p, n — perche' ne prendono il
+  // posto: un tasto annunciato nella barra che non risponde e' un tasto rotto, e
+  // proprio qui coda e note servono di piu', dato che non hanno bisogno di una
+  // conversazione gia' cominciata.
+  //
+  // Si riapre `mostraOverlay` e non questa schermata: nel frattempo Claude puo'
+  // aver scritto il transcript, e allora al ritorno c'e' l'albero vero.
+  // righe: testo dell'avviso
+  // ritorna: Promise<void> — chiude l'overlay o apre un selettore da se'
+  async avvisoAlPostoDellAlbero(righe) {
+    const scelta = await this.mostraAvviso(righe, { conExtra: true });
+    if (scelta === 'istruzioni') {
+      if ((await this.mostraIstruzioni(T.istruzioni.avviso)) === 'esci') {
+        this.chiudiOverlay();
+        return;
+      }
+      return this.mostraOverlay();
+    }
+    if (scelta === 'profilo') {
+      if (await this.scegliProfilo(null, null)) return; // ha rilanciato Claude
+      return this.mostraOverlay();
+    }
+    // Ne' la coda ne' le note toccano conversazione o processo: si torna qui.
+    // Con Canc invece si esce da tutto, senza ripassare da questa schermata.
+    if (scelta === 'coda' || scelta === 'note') {
+      const esito = scelta === 'coda' ? await this.mostraCoda() : await this.mostraNote();
+      if (esito === 'esci') {
+        this.chiudiOverlay();
+        return;
+      }
+      return this.mostraOverlay();
+    }
+    if (scelta !== 'selettori') {
+      this.chiudiOverlay();
+      return;
+    }
+    // Esc sul primo selettore riporta a questo avviso, non fuori.
+    if ((await this.cambiaConversazione()) === 'indietro') return this.mostraOverlay();
   }
 
   // Percorso del transcript della sessione in corso.
@@ -740,27 +883,13 @@ export class Wrapper {
     const percorso = this.trovaTranscript();
     this.registra(`overlay sessione=${this.sessionId} transcript=${percorso ?? 'ASSENTE'}`);
     if (!percorso) {
-      const scelta = await this.mostraAvviso(
+      return this.avvisoAlPostoDellAlbero(
         T.wrapper.senzaTranscript(this.descrizioneScorciatoia, this.sessionId),
-        { conProfilo: true },
       );
-      // Il profilo si cambia anche da qui: prima del primo scambio e' proprio il
-      // momento in cui conviene, perche' non c'e' ancora una conversazione da
-      // portarsi dietro.
-      if (scelta === 'profilo') {
-        if (await this.scegliProfilo(null, null)) return;
-        return this.mostraOverlay();
-      }
-      if (scelta !== 'selettori') {
-        this.chiudiOverlay();
-        return;
-      }
-      // Esc sul primo selettore riporta a questo avviso, non fuori.
-      if ((await this.cambiaConversazione()) === 'indietro') return this.mostraOverlay();
-      return;
     }
 
     this.inOverlay = true;
+    this.apriSchermo(); // pagina nostra, su un buffer suo: niente da scorrere
     this.mouse(false); // schermo nostro: via il tracciamento di Claude
     // E nessuno al suo posto: finche' una schermata di cb e' a video il mouse
     // deve poter selezionare e copiare, senza shift e senza scorciatoie.
@@ -800,20 +929,7 @@ export class Wrapper {
 
     if (vista.nodi.length === 0) {
       this.inOverlay = false;
-      const scelta = await this.mostraAvviso(T.wrapper.senzaMessaggi(this.sessionId, percorso), {
-        conProfilo: true,
-      });
-      if (scelta === 'profilo') {
-        if (await this.scegliProfilo(null, null)) return;
-        return this.mostraOverlay();
-      }
-      if (scelta !== 'selettori') {
-        this.chiudiOverlay();
-        return;
-      }
-      // Esc sul primo selettore riporta a questo avviso, non fuori.
-      if ((await this.cambiaConversazione()) === 'indietro') return this.mostraOverlay();
-      return;
+      return this.avvisoAlPostoDellAlbero(T.wrapper.senzaMessaggi(this.sessionId, percorso));
     }
 
     let selezione = puntaRamoAttivo(vista);
@@ -872,6 +988,15 @@ export class Wrapper {
       // lo si era lasciato.
       if (azione.tipo === 'note') {
         if ((await this.mostraNote()) === 'esci') {
+          this.chiudiOverlay();
+          return;
+        }
+        continue;
+      }
+      // Le istruzioni si leggono e si torna qui, con la stessa vista e lo stesso
+      // cursore: `ridisegnaOverlay` viene riassegnato in cima al ciclo.
+      if (azione.tipo === 'istruzioni') {
+        if ((await this.mostraIstruzioni(T.istruzioni.albero)) === 'esci') {
           this.chiudiOverlay();
           return;
         }
@@ -978,6 +1103,19 @@ export class Wrapper {
             }
             continue;
           }
+          // Le istruzioni del menu si leggono senza perdere la scelta fatta: al
+          // ritorno il menu si ridisegna con la stessa voce e lo stesso stato.
+          // L'ascoltatore va staccato prima, o i tasti della pagina arriverebbero
+          // anche qui.
+          if (azione.tipo === 'istruzioni') {
+            process.stdin.off('data', ascoltatore);
+            this.mostraIstruzioni(T.istruzioni.menu).then((dove) => {
+              if (dove === 'esci') return concludi('esci');
+              process.stdin.on('data', ascoltatore);
+              ridisegna();
+            });
+            return;
+          }
           if (azione.tipo === 'lettera') {
             // `r` vale solo mentre la casella si vede: altrove e' un tasto che
             // non c'e', e accenderlo di nascosto salverebbe a sorpresa.
@@ -1027,6 +1165,16 @@ export class Wrapper {
     if (profili.size === 0) {
       this.registra('nessun profilo configurato: mostro come si scrivono');
       const scelta = await this.mostraAvviso(T.wrapper.senzaProfili(percorsoImpostazioni()));
+      // Anche qui le istruzioni si leggono e si torna all'avviso: e' la
+      // schermata di chi i profili non li ha ancora, cioe' chi ha piu' bisogno
+      // di leggere a cosa servono.
+      if (scelta === 'istruzioni') {
+        if ((await this.mostraIstruzioni(T.istruzioni.profili)) === 'esci') {
+          this.chiudiOverlay();
+          return true; // l'albero non va piu' ridisegnato
+        }
+        return this.scegliProfilo(vista, selezione);
+      }
       if (scelta !== 'selettori') return false; // si torna all'albero
       if ((await this.cambiaConversazione()) === 'indietro') await this.mostraOverlay();
       return true;
@@ -1040,6 +1188,7 @@ export class Wrapper {
     // del primo scambio — si disegna da solo, o non ci sarebbe niente su cui
     // appoggiarlo.
     this.inOverlay = true;
+    this.apriSchermo(); // pagina nostra, su un buffer suo: niente da scorrere
     const scelto = await new Promise((risolvi) => {
       const ridisegna = () =>
         vista
@@ -1060,6 +1209,16 @@ export class Wrapper {
           // Canc esce da tutto senza cambiare profilo: il processo non si tocca.
           if (azione.tipo === 'esci') return concludi('esci');
           if (azione.tipo === 'invio') return concludi(elenco[indice]);
+          // Le istruzioni si leggono e si torna qui, sul profilo che era scelto.
+          if (azione.tipo === 'istruzioni') {
+            process.stdin.off('data', ascoltatore);
+            this.mostraIstruzioni(T.istruzioni.profili).then((dove) => {
+              if (dove === 'esci') return concludi('esci');
+              process.stdin.on('data', ascoltatore);
+              ridisegna();
+            });
+            return;
+          }
           if (azione.tipo === 'freccia') {
             if (azione.valore === 'su') indice = (indice + elenco.length - 1) % elenco.length;
             else if (azione.valore === 'giu') indice = (indice + 1) % elenco.length;
@@ -1107,6 +1266,7 @@ export class Wrapper {
     await this.chiudiProcesso();
     this.profilo = nome;
     this.inOverlay = false;
+    this.chiudiSchermo();
     this.scrivi(PULISCI_SCHERMO);
 
     this.avviaClaude({ riprendi });
@@ -1247,6 +1407,10 @@ export class Wrapper {
     try {
       return await apriCoda({ sessione: this.sessionId });
     } finally {
+      // La coda chiude il buffer alternativo uscendo, e dietro c'e' di nuovo lo
+      // schermo normale: senza riaffermarlo, l'albero che torna a video si
+      // ritroverebbe in mezzo allo storico del terminale.
+      this.apriSchermo();
       if (process.stdin.isTTY) process.stdin.setRawMode(true);
       process.stdin.resume();
       // Chiudendo la coda i tasti battuti qui dentro non contano come "l'utente
@@ -1299,6 +1463,8 @@ export class Wrapper {
       this.registra(`note: nota messa nella barra (${esito.manda.length} caratteri), non inviata`);
       return 'esci';
     } finally {
+      // Come per la coda: uscendo, le note rimettono il buffer normale.
+      this.apriSchermo();
       if (process.stdin.isTTY) process.stdin.setRawMode(true);
       process.stdin.resume();
       // Come per la coda: i tasti battuti dentro cb non sono "l'utente sta
@@ -1387,6 +1553,7 @@ export class Wrapper {
       // continua a disegnare, e lo si vedrebbe lampeggiare sotto.
       await this.chiudiProcesso();
       this.inOverlay = false;
+      this.chiudiSchermo();
       this.scrivi(PULISCI_SCHERMO);
 
       if (conversazione.nuova) {
@@ -1543,6 +1710,7 @@ export class Wrapper {
     }
 
     this.inOverlay = false;
+    this.chiudiSchermo();
     this.scrivi(PULISCI_SCHERMO);
 
     // La nuova sessione ha gia' il suo file, e condivide la radice con l'origine:
@@ -1722,7 +1890,11 @@ export class Wrapper {
   }
 
   // Mostra un messaggio breve senza distruggere lo schermo di Claude.
+  // Va scritto sul buffer normale, dove quello schermo sta: scritto su quello
+  // alternativo sparirebbe insieme alla pagina di cb, e l'errore che ha fermato
+  // il cambio ramo non lo leggerebbe nessuno.
   lampeggia(messaggio) {
+    this.chiudiSchermo();
     this.scrivi(`\r\n${messaggio}\r\n`);
     this.forzaRidisegno();
   }

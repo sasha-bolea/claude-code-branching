@@ -241,7 +241,7 @@ storia che quel punto porta con sé fino alla radice.
     24-07 15:10  facciamo la lista dei clienti
 
   ──────────────────────────────────────────────────────────────────────
-  ←→ ad avanti e indietro   ↑↓ ws ramo   invio riparti   p coda   n note   esc/canc esci
+  ←→↑↓ wasd scegli il punto   invio riparti   p coda   n note   i istruzioni   esc/canc esci
 ```
 
 Nell'albero ci sono solo i prompt che hai scritto tu. Le notifiche dei task in background,
@@ -264,6 +264,12 @@ l'albero — lo fanno le frecce.
 conversazioni torni alle cartelle, dal menu del ripristino torni all'albero — sbagliare tasto
 non deve costarti l'uscita. `canc` invece esce da tutto e ti riporta dritto a Claude, da
 qualunque profondità, senza risalire le schermate una per una.
+
+**`i` apre le istruzioni della schermata in cui sei**: cosa fa, tutti i suoi tasti, e le cose
+che una barra su una riga non può dire — perché nella coda si toglie con `ctrl+canc` e non con
+`canc`, o perché le note stanno alla cartella e non alla conversazione. Si legge e si torna
+dov'eri, senza perdere il punto in cui stavi. Nella coda e nelle note, dove `i` è una lettera
+del testo che stai scrivendo, il tasto è `f1` — che funziona comunque in tutte le schermate.
 
 I comandi da fuori (`cb tree`, `cb pick`, `cb open`) usano invece l'elenco verticale
 numerato, perché `cb open <sessione> 3` ha bisogno di un numero a cui riferirsi:
@@ -294,21 +300,33 @@ fatto da quello prima.
 
   4 prompt in attesa
 
-     1. sistemare il test che fallisce  il prossimo
+  ─────────────────────────────────────────────────────────────────────────────────────────
+     1. sistemare il test che fallisce
+  ─────────────────────────────────────────────────────────────────────────────────────────
      2. aggiornare il README  ⤼ salta
-  ▸  3. alzare il numero di versione  ⏸ stop
+  ─────────────────────────────────────────────────────────────────────────────────────────
+  ╭───────────────────────────────────────────────────────────────────────────────────────╮
+  │  3. ‖ stop alzare il numero di versione█                                              │
+  ╰───────────────────────────────────────────────────────────────────────────────────────╯
+  ─────────────────────────────────────────────────────────────────────────────────────────
      4. fare il commit
-
-  > sto scrivendo il quinto█
+  ─────────────────────────────────────────────────────────────────────────────────────────
+    accoda prompt
 
   ─────────────────────────────────────────────────────────────────────────────────────────
-  invio accoda  ↑↓ scegli  ctrl+↑↓ sposta  ctrl+s/x stop,salta  ctrl+canc togli  esc  canc
+  invio accoda  ←→ nel testo  ↑↓ scegli e modifica  ctrl+↑↓ sposta  ctrl+canc togli  esc  canc
 ```
 
-Invio accoda quello che hai scritto e lascia il campo pronto per il prossimo. `↑` `↓`
-scelgono una riga dell'elenco, `ctrl+↑` `ctrl+↓` la spostano su e giù, e `ctrl+canc` la
-toglie — backspace resta per correggere quello che stai scrivendo. Esc torna all'albero, dove
+Invio accoda quello che hai scritto e lascia il campo pronto per il prossimo. `↑` `↓` scelgono
+un prompt della coda: **il riquadro si sposta su di lui e lo modifichi lì dentro**, come una
+nota — accodarlo non è l'ultimo momento per correggerlo, e svuotarlo lo toglie. `←` `→` muovono
+il cursore dentro al testo, `shift+invio` va a capo, `ctrl+↑` `ctrl+↓` spostano il prompt su e
+giù, `ctrl+canc` lo toglie — backspace resta per correggere una lettera. In fondo c'è sempre il
+posto per accodarne uno nuovo, ed è lì che la schermata si apre. Esc torna all'albero, dove
 l'avevi lasciato.
+
+Il prompt che partirà per primo è **arancione**: con uno stop o un salta di mezzo non è per
+forza il primo dell'elenco, e un colore si vede senza doverlo leggere.
 
 Due interruttori decidono cosa parte davvero, e sono diversi apposta:
 
