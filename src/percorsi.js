@@ -29,10 +29,15 @@ export function sessioneDaPercorso(percorso) {
 // percorso: path del .jsonl
 // ritorna: uuid della radice, o null
 async function radiceDi(percorso) {
-  const rl = readline.createInterface({
-    input: fs.createReadStream(percorso, { encoding: 'utf8' }),
-    crlfDelay: Infinity,
-  });
+  // Lo stream si tiene da parte per poterlo chiudere: `rl.close()` chiude
+  // l'interfaccia di readline, **non** il file sotto. Uscendo presto — e qui si
+  // esce presto sempre, appena trovata la radice — il descrittore resterebbe
+  // aperto fino a quando il garbage collector non ci arriva. Su Linux e macOS
+  // passa inosservato; su Windows un file con un handle aperto non si puo'
+  // riscrivere (EPERM), e questa funzione gira su **ogni** transcript della
+  // cartella, per ogni progetto scandito dall'indice globale.
+  const flusso = fs.createReadStream(percorso, { encoding: 'utf8' });
+  const rl = readline.createInterface({ input: flusso, crlfDelay: Infinity });
 
   try {
     let esaminate = 0;
@@ -49,6 +54,7 @@ async function radiceDi(percorso) {
     }
   } finally {
     rl.close();
+    flusso.destroy();
   }
   return null;
 }
