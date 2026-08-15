@@ -114,13 +114,20 @@ export function commitDelPunto(commit, uuid, istante) {
 // indietro): allora si risolve la cartella, che c'e', e le si riattacca il nome.
 // Se non si risolve niente si restituisce il percorso di partenza, che e' quanto
 // si faceva prima.
+//
+// Si usa la variante **nativa**: `realpathSync` risolve i collegamenti ma lascia
+// i nomi in formato 8.3 (`RUNNER~1`) come li trova, e quelli non combaciano col
+// nome lungo che restituisce git. `realpathSync.native` chiede il percorso
+// canonico al sistema, nome lungo compreso. E' il caso che teneva rossa la CI su
+// Windows anche dopo aver sistemato macOS.
 // ritorna: percorso risolto
 function reale(percorso) {
+  const risolvi = fs.realpathSync.native ?? fs.realpathSync;
   try {
-    return fs.realpathSync(percorso);
+    return risolvi(percorso);
   } catch {
     try {
-      return path.join(fs.realpathSync(path.dirname(percorso)), path.basename(percorso));
+      return path.join(risolvi(path.dirname(percorso)), path.basename(percorso));
     } catch {
       return percorso;
     }
