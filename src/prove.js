@@ -29,7 +29,17 @@ for (const nome of prove) {
   console.log(`\n── ${nome}`);
   const esito = spawnSync(process.execPath, [path.join(cartella, nome)], {
     stdio: 'inherit',
-    env: { ...process.env, CB_LINGUA: 'it' },
+    env: {
+      ...process.env,
+      CB_LINGUA: 'it',
+      // Stessa ragione della lingua: l'ambiente non deve decidere l'esito. Il
+      // costruttore del Wrapper risolve l'eseguibile di Claude, quindi ogni prova
+      // che ne crea uno pretendeva Claude Code installato — vero sulla macchina di
+      // chi scrive, falso su una CI, dove le prove morivano con «eseguibile non
+      // trovato». Le prove non lo lanciano mai (il pty e' finto): basta che il
+      // percorso esista, e node c'e' sempre. Chi ne ha uno vero lo tiene.
+      CB_CLAUDE_EXE: process.env.CB_CLAUDE_EXE ?? process.execPath,
+    },
   });
   if (esito.status !== 0) {
     console.error(`\n${nome}: prove fallite`);

@@ -138,8 +138,49 @@ function testRipiegoPerIlRipristino() {
   assert.equal(typeof ripiego, 'function', 'in un repo con i commit il ripiego c e');
   assert.equal(ripiego(file).toString(), 'versione del turno', 'e restituisce il file di quel turno');
   assert.equal(ripiego(path.join(b.repo, 'mai-esistito.js')), null, 'un file che non c era da null');
-  assert.equal(ripiego('C:\\altrove\\fuori.js'), null, 'e fuori dal repo non si azzarda');
+  // Il percorso di fuori si costruisce, non si scrive a mano: `C:\altrove\...`
+  // su Linux non e' un percorso assoluto ma un nome di file con dentro delle
+  // barre rovesce, quindi li' la prova passava per il motivo sbagliato.
+  assert.equal(ripiego(path.join(os.tmpdir(), 'altrove', 'fuori.js')), null, 'e fuori dal repo non si azzarda');
 
+  b.pulisci();
+}
+
+// La radice del repo la dice git, che risponde sempre col percorso reale; il
+// percorso del file arriva invece da chi chiama, cosi' com'e'. Se uno dei due
+// passa per un collegamento i due non combaciano, `path.relative` esce con `..`,
+// e il ripiego si spegne da solo senza dire niente. E' come falliva su macOS, dove
+// la cartella temporanea sta sotto `/var`, che e' un link a `/private/var`.
+//
+// Il collegamento e' una junction: su Windows un symlink di cartella vuole i
+// privilegi di amministratore, una junction no, e altrove il tipo viene ignorato.
+function testUnCollegamentoNonSpegneIlRipiego() {
+  const b = repoDiProva('link');
+  const file = path.join(b.repo, 'app.js');
+  fs.writeFileSync(file, 'versione del turno', 'utf8');
+  b.salva('sess-5555', 'uuid-uno', '2026-07-30T10:00:00Z');
+  fs.writeFileSync(file, 'versione di adesso', 'utf8');
+
+  const nido = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-commit-link-'));
+  const collegamento = path.join(nido, 'verso-il-repo');
+  fs.symlinkSync(b.repo, collegamento, 'junction');
+
+  const ripiego = ripiegoDaiCommit(collegamento, 'uuid-uno', Date.parse('2026-07-30T10:00:00Z'));
+  assert.equal(typeof ripiego, 'function', 'il repo si trova anche attraverso il collegamento');
+  assert.equal(
+    ripiego(path.join(collegamento, 'app.js')).toString(),
+    'versione del turno',
+    'e il file si legge col percorso che passa per il collegamento',
+  );
+
+  // Si toglie il collegamento, non cio' a cui punta: unlink basta ovunque tranne
+  // su Windows, dove una junction si leva con rmdir.
+  try {
+    fs.unlinkSync(collegamento);
+  } catch {
+    fs.rmdirSync(collegamento);
+  }
+  fs.rmSync(nido, { recursive: true, force: true });
   b.pulisci();
 }
 
@@ -161,6 +202,7 @@ const prove = [
   testUuidTrovaIlCommitEsatto,
   testSenzaUuidSiRipiegaSullIstante,
   testRipiegoPerIlRipristino,
+  testUnCollegamentoNonSpegneIlRipiego,
   testFuoriDaGitONonInstallato,
 ];
 

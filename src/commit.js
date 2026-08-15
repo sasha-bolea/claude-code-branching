@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 
 // Lettura dei commit automatici scritti dall'hook `Stop` (hooks/cb-commit.ps1).
@@ -99,13 +100,40 @@ export function commitDelPunto(commit, uuid, istante) {
   return precedente?.hash ?? null;
 }
 
+// Il percorso con i collegamenti risolti, per poterne confrontare due.
+//
+// La radice del repo la dice git (`rev-parse --show-toplevel`), che risponde
+// sempre col percorso reale; il percorso del file arriva invece da chi chiama,
+// cosi' com'e'. Se uno dei due passa per un collegamento, `path.relative` fra i
+// due esce con `..` e il file sembra stare fuori dal repo: il ripiego dai commit
+// si spegne da solo, senza dire niente. Non e' un caso di laboratorio — su macOS
+// la cartella temporanea sta sotto `/var`, che e' un link a `/private/var`, e su
+// Windows un percorso in formato 8.3 (`RUNNER~1`) non combacia col nome lungo.
+//
+// Il file puo' non esistere piu' (un ripristino serve proprio a riportarlo
+// indietro): allora si risolve la cartella, che c'e', e le si riattacca il nome.
+// Se non si risolve niente si restituisce il percorso di partenza, che e' quanto
+// si faceva prima.
+// ritorna: percorso risolto
+function reale(percorso) {
+  try {
+    return fs.realpathSync(percorso);
+  } catch {
+    try {
+      return path.join(fs.realpathSync(path.dirname(percorso)), path.basename(percorso));
+    } catch {
+      return percorso;
+    }
+  }
+}
+
 // Contenuto di un file come stava in un commit.
 // radice: radice del repo
 // hash: commit da cui leggere
 // percorso: percorso assoluto del file
 // ritorna: Buffer, o null se il file non era nel commit o sta fuori dal repo
 export function contenutoDaCommit(radice, hash, percorso) {
-  const relativo = path.relative(radice, percorso).replace(/\\/g, '/');
+  const relativo = path.relative(reale(radice), reale(percorso)).replace(/\\/g, '/');
   if (!relativo || relativo.startsWith('..')) return null;
   return git(['-C', radice, 'show', `${hash}:${relativo}`], { grezzo: true });
 }
