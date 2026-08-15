@@ -743,8 +743,6 @@ npm test
   terminal or by a build are not in the archive: restoring a point gives you a mixed tree.
   Automatic commits cover everything, but today they only serve as a fallback for expired
   copies.
-- **No cleanup**: cb's archive of copies, the `refs/cb/*` refs and the truncated sessions
-  created at every branch switch pile up with no expiry.
 - **No way to look inside the archives**: no preview of what will change, no undo. The
   restore is not atomic: if a write fails halfway, the tree stays mixed.
 - Stealing `Esc Esc` costs 300 ms of delay on a single Esc (the interrupt), and replaces the

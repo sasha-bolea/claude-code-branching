@@ -744,8 +744,6 @@ npm test
   altro terminale o da una build non sono nell'archivio: ripristinando un punto ottieni un
   albero misto. I commit automatici coprono tutto, ma oggi servono solo da ripiego per le
   copie scadute.
-- **Nessuna pulizia**: l'archivio delle copie di cb, i ref `refs/cb/*` e le sessioni troncate
-  create a ogni cambio ramo si accumulano senza scadenza.
 - **Nessun modo di guardare dentro agli archivi**: niente anteprima di cosa cambierà, niente
   annulla. Il ripristino non è atomico: se una scrittura fallisce a metà, l'albero resta misto.
 - Rubare `Esc Esc` costa 300 ms di ritardo su un Esc singolo (l'interruzione), e sostituisce
