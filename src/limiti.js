@@ -75,6 +75,18 @@ export function istanteReset(limiti, adesso = Date.now()) {
   return ms > adesso ? ms : null;
 }
 
+// L'ora del reset come si legge a schermo, nel fuso di chi guarda.
+//
+// Solo l'ora e i minuti: la finestra e' di cinque ore, quindi il giorno non serve
+// mai, e una data intera in una riga di stato ruba spazio a quello che cambia.
+// ritorna: 'HH:MM', o null se non c'e' un reset da aspettare
+export function oraReset(limiti, adesso = Date.now()) {
+  const quando = istanteReset(limiti, adesso);
+  if (quando === null) return null;
+  const data = new Date(quando);
+  return `${String(data.getHours()).padStart(2, '0')}:${String(data.getMinutes()).padStart(2, '0')}`;
+}
+
 // Quanto manca al reset, in millisecondi, con un tetto.
 //
 // Il tetto serve perche' `setTimeout` sopra i 2^31-1 ms scatta subito (il numero

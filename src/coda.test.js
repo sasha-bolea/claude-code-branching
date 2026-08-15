@@ -168,6 +168,40 @@ function testCommutaESposta() {
   );
 }
 
+// Una coda ferma per i token e una coda che non parte si assomigliano troppo: se
+// la schermata non lo dice, si legge come un guasto. L'ora del reset e' la meta'
+// che conta — «in pausa» da solo non dice per quanto.
+function testLaPausaPerITokenSiVede() {
+  const voci = (...testi) => testi.map((t) => ({ testo: t, stop: false, salta: false }));
+  const stato = { prompt: voci('primo', 'secondo'), indice: 2, testo: '' };
+
+  const senza = disegnaCoda(stato, { colonne: 100, altezza: 20 }).join('\n');
+  assert.doesNotMatch(senza, /in pausa/, 'senza limiti non si annuncia niente');
+
+  const con = disegnaCoda({ ...stato, pausaFino: '14:30' }, { colonne: 100, altezza: 20 }).join('\n');
+  assert.match(con, /in pausa/, 'in pausa lo dice');
+  assert.match(con, /14:30/, 'e dice a che ora riprende');
+  assert.match(con, /2 prompt in attesa/, 'senza perdere il conto dei prompt');
+
+  // Anche a coda vuota: e' il caso in cui al reset partira' «continue», e
+  // saperlo prima e' l'unico modo di non trovarselo addosso.
+  const vuota = disegnaCoda(
+    { prompt: [], indice: 0, testo: '', pausaFino: '09:05' },
+    { colonne: 100, altezza: 20 },
+  ).join('\n');
+  assert.match(vuota, /09:05/, 'lo dice anche a coda vuota');
+
+  // Su un terminale stretto la riga si accorcia, ma l'ora resta: era proprio la
+  // coda della riga a essere tagliata, cioe' l'unica cosa che l'avviso deve dire.
+  // Colto guardando la schermata, non da una prova: a 56 colonne si leggeva
+  // «riprendo» e basta.
+  const stretta = disegnaCoda({ ...stato, pausaFino: '14:30' }, { colonne: 56, altezza: 20 });
+  assert.match(stretta.join('\n'), /14:30/, 'anche stretta dice a che ora riprende');
+  for (const riga of stretta) {
+    assert.ok(riga.length <= 56, `nessuna riga eccede il terminale: «${riga}»`);
+  }
+}
+
 function testDisegno() {
   const voci = (...testi) => testi.map((t) => ({ testo: t, stop: false, salta: false }));
 
@@ -598,6 +632,7 @@ const prove = [
   testStopESaltaDecidonoChiParte,
   testCommutaESposta,
   testDisegno,
+  testLaPausaPerITokenSiVede,
   testCicloDeiTasti,
   testUnCtrlDaSoloNonRidisegna,
   testF1ApreLeIstruzioniELaISeneResta,

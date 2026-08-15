@@ -190,6 +190,15 @@ with CB_LINGUA (en, it).
     sottotitolo: 'they go out one at a time, when Claude finishes a turn',
     vuota: 'the queue is empty: write below and press enter',
     quanti: (n) => (n === 1 ? '1 prompt waiting' : `${n} prompts waiting`),
+    // La pausa per i token va detta qui e non solo nel diagnosi.log: una coda
+    // ferma e una coda che non parte si assomigliano troppo, e senza l'ora del
+    // reset si finisce per credere che sia rotta.
+    // Due varianti, dalla piu' lunga alla piu' corta, come le legende: su un
+    // terminale stretto a essere tagliata era la **coda** della riga, cioe'
+    // proprio l'ora — e «in pausa» senza un «fino a quando» dice meno di niente.
+    // Il glifo e' `‖` e non un'emoji: un terminale che le rende a doppia
+    // larghezza sfaserebbe la riga di una colonna.
+    inPausa: (ora) => [`paused · out of tokens, resuming at ${ora}`, `‖ ${ora}`],
     // Il posto in fondo resta annunciato anche quando il cursore sta su un
     // altro prompt: senza, l'elenco sembrerebbe finire con l'ultimo. Dice cosa
     // ci si fa — accodare — e non come si chiama la riga.
@@ -311,28 +320,40 @@ with CB_LINGUA (en, it).
   // src/cartelle.js — selettore della cartella di lavoro
   cartelle: {
     legende: [
-      '↑↓ scroll   →← open/close   space open/close   r switch mode   enter confirm   i help   esc back   canc exit',
-      '↑↓ scroll  →← open/close  space open/close  r switch mode  enter confirm  i help  esc back  canc exit',
-      '↑↓ scroll  →← open/close  r mode  enter ok  i help  esc back  canc exit',
-      '↑↓ →←  r mode  enter ok  i help  esc back  canc exit',
+      '↑↓ scroll   →← open/close   space open/close   r switch mode   enter confirm   i help   + new folder   esc back   canc exit',
+      '↑↓ scroll  →← open/close  space open/close  r switch mode  enter confirm  i help  + new folder  esc back  canc exit',
+      '↑↓ scroll  →← open/close  r mode  enter ok  i help  + new folder  esc back  canc exit',
+      '↑↓ →←  r mode  enter ok  i help  + new folder  esc back  canc exit',
       // Ogni lettera singola apre la propria voce: in mezzo ad altri tasti non
       // si colora, perche' li' una lettera sola e' una parola (vedi coloraTasti).
-      '↑↓ →← enter  r mode  i help  esc back  canc exit',
-      '↑↓ →← enter  r mode  i  esc back  canc exit',
+      '↑↓ →← enter  r mode  i help  + new folder  esc back  canc exit',
+      '↑↓ →← enter  r mode  i  + new folder  esc back  canc exit',
     ],
     // Con almeno un profilo configurato: `m` lo alterna, come `r` fa col modo.
     legendeConProfilo: [
-      '↑↓ scroll   →← open/close   r switch mode   m profile   enter confirm   i help   esc back   canc exit',
-      '↑↓ scroll  →← open/close  r switch mode  m profile  enter confirm  i help  esc back  canc exit',
-      '↑↓ scroll  →← open/close  r mode  m profile  enter ok  i help  esc back  canc exit',
-      '↑↓ →←  r mode  m profile  enter ok  i help  esc back  canc exit',
-      '↑↓ →← enter  r mode  m profile  i help  esc back  canc exit',
-      '↑↓ →← enter  r mode  m profile  i  esc back  canc exit',
+      '↑↓ scroll   →← open/close   r switch mode   m profile   enter confirm   i help   + new folder   esc back   canc exit',
+      '↑↓ scroll  →← open/close  r switch mode  m profile  enter confirm  i help  + new folder  esc back  canc exit',
+      '↑↓ scroll  →← open/close  r mode  m profile  enter ok  i help  + new folder  esc back  canc exit',
+      '↑↓ →←  r mode  m profile  enter ok  i help  + new folder  esc back  canc exit',
+      '↑↓ →← enter  r mode  m profile  i help  + new folder  esc back  canc exit',
+      '↑↓ →← enter  r mode  m profile  i  + new folder  esc back  canc exit',
     ],
     titolo: '  Working folder for Claude',
     modoRipresa: 'resume a conversation (-r)',
     modoNormale: 'normal start',
     conProfilo: (nome) => `profile: ${nome}`,
+    // Cartella nuova: si scrive il nome in un campo sotto l'albero, dentro alla
+    // cartella scelta. Il nome del genitore si dice, o non si saprebbe dove
+    // finisce quella che stai creando.
+    nuovaIn: (cartella) => `new folder in ${cartella}: `,
+    nuovaLegende: [
+      'type the name   enter creates it   f1 help   esc never mind',
+      'type the name   enter creates it   esc never mind',
+      'enter creates it   esc never mind',
+    ],
+    // Il nome non va bene: si dice **perche'**, invece di non fare niente.
+    nomeNonValido: 'a name cannot contain  \\ / : * ? " < > |  nor be . or ..',
+    nuovaNonCreata: (motivo) => `cannot create it: ${motivo}`,
   },
 
   // src/conversazioni.js — selettore delle conversazioni passate
@@ -564,6 +585,9 @@ with CB_LINGUA (en, it).
         '  space  opens and closes, like the arrows',
         '  r  switches between resuming a conversation and starting fresh',
         '  m  picks the profile to run Claude under',
+        '  +  makes a folder inside the chosen one: type the name, enter creates',
+        '  it. Once made the cursor moves onto it — but it is not picked yet:',
+        '  that still takes enter.',
         '  enter  confirm the folder',
         '  i/f1  this help',
         '  esc  back',
@@ -889,6 +913,15 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     sottotitolo: 'partono uno alla volta, quando Claude finisce un turno',
     vuota: 'la coda è vuota: scrivi qui sotto e premi invio',
     quanti: (n) => (n === 1 ? '1 prompt in attesa' : `${n} prompt in attesa`),
+    // La pausa per i token va detta qui e non solo nel diagnosi.log: una coda
+    // ferma e una coda che non parte si assomigliano troppo, e senza l'ora del
+    // reset si finisce per credere che sia rotta.
+    // Due varianti, dalla piu' lunga alla piu' corta, come le legende: su un
+    // terminale stretto a essere tagliata era la **coda** della riga, cioe'
+    // proprio l'ora — e «in pausa» senza un «fino a quando» dice meno di niente.
+    // Il glifo e' `‖` e non un'emoji: un terminale che le rende a doppia
+    // larghezza sfaserebbe la riga di una colonna.
+    inPausa: (ora) => [`in pausa · token finiti, riprendo alle ${ora}`, `‖ ${ora}`],
     // Il posto in fondo resta annunciato anche quando il cursore sta su un
     // altro prompt: senza, l'elenco sembrerebbe finire con l'ultimo. Dice cosa
     // ci si fa — accodare — e non come si chiama la riga.
@@ -1012,28 +1045,40 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
 
   cartelle: {
     legende: [
-      '↑↓ scorri   →← apri/chiudi   spazio apri/chiudi   r cambia modo   invio conferma   i istruzioni   esc indietro   canc esci',
-      '↑↓ scorri  →← apri/chiudi  spazio apri/chiudi  r cambia modo  invio conferma  i istruzioni  esc indietro  canc esci',
-      '↑↓ scorri  →← apri/chiudi  r modo  invio ok  i istruzioni  esc indietro  canc esci',
-      '↑↓ →←  r modo  invio ok  i istruzioni  esc indietro  canc esci',
+      '↑↓ scorri   →← apri/chiudi   spazio apri/chiudi   r cambia modo   invio conferma   i istruzioni   + cartella nuova   esc indietro   canc esci',
+      '↑↓ scorri  →← apri/chiudi  spazio apri/chiudi  r cambia modo  invio conferma  i istruzioni  + cartella nuova  esc indietro  canc esci',
+      '↑↓ scorri  →← apri/chiudi  r modo  invio ok  i istruzioni  + cartella nuova  esc indietro  canc esci',
+      '↑↓ →←  r modo  invio ok  i istruzioni  + cartella nuova  esc indietro  canc esci',
       // Ogni lettera singola apre la propria voce: in mezzo ad altri tasti non
       // si colora, perche' li' una lettera sola e' una parola (vedi coloraTasti).
-      '↑↓ →← invio  r modo  i istruzioni  esc indietro  canc esci',
-      '↑↓ →← invio  r modo  i  esc indietro  canc esci',
+      '↑↓ →← invio  r modo  i istruzioni  + cartella nuova  esc indietro  canc esci',
+      '↑↓ →← invio  r modo  i  + cartella nuova  esc indietro  canc esci',
     ],
     // Con almeno un profilo configurato: `m` lo alterna, come `r` fa col modo.
     legendeConProfilo: [
-      '↑↓ scorri   →← apri/chiudi   r cambia modo   m profilo   invio conferma   i istruzioni   esc indietro   canc esci',
-      '↑↓ scorri  →← apri/chiudi  r cambia modo  m profilo  invio conferma  i istruzioni  esc indietro  canc esci',
-      '↑↓ scorri  →← apri/chiudi  r modo  m profilo  invio ok  i istruzioni  esc indietro  canc esci',
-      '↑↓ →←  r modo  m profilo  invio ok  i istruzioni  esc indietro  canc esci',
-      '↑↓ →← invio  r modo  m profilo  i istruzioni  esc indietro  canc esci',
-      '↑↓ →← invio  r modo  m profilo  i  esc indietro  canc esci',
+      '↑↓ scorri   →← apri/chiudi   r cambia modo   m profilo   invio conferma   i istruzioni   + cartella nuova   esc indietro   canc esci',
+      '↑↓ scorri  →← apri/chiudi  r cambia modo  m profilo  invio conferma  i istruzioni  + cartella nuova  esc indietro  canc esci',
+      '↑↓ scorri  →← apri/chiudi  r modo  m profilo  invio ok  i istruzioni  + cartella nuova  esc indietro  canc esci',
+      '↑↓ →←  r modo  m profilo  invio ok  i istruzioni  + cartella nuova  esc indietro  canc esci',
+      '↑↓ →← invio  r modo  m profilo  i istruzioni  + cartella nuova  esc indietro  canc esci',
+      '↑↓ →← invio  r modo  m profilo  i  + cartella nuova  esc indietro  canc esci',
     ],
     titolo: '  Cartella di lavoro per Claude',
     modoRipresa: 'ripresa della conversazione (-r)',
     modoNormale: 'avvio normale',
     conProfilo: (nome) => `profilo: ${nome}`,
+    // Cartella nuova: si scrive il nome in un campo sotto l'albero, dentro alla
+    // cartella scelta. Il nome del genitore si dice, o non si saprebbe dove
+    // finisce quella che stai creando.
+    nuovaIn: (cartella) => `cartella nuova in ${cartella}: `,
+    nuovaLegende: [
+      'scrivi il nome   invio crea   f1 istruzioni   esc lascia perdere',
+      'scrivi il nome   invio crea   esc lascia perdere',
+      'invio crea   esc lascia perdere',
+    ],
+    // Il nome non va bene: si dice **perche'**, invece di non fare niente.
+    nomeNonValido: 'nel nome non ci vanno  \\ / : * ? " < > |  né . o ..',
+    nuovaNonCreata: (motivo) => `non riesco a crearla: ${motivo}`,
   },
 
   conversazioni: {
@@ -1266,6 +1311,9 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
         '  spazio  apre e chiude, come le frecce',
         '  r  alterna la ripresa di una conversazione e l\'avvio da zero',
         '  m  sceglie il profilo con cui far girare Claude',
+        '  +  crea una cartella dentro quella scelta: si scrive il nome e invio',
+        '  la fa. Creata, il cursore ci va sopra — ma non è ancora scelta:',
+        '  per quello serve invio.',
         '  invio  conferma la cartella',
         '  i/f1  queste istruzioni',
         '  esc  torna indietro',
