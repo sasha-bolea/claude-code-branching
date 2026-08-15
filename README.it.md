@@ -767,10 +767,10 @@ npm test
 ## Sostenere il progetto
 
 cb è gratuito, MIT, e scritto la sera. Se ti ha restituito una conversazione che davi per
-persa, [sponsorizzarlo](https://github.com/sponsors/sasha-bolea) è ciò che lo tiene al passo
-con un CLI che cambia ogni settimana.
+persa, una stella sul repo non costa niente ed è ciò che permette agli altri di trovarlo.
 
-Una stella sul repo non costa niente, ed è ciò che permette agli altri di trovarlo.
+Una segnalazione di bug vale più di una stella, però — soprattutto su macOS e Linux, dove le
+prove passano ma nessuno ci ha ancora fatto girare un terminale vero.
 
 ## Licenza
 

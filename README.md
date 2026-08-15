@@ -765,10 +765,10 @@ npm test
 ## Support the project
 
 cb is free, MIT, and built in the evenings. If it saved you a conversation you thought you
-had lost, [sponsoring it](https://github.com/sponsors/sasha-bolea) keeps it maintained
-against a CLI that changes every week.
+had lost, a star on the repo costs nothing and is what makes other people find it.
 
-A star on the repo costs nothing and is what makes other people find it.
+Bug reports are worth more than a star, though — especially on macOS and Linux, where the
+tests pass but nobody has driven a real terminal through it yet.
 
 ## License
 
