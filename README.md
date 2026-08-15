@@ -1,5 +1,9 @@
 # cb
 
+[![npm](https://img.shields.io/npm/v/claude-code-branching)](https://www.npmjs.com/package/claude-code-branching)
+[![downloads](https://img.shields.io/npm/dm/claude-code-branching)](https://www.npmjs.com/package/claude-code-branching)
+[![license](https://img.shields.io/npm/l/claude-code-branching)](LICENSE)
+
 *[Italiano](README.it.md)*
 
 Branching for Claude Code conversations: the tree of a conversation's branches, a global
@@ -195,6 +199,13 @@ The same two screens reopen from inside a running session: press `c` — from th
 from the notice you get when there is no transcript yet. It lands on the folder navigator,
 and `r` there switches between resuming a conversation and starting a new one. So you change
 conversation, change project, or start over, without closing Claude.
+
+**`+` makes a folder** inside the chosen one: type the name, enter creates it. The cursor moves
+onto it, but picking it stays a separate gesture — that still takes enter. A name you cannot use
+(containing `\ / : * ? " < > |`, or `.` and `..`) is not refused in silence: the field stays open
+and says what is wrong, so you fix it instead of retyping it. A folder that already exists is not
+an error: the cursor just moves there. It is for starting a new project without leaving Claude to
+run a `mkdir`.
 
 If `CB_CARTELLA_SCELTA` points to a file, cb writes the chosen folder into it: whoever
 launched cb can read it on exit and move there (a child process cannot change the current
@@ -745,6 +756,14 @@ npm test
   not the horizontal tree.
 - `node-pty` needs Claude's native binary, not the npm shim. `cb` looks for it on its own
   (explicit paths first, then your `PATH`); if your install is unusual, set `CB_CLAUDE_EXE`.
+
+## Support the project
+
+cb is free, MIT, and built in the evenings. If it saved you a conversation you thought you
+had lost, [sponsoring it](https://github.com/sponsors/sasha-bolea) keeps it maintained
+against a CLI that changes every week.
+
+A star on the repo costs nothing and is what makes other people find it.
 
 ## License
 

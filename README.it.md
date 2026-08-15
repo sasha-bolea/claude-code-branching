@@ -1,5 +1,9 @@
 # cb
 
+[![npm](https://img.shields.io/npm/v/claude-code-branching)](https://www.npmjs.com/package/claude-code-branching)
+[![downloads](https://img.shields.io/npm/dm/claude-code-branching)](https://www.npmjs.com/package/claude-code-branching)
+[![license](https://img.shields.io/npm/l/claude-code-branching)](LICENSE)
+
 *[English](README.md)*
 
 Branching per conversazioni Claude Code: albero dei rami, catalogo globale, ripresa da
@@ -194,6 +198,13 @@ Le stesse due schermate si riaprono a sessione avviata premendo `c` — dall'alb
 dall'avviso che compare quando un transcript ancora non c'è. Porta al navigatore delle
 cartelle, e lì `r` alterna la ripresa di una conversazione e l'avvio di una nuova. Così
 si cambia conversazione, si cambia progetto o si riparte da zero senza chiudere Claude.
+
+**`+` crea una cartella** dentro quella scelta: si scrive il nome, invio la fa. Il cursore ci
+va sopra, ma sceglierla resta un gesto a parte — per quello serve invio. Un nome che non si può
+usare (con dentro `\ / : * ? " < > |`, oppure `.` e `..`) non viene rifiutato in silenzio: il
+campo resta aperto e dice cosa non va, così lo correggi invece di riscriverlo. Una cartella che
+esiste già non è un errore: il cursore ci si sposta e basta. Serve per cominciare un progetto
+nuovo senza uscire da Claude per fare un `mkdir`.
 
 Se la variabile `CB_CARTELLA_SCELTA` punta a un file, cb ci scrive la cartella scelta: chi
 lancia cb può leggerla all'uscita e spostarcisi (un processo figlio non può cambiare la
@@ -747,6 +758,14 @@ npm test
 - `node-pty` richiede il binario nativo di Claude, non lo shim npm. `cb` lo cerca da sé
   (prima i percorsi noti, poi il `PATH`); se l'installazione non è standard, imposta
   `CB_CLAUDE_EXE`.
+
+## Sostenere il progetto
+
+cb è gratuito, MIT, e scritto la sera. Se ti ha restituito una conversazione che davi per
+persa, [sponsorizzarlo](https://github.com/sponsors/sasha-bolea) è ciò che lo tiene al passo
+con un CLI che cambia ogni settimana.
+
+Una stella sul repo non costa niente, ed è ciò che permette agli altri di trovarlo.
 
 ## Licenza
 
