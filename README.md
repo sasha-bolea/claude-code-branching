@@ -192,6 +192,8 @@ cb --version            version number
 | `CB_CARTELLA_SCELTA` | file where cb writes the folder you picked, for the calling shell |
 | `CB_IMPOSTAZIONI` | path of the settings file, if you want it somewhere else |
 | `CB_GIORNI_PULIZIA` | age in days of what the automatic cleanup removes (default `60`, `0` turns it off) |
+| `CB_SOGLIA_LIMITE` | percentage of the 5-hour window past which the queue pauses (default `95`) |
+| `CB_LIMITI` | path of the file where the statusline saves the usage limits |
 
 Order of precedence, for all of them: **environment variable → settings file → default.**
 
@@ -384,6 +386,44 @@ along, and what you wrote follows you.
 
 The hook `hooks/cb-coda.ps1` (below) is only there to make the queue work **outside** cb, in a
 Claude session you started by hand.
+
+#### Running out of tokens
+
+A long queue and a five-hour window do not always fit together. Left alone, the queue keeps
+firing until the window closes, and the prompt that was in flight dies half-answered — spent,
+without having done anything.
+
+If cb knows how much of the window is left, it stops the queue **before** that happens, waits
+for the reset, and then picks up where it was. A prompt that was already delivered but never
+got its answer goes back to the **top** of the queue: it was next, and the order is the only
+thing a queue promises. If the queue is empty at that point, cb sends `continue` instead — the
+work is still in the context, and that is the word that resumes it without adding a request
+you never made.
+
+It cannot stop *you* from typing, only the queue. The queue is the part that runs by itself,
+which is also the only part that can burn a window while you are away from the keyboard.
+
+**It needs one line in your statusline**, because that is the only place Claude Code publishes
+this: the JSON it pipes to the statusline command carries `rate_limits.five_hour`, with
+`used_percentage` and `resets_at`. It is not in the transcript, and cb never reads the screen.
+So whoever writes your statusline saves those two numbers where cb looks:
+
+```powershell
+# In your statusline script, after you have parsed the JSON into $j:
+$cbDir = Join-Path $env:USERPROFILE '.claude\cb'
+if (-not (Test-Path $cbDir)) { New-Item -ItemType Directory -Force $cbDir | Out-Null }
+$dest = Join-Path $cbDir 'limiti.json'; $tmp = "$dest.tmp"
+@{
+    cinqueOre = @{ usato   = $j.rate_limits.five_hour.used_percentage
+                   resetIl = $j.rate_limits.five_hour.resets_at }
+} | ConvertTo-Json -Compress | Set-Content $tmp -Encoding UTF8
+Move-Item $tmp $dest -Force        # atomic: cb may read mid-write
+```
+
+Without that file the feature is simply off, and the queue behaves exactly as it did before.
+`CB_SOGLIA_LIMITE` moves the threshold, which defaults to **95%** — not 100, because between
+the last statusline refresh and the prompt going out there is always some slack, and a turn
+that starts at 99% dies halfway.
 
 ### Notes
 

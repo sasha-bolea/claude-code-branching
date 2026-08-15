@@ -11,9 +11,27 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 
 process.env.CB_CODA = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-consegna-'));
+process.env.CB_LIMITI = path.join(process.env.CB_CODA, 'limiti.json');
 
 const { Wrapper } = await import('./wrapper.js');
 const { scriviCoda, leggiCoda } = await import('./coda.js');
+
+// Scrive i limiti come li scriverebbe la statusline. `usato` in percentuale,
+// `fraMinuti` quanto manca al reset — null cancella il file, cioe' la statusline
+// non e' agganciata e la funzione e' spenta.
+function limiti(usato, fraMinuti = 90) {
+  if (usato === null) {
+    fs.rmSync(process.env.CB_LIMITI, { force: true });
+    return;
+  }
+  fs.writeFileSync(
+    process.env.CB_LIMITI,
+    JSON.stringify({
+      cinqueOre: { usato, resetIl: Math.floor(Date.now() / 1000) + fraMinuti * 60 },
+    }),
+    'utf8',
+  );
+}
 
 // Il wrapper con un pty finto che registra cosa gli viene scritto: e' l'unica
 // cosa che conta qui, e non serve un terminale.
@@ -217,8 +235,109 @@ async function testLaNotaFinisceNellaBarraSenzaInvio() {
   assert.deepEqual(terza.tutto, [], 'tornando indietro la barra non si tocca');
 }
 
+// Coi token quasi finiti la coda si ferma: spendere quel che resta su un turno
+// che morira' a meta' non salva niente, e il prompt e' comunque speso.
+function testCoiTokenQuasiFinitiLaCodaSiFerma() {
+  const { wrapper, scritto } = wrapperFinto('l1');
+  scriviCoda('l1', ['non partire adesso']);
+
+  limiti(97);
+  wrapper.consegnaCoda();
+  assert.deepEqual(scritto, [], 'a serbatoio quasi vuoto non si consegna');
+  assert.deepEqual(testi('l1'), ['non partire adesso'], 'e il prompt resta in coda');
+
+  // Tornati sotto soglia — la finestra si e' resettata — riparte da sola.
+  limiti(10);
+  wrapper.consegnaCoda();
+  assert.deepEqual(scritto, ['non partire adesso\r'], 'con i token di nuovo pieni parte');
+
+  clearTimeout(wrapper.timerRisveglio);
+}
+
+// Senza il file dei limiti la funzione e' spenta: chi non aggancia la statusline
+// deve vedere cb comportarsi esattamente come prima.
+function testSenzaStatuslineNienteCambia() {
+  const { wrapper, scritto } = wrapperFinto('l2');
+  scriviCoda('l2', ['parti come sempre']);
+
+  limiti(null);
+  wrapper.consegnaCoda();
+  assert.deepEqual(scritto, ['parti come sempre\r'], 'senza limiti si consegna come prima');
+}
+
+// Un prompt consegnato che non ha fatto in tempo ad avere risposta torna in
+// **cima** alla coda: era il prossimo, e l'ordine e' l'unica cosa che la coda
+// promette. E' la parte che rende l'attesa indolore invece che una perdita.
+function testIlPromptRimastoSenzaRispostaTornaInCima() {
+  const { wrapper, scritto } = wrapperFinto('l3');
+  scriviCoda('l3', ['primo', 'secondo']);
+
+  limiti(10);
+  wrapper.consegnaCoda();
+  assert.deepEqual(scritto, ['primo\r'], 'il primo parte');
+  assert.deepEqual(testi('l3'), ['secondo'], 'e lascia la coda');
+
+  // I token finiscono mentre quel turno e' ancora in corso.
+  limiti(99);
+  wrapper.consegnaCoda();
+  assert.deepEqual(scritto, ['primo\r'], 'non parte nient altro');
+  assert.deepEqual(testi('l3'), ['primo', 'secondo'], 'e il primo e tornato in testa');
+
+  clearTimeout(wrapper.timerRisveglio);
+}
+
+// Se invece il turno si era chiuso normalmente, il prompt non torna: la conferma
+// e' il giro successivo passato senza sospensione.
+function testUnTurnoFinitoBeneNonRimandaIlPrompt() {
+  const { wrapper } = wrapperFinto('l4');
+  scriviCoda('l4', ['unico']);
+
+  limiti(10);
+  wrapper.consegnaCoda();
+  assert.deepEqual(testi('l4'), [], 'consegnato, la coda e vuota');
+
+  wrapper.consegnaCoda(); // giro a vuoto: il turno e' finito, niente da mandare
+  limiti(99);
+  wrapper.consegnaCoda(); // adesso i token finiscono, ma quel prompt e' andato
+  assert.deepEqual(testi('l4'), [], 'un prompt gia risposto non viene rimandato');
+
+  clearTimeout(wrapper.timerRisveglio);
+}
+
+// Al reset, con la coda vuota, si manda `continue`: il lavoro interrotto sta nel
+// contesto, e questa e' la parola che lo fa proseguire senza aggiungere richieste
+// che non erano state fatte.
+function testAlResetConCodaVuotaMandaContinue() {
+  const { wrapper, scritto } = wrapperFinto('l5');
+
+  limiti(10);
+  wrapper.risvegliaDopoIlReset();
+  assert.deepEqual(scritto, ['continue\r'], 'a coda vuota prosegue da solo');
+
+  clearTimeout(wrapper.timerRisveglio);
+}
+
+// Con qualcosa in coda, invece, si riprende da quella: e' quasi sempre cio' che
+// si vuole, e `continue` resta il ripiego.
+function testAlResetConCodaPienaRiprendeLaCoda() {
+  const { wrapper, scritto } = wrapperFinto('l6');
+  scriviCoda('l6', ['riprendi da qui']);
+
+  limiti(10);
+  wrapper.risvegliaDopoIlReset();
+  assert.deepEqual(scritto, ['riprendi da qui\r'], 'riparte dalla coda, non da continue');
+
+  clearTimeout(wrapper.timerRisveglio);
+}
+
 const prove = [
   testMandaIlPrimoQuandoClaudeEFermo,
+  testCoiTokenQuasiFinitiLaCodaSiFerma,
+  testSenzaStatuslineNienteCambia,
+  testIlPromptRimastoSenzaRispostaTornaInCima,
+  testUnTurnoFinitoBeneNonRimandaIlPrompt,
+  testAlResetConCodaVuotaMandaContinue,
+  testAlResetConCodaPienaRiprendeLaCoda,
   testNonInterrompeChiStaScrivendo,
   testConLOverlayApertoNonParte,
   testLaBarraSiSvuotaPrima,

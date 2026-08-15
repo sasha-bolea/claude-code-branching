@@ -36,6 +36,7 @@ Sasha, singolo sviluppatore.
 | `src/impostazioni.js` | Lettura/scrittura di `~/.claude/cb/impostazioni.json`, precedenza dei valori |
 | `src/profili.js` | Insiemi di variabili d'ambiente con un nome: rilancia Claude altrove senza uscire dalla conversazione |
 | `src/coda.js` | La coda dei prompt: si scrivono mentre Claude lavora, ne parte uno per turno |
+| `src/limiti.js` | I limiti d'uso letti dal file della statusline: soglia e istante del reset |
 | `src/note.js` | Le note della cartella di lavoro: le stesse in ogni sessione aperta lì dentro |
 | `src/campo.js` | Il cursore dentro un campo di testo: inserire, cancellare, muoversi, la finestra visibile |
 | `src/istruzioni.js` | La pagina di istruzioni di ogni schermata (`i`, `f1`), e la sua sovrapposizione |
@@ -413,6 +414,25 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   (`src/eseguibile.js`): i percorsi noti sono Windows, il `PATH` copre npm, homebrew e nvm
   altrove. Su Windows si cerca solo `claude.exe`, mai `claude`: quello è lo shim, che
   node-pty non lancia.
+- **I limiti d'uso stanno solo nella statusline.** Non sono nel transcript — verificato su una
+  sessione da 10 MB, dove non compaiono — e cb non legge lo schermo: l'unica fonte è il JSON
+  che il CLI passa sullo stdin del comando della statusline (`rate_limits.five_hour`, con
+  `used_percentage` e `resets_at` in secondi epoch). Quel comando lo esegue Claude, non cb,
+  quindi il ponte è un file (`~/.claude/cb/limiti.json`) che la statusline scrive e cb legge.
+  Va scritto in modo **atomico** (temporaneo + rinomina): la barra si ridisegna di continuo e
+  cb leggerebbe un JSON monco. Senza il file la funzione è spenta e la coda fa come prima —
+  un errore di lettura che bloccasse la coda sarebbe peggio del problema che risolve.
+- **La soglia dei token sta sotto il 100 apposta** (95%, `CB_SOGLIA_LIMITE`): fra l'ultimo
+  aggiornamento della barra e il prompt che parte c'è un margine, e un turno che comincia al
+  99% muore a metà — speso senza aver concluso niente. Ci si ferma **prima** di consegnare,
+  non dopo: fermarsi un attimo prima costa solo l'attesa, che ci sarebbe comunque.
+- **L'attesa del reset ha un tetto di sei ore.** `setTimeout` oltre 2^31-1 ms scatta *subito*,
+  perché il numero va in overflow e diventa negativo: un epoch sbagliato di anni nel file
+  trasformerebbe l'attesa in una sveglia immediata, cioè l'esatto contrario. La sveglia è
+  `unref`: restare vivi per un timer, con Claude chiuso, sarebbe solo un processo che non muore.
+- **Il prompt in volo torna in cima alla coda, non in fondo.** Era il prossimo, e l'ordine è
+  l'unica cosa che la coda promette. Se era andato a buon fine proprio mentre i token finivano
+  si rimanda una volta di troppo: un prompt ripetuto si vede e si cancella, uno perso no.
 - **La coda ha due strade di consegna, e dentro cb vince il pty.** L'hook `Stop` può solo
   rispondere `{"decision":"block","reason":<testo>}`: Claude non si ferma e riceve il testo,
   ma **come motivo del blocco**, non come record `user` — nel transcript non c'è un prompt,

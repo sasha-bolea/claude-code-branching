@@ -189,6 +189,8 @@ cb --version            numero di versione
 | `CB_CARTELLA_SCELTA` | file in cui cb scrive la cartella scelta, per la shell chiamante |
 | `CB_IMPOSTAZIONI` | percorso del file delle impostazioni, se lo vuoi altrove |
 | `CB_GIORNI_PULIZIA` | età in giorni di ciò che la pulizia automatica toglie (default `60`, con `0` si spegne) |
+| `CB_SOGLIA_LIMITE` | percentuale della finestra di 5 ore oltre cui la coda si mette in pausa (default `95`) |
+| `CB_LIMITI` | percorso del file in cui la statusline salva i limiti d'uso |
 
 Ordine di precedenza, per tutte: **variabile d'ambiente → file delle impostazioni → predefinito.**
 
@@ -385,6 +387,43 @@ da sola, e quello che avevi scritto ti segue.
 
 L'hook `hooks/cb-coda.ps1` (più sotto) serve solo a far funzionare la coda **fuori** da cb, in
 una sessione Claude lanciata a mano.
+
+#### Quando i token stanno per finire
+
+Una coda lunga e una finestra di cinque ore non sempre ci stanno insieme. Lasciata andare, la
+coda continua a sparare finché la finestra si chiude, e il prompt che era partito muore a metà
+risposta — speso, senza aver concluso niente.
+
+Se cb sa quanta finestra resta, ferma la coda **prima** che succeda, aspetta il reset e
+riprende da dov'era. Un prompt già consegnato ma rimasto senza risposta torna in **cima** alla
+coda: era il prossimo, e l'ordine è l'unica cosa che una coda promette. Se a quel punto la coda
+è vuota, cb manda `continue` — il lavoro è ancora nel contesto, ed è la parola che lo fa
+proseguire senza aggiungere richieste che non avevi fatto.
+
+Non può fermare **te** che scrivi, solo la coda. Ma la coda è la parte che va avanti da sola,
+cioè l'unica che può bruciare una finestra mentre non sei alla tastiera.
+
+**Serve una riga nella tua statusline**, perché è l'unico posto in cui Claude Code pubblica
+questo dato: il JSON che passa al comando della statusline porta `rate_limits.five_hour`, con
+`used_percentage` e `resets_at`. Nel transcript non c'è, e cb non legge mai lo schermo. Quindi
+chi scrive la statusline salva quei due numeri dove cb va a cercarli:
+
+```powershell
+# Nella tua statusline, dopo aver letto il JSON in $j:
+$cbDir = Join-Path $env:USERPROFILE '.claude\cb'
+if (-not (Test-Path $cbDir)) { New-Item -ItemType Directory -Force $cbDir | Out-Null }
+$dest = Join-Path $cbDir 'limiti.json'; $tmp = "$dest.tmp"
+@{
+    cinqueOre = @{ usato   = $j.rate_limits.five_hour.used_percentage
+                   resetIl = $j.rate_limits.five_hour.resets_at }
+} | ConvertTo-Json -Compress | Set-Content $tmp -Encoding UTF8
+Move-Item $tmp $dest -Force        # atomica: cb può leggere a metà scrittura
+```
+
+Senza quel file la funzione è semplicemente spenta, e la coda si comporta esattamente come
+prima. `CB_SOGLIA_LIMITE` sposta la soglia, che di suo sta al **95%** — non a 100, perché fra
+l'ultimo aggiornamento della barra e il prompt che parte c'è sempre un margine, e un turno che
+comincia al 99% muore a metà.
 
 ### Le note
 
