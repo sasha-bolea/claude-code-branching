@@ -10,7 +10,7 @@ Branching for Claude Code conversations: the tree of a conversation's branches, 
 catalogue of your sessions, and restarting from any message — including the branches you
 abandoned with a restore.
 
-![The tree of a conversation, with the restart menu open](https://raw.githubusercontent.com/sasha-bolea/claude-code-branching/master/assets/tree.png)
+![The four screens of cb: the branch tree, the restore menu, the prompt queue and the folder notes](https://raw.githubusercontent.com/sasha-bolea/claude-code-branching/master/assets/demo.svg)
 
 ## The problem
 
@@ -226,6 +226,8 @@ them), and `ctrl+s`/`ctrl+q` are the terminal's flow control — with those the 
 `<session>` accepts a full id, an id prefix, or the path of the `.jsonl`.
 
 ### The tree inside a session
+
+![The tree of a real conversation, with the restart menu open](https://raw.githubusercontent.com/sasha-bolea/claude-code-branching/master/assets/tree.png)
 
 The conversation runs left to right, one node per prompt; every fork sends a branch down.
 Under the tree there is the prompt the cursor is on, and under that the history that point
