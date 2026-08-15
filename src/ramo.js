@@ -31,29 +31,37 @@ export async function creaSessioneTroncata(percorsoOrigine, uuidFine) {
   const percorso = path.join(path.dirname(percorsoOrigine), `${sessionId}.jsonl`);
 
   const righe = [];
-  const rl = readline.createInterface({
-    input: fs.createReadStream(percorsoOrigine, { encoding: 'utf8' }),
-    crlfDelay: Infinity,
-  });
+  // Lo stream si tiene da parte per chiuderlo: `rl.close()` chiude l'interfaccia,
+  // non il file sotto. Letto tutto lo chiude l'iteratore, ma se il ciclo salta per
+  // un errore il descrittore resterebbe aperto — e qui pesa piu' che altrove: e' il
+  // cuore del cambio ramo, gira a ogni salto, e sul transcript di origine ci
+  // scrivera' poi la sessione ripresa.
+  const flusso = fs.createReadStream(percorsoOrigine, { encoding: 'utf8' });
+  const rl = readline.createInterface({ input: flusso, crlfDelay: Infinity });
 
-  for await (const riga of rl) {
-    if (!riga.trim()) continue;
-    let record;
-    try {
-      record = JSON.parse(riga);
-    } catch {
-      continue; // riga troncata: la salto
+  try {
+    for await (const riga of rl) {
+      if (!riga.trim()) continue;
+      let record;
+      try {
+        record = JSON.parse(riga);
+      } catch {
+        continue; // riga troncata: la salto
+      }
+
+      // Messaggi fuori dalla catena scelta: esclusi. E' questo il taglio.
+      if (record.uuid && !catena.has(record.uuid)) continue;
+      // Snapshot dei file riferiti a messaggi esclusi: non servono piu'.
+      if (record.messageId && !catena.has(record.messageId)) continue;
+      // Il puntatore al ramo attivo lo riscrivo in coda.
+      if (record.type === 'last-prompt') continue;
+
+      if (record.sessionId) record.sessionId = sessionId;
+      righe.push(JSON.stringify(record));
     }
-
-    // Messaggi fuori dalla catena scelta: esclusi. E' questo il taglio.
-    if (record.uuid && !catena.has(record.uuid)) continue;
-    // Snapshot dei file riferiti a messaggi esclusi: non servono piu'.
-    if (record.messageId && !catena.has(record.messageId)) continue;
-    // Il puntatore al ramo attivo lo riscrivo in coda.
-    if (record.type === 'last-prompt') continue;
-
-    if (record.sessionId) record.sessionId = sessionId;
-    righe.push(JSON.stringify(record));
+  } finally {
+    rl.close();
+    flusso.destroy();
   }
 
   righe.push(JSON.stringify({ type: 'last-prompt', leafUuid: uuidFine, sessionId }));

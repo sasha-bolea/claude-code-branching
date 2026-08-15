@@ -90,33 +90,40 @@ export async function leggiStoricoFile(percorso, { archivio = ARCHIVIO } = {}) {
   const cartellaBlob = path.join(archivio, sessione);
   const voci = [];
 
-  const rl = readline.createInterface({
-    input: fs.createReadStream(percorso, { encoding: 'utf8' }),
-    crlfDelay: Infinity,
-  });
+  // Lo stream si tiene da parte per chiuderlo: `rl.close()` chiude l'interfaccia,
+  // non il file sotto. Letto tutto lo chiude l'iteratore, ma se il ciclo salta per
+  // un errore il descrittore resterebbe aperto fino al garbage collector — e su
+  // Windows un file con un handle aperto non si puo' piu' riscrivere.
+  const flusso = fs.createReadStream(percorso, { encoding: 'utf8' });
+  const rl = readline.createInterface({ input: flusso, crlfDelay: Infinity });
 
-  for await (const riga of rl) {
-    if (!riga.trim()) continue;
-    let record;
-    try {
-      record = JSON.parse(riga);
-    } catch {
-      continue; // riga troncata (scrittura in corso): la salto
-    }
+  try {
+    for await (const riga of rl) {
+      if (!riga.trim()) continue;
+      let record;
+      try {
+        record = JSON.parse(riga);
+      } catch {
+        continue; // riga troncata (scrittura in corso): la salto
+      }
 
-    if (record.type === 'file-history-snapshot') {
-      const tracciati = record.snapshot?.trackedFileBackups ?? {};
-      for (const [tracciato, backup] of Object.entries(tracciati)) {
-        const voce = voceDaBackup(tracciato, backup, cartellaBlob);
+      if (record.type === 'file-history-snapshot') {
+        const tracciati = record.snapshot?.trackedFileBackups ?? {};
+        for (const [tracciato, backup] of Object.entries(tracciati)) {
+          const voce = voceDaBackup(tracciato, backup, cartellaBlob);
+          if (voce) voci.push(voce);
+        }
+        continue;
+      }
+
+      if (record.type === 'file-history-delta') {
+        const voce = voceDaBackup(record.trackingPath, record.backup, cartellaBlob);
         if (voce) voci.push(voce);
       }
-      continue;
     }
-
-    if (record.type === 'file-history-delta') {
-      const voce = voceDaBackup(record.trackingPath, record.backup, cartellaBlob);
-      if (voce) voci.push(voce);
-    }
+  } finally {
+    rl.close();
+    flusso.destroy();
   }
 
   return voci;

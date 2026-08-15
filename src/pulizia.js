@@ -45,10 +45,12 @@ const SEGNALE = path.join(os.homedir(), '.claude', 'cb', 'ultima-pulizia');
 // ritorna: Promise<Set<string>>
 async function uuidDi(percorso) {
   const uuid = new Set();
-  const rl = readline.createInterface({
-    input: fs.createReadStream(percorso, { encoding: 'utf8' }),
-    crlfDelay: Infinity,
-  });
+  // Lo stream si tiene da parte per chiuderlo: `rl.close()` chiude l'interfaccia,
+  // non il file sotto. Letto il file fino in fondo lo chiude l'iteratore, ma se il
+  // ciclo salta per un errore il descrittore resterebbe aperto — e su Windows un
+  // file con un handle aperto non si puo' piu' riscrivere.
+  const flusso = fs.createReadStream(percorso, { encoding: 'utf8' });
+  const rl = readline.createInterface({ input: flusso, crlfDelay: Infinity });
 
   try {
     for await (const riga of rl) {
@@ -62,6 +64,7 @@ async function uuidDi(percorso) {
     }
   } finally {
     rl.close();
+    flusso.destroy();
   }
   return uuid;
 }
