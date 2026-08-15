@@ -15,7 +15,7 @@ const USCITA = join(QUI, '..', 'assets', 'demo.svg');
 const CELLA_X = 8.05;      // larghezza di un carattere
 const CELLA_Y = 19;        // altezza di una riga
 const MARGINE = 22;
-const SECONDI_PER_FRAME = 5;
+const SECONDI_PER_FRAME = 3.5;
 
 // La tavolozza: sfondo di terminale scuro, e l'arancione che in cb marca ciò che parte per primo.
 const COLORI = {
@@ -26,9 +26,61 @@ const COLORI = {
   accento: '#e8913a',
 };
 
-// Le quattro schermate, nell'ordine in cui si vedono. La prima riga di ognuna va in arancione,
+// Le schermate, nell'ordine in cui si vedono. La prima riga di ognuna va in arancione,
 // l'ultima (la legenda dei tasti) in grigio: sono le due che si leggono senza leggerle.
+//
+// I primi tre frame sono lo stesso albero col cursore in tre punti diversi: fermo, cb
+// sembra un disegno: si capisce che ci si naviga dentro solo vedendo il `◯` spostarsi e
+// il riquadro sotto seguirlo. Prima `←→` lungo la conversazione, poi `↑↓` fra i rami di
+// una stessa biforcazione — che sono i due movimenti da capire, e nessuna didascalia li
+// spiega quanto il vederli.
 const FRAMES = [
+  [
+    '  cb  branches of the conversation',
+    '  ──────────────────────────────────────────────────────────────────────',
+    '  ◯ restart here   ┳ fork   © compacted',
+    '  ──────────────────────────────────────────────────────────────────────',
+    '',
+    '  ⬤━━━⬤━━━⬤━━━◯━┳━⬤━━━⬤━━━⬤━━━⬤',
+    '                ┗━⬤━┳━⬤━━━⬤',
+    '                    ┗━⬤━━━⬤━━━⬤',
+    '',
+    '  ╭────────────────────────────────────────────────────────────────────╮',
+    '  │ 24-07 15:10  +18 -0  restart here                                  │',
+    "  │ let's do the customer list                                         │",
+    '  ╰────────────────────────────────────────────────────────────────────╯',
+    '',
+    '  earlier: 0',
+    '',
+    '',
+    '',
+    '',
+    '  ──────────────────────────────────────────────────────────────────────',
+    '  ←→↑↓ wasd pick the point   enter restart   p queue   n notes   esc exit',
+  ],
+  [
+    '  cb  branches of the conversation',
+    '  ──────────────────────────────────────────────────────────────────────',
+    '  ◯ restart here   ┳ fork   © compacted',
+    '  ──────────────────────────────────────────────────────────────────────',
+    '',
+    '  ⬤━━━⬤━━━⬤━━━⬤━┳━⬤━━━◯━━━⬤━━━⬤',
+    '                ┗━⬤━┳━⬤━━━⬤',
+    '                    ┗━⬤━━━⬤━━━⬤',
+    '',
+    '  ╭────────────────────────────────────────────────────────────────────╮',
+    '  │ 24-07 15:57  +7 -3  restart here                                   │',
+    '  │ much smoother, but still choppy                                    │',
+    '  ╰────────────────────────────────────────────────────────────────────╯',
+    '',
+    '  earlier: 2',
+    '    24-07 15:51  the app got very slow, rendering the list freezes',
+    "    24-07 15:10  let's do the customer list",
+    '',
+    '',
+    '  ──────────────────────────────────────────────────────────────────────',
+    '  ←→↑↓ wasd pick the point   enter restart   p queue   n notes   esc exit',
+  ],
   [
     '  cb  branches of the conversation',
     '  ──────────────────────────────────────────────────────────────────────',
@@ -40,13 +92,13 @@ const FRAMES = [
     '                    ┗━⬤━━━⬤━━━⬤',
     '',
     '  ╭────────────────────────────────────────────────────────────────────╮',
-    '  │ 24-07 15:51  +42 -7  restart here                                  │',
-    '  │ the app got very slow, rendering the list freezes                  │',
+    '  │ 24-07 17:26  +42 -7  restart here                                  │',
+    '  │ the branch you abandoned an hour ago, still here                   │',
     '  ╰────────────────────────────────────────────────────────────────────╯',
     '',
     '  earlier: 3',
-    '    24-07 15:40  add the date filter',
-    '    24-07 15:12  put the name sorting back',
+    '    24-07 16:04  try it without the memo',
+    '    24-07 15:51  the app got very slow, rendering the list freezes',
     "    24-07 15:10  let's do the customer list",
     '',
     '  ──────────────────────────────────────────────────────────────────────',
