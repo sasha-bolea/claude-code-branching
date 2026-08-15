@@ -14,6 +14,32 @@ import { CARTELLA_PROGETTI, slugProgetto } from './percorsi.js';
 process.env.CB_IMPOSTAZIONI = path.join(os.tmpdir(), 'cb-prove-overlay-impostazioni.json');
 fs.rmSync(process.env.CB_IMPOSTAZIONI, { force: true });
 
+// Scrive un file riprovando se Windows dice di no.
+//
+// Un file appena tolto con `unlink` mentre un handle e' ancora aperto non sparisce
+// subito: resta in «pending delete», il nome resta occupato, e riscriverlo da'
+// EPERM. Gli handle li lascia aperti questo file di prove — e' il motivo per cui
+// finisce con `process.exit(0)` — e `pulisciCartella` toglie i transcript fra una
+// prova e l'altra, quindi le due cose si incontrano di sicuro. Su node 22 quasi
+// mai, su node 18 e 20 abbastanza da tenere rossa la CI: passava per fortuna, non
+// per costruzione.
+//
+// ponytail: attesa fissa e tre tentativi. Se tornasse a fallire, la strada giusta
+// e' una cartella progetto diversa per ogni prova invece di riusare la stessa —
+// li' il nome non verrebbe mai riciclato e il problema non esisterebbe.
+function scriviRiprovando(percorso, contenuto) {
+  for (let tentativo = 0; ; tentativo += 1) {
+    try {
+      fs.writeFileSync(percorso, contenuto, 'utf8');
+      return;
+    } catch (errore) {
+      if (errore.code !== 'EPERM' || tentativo >= 2) throw errore;
+      // Attesa sincrona: creaTranscript e' chiamata da codice sincrono ovunque.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+}
+
 // Crea un transcript finto nella posizione in cui Claude lo scriverebbe, per
 // provare l'overlay senza lanciare Claude.
 // sessionId: id della sessione
@@ -24,7 +50,7 @@ function creaTranscript(sessionId, cartella, record) {
   const cartellaProgetto = path.join(CARTELLA_PROGETTI, slugProgetto(cartella));
   fs.mkdirSync(cartellaProgetto, { recursive: true });
   const percorso = path.join(cartellaProgetto, `${sessionId}.jsonl`);
-  fs.writeFileSync(percorso, record.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8');
+  scriviRiprovando(percorso, record.map((r) => JSON.stringify(r)).join('\n') + '\n');
   return percorso;
 }
 
