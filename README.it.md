@@ -14,12 +14,24 @@ qualsiasi messaggio — compresi i rami che hai abbandonato con un ripristino.
 
 ## Il problema
 
-Claude Code ha "restore code and conversation" (Esc Esc), ma è un undo a senso unico:
-una volta ripristinato, l'interfaccia non offre più modo di tornare ai prompt e alle
-risposte che ti sei lasciato indietro.
+Claude Code sa biforcare da sé. `/branch` *«crea un ramo della conversazione corrente a
+questo punto»*, e il doppio Esc apre un rewind che propone di *«ripristinare e biforcare al
+punto prima di…»*. Se ti serve solo provare due strade da dove sei, cb non ti serve.
 
-I dati però ci sono tutti: i transcript sono **append-only**, il ramo abbandonato resta
-fisicamente nel file. Manca solo chi lo mostra e chi ti ci fa ripartire.
+Quello che il CLI non ti dà è la **forma** di quello che hai già fatto. Il rewind è un elenco
+che si scorre — te lo dice da solo: *«altri 3 sopra»* — e un fork scrive un **file di sessione
+nuovo** che copia la storia solo fino al punto di biforcazione. I rami che hai lasciato
+finiscono così sparsi in file che nessuno guarda insieme, e dalla sessione in cui sei sono
+invisibili. Un elenco può mostrarti l'«indietro» di un file solo; non può dirti che qui c'eri
+già passato, da un'altra strada, tre giorni fa.
+
+I dati ci sono tutti: i transcript sono **append-only**, ogni record porta il suo
+`parentUuid`, e i fork conservano gli stessi uuid e condividono la radice. L'albero esiste già
+su disco. Solo, non lo disegnava nessuno.
+
+È a questo che serve cb — più due cose che col branching non c'entrano e sono nate usandolo:
+una coda che manda un prompt per turno, e le note che appartengono alla cartella invece che
+alla conversazione.
 
 ## Prima di usarlo
 

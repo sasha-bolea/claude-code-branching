@@ -15,13 +15,26 @@ abandoned with a restore.
 
 ## The problem
 
-Claude Code has "restore code and conversation" (Esc Esc), but it is a one-way undo: once
-you have restored, the interface offers no way back to the prompts and answers you left
-behind.
+Claude Code can branch on its own. `/branch` *"creates a branch of the current conversation
+at this point"*, and double-tapping Esc opens a rewind that offers to *"restore and fork the
+conversation to the point before…"*. If all you need is to try two approaches from where you
+are standing, you do not need cb.
 
-The data is all still there, though: transcripts are **append-only**, so the abandoned
-branch physically stays in the file. All that is missing is something to show it to you and
-put you back on it.
+What the CLI does not give you is the **shape** of what you have already done. The rewind is
+a scrollable list of points — it literally tells you *"3 more above"* — and a fork writes a
+**new session file** that copies the history only up to the fork point. So the branches you
+walked away from end up spread across files that nothing looks at together, and from inside
+the session you are in they are invisible. A list can only show you one file's worth of
+"back"; it cannot show you that you have been here before, down a different path, three days
+ago.
+
+The data is all there: transcripts are **append-only**, every record carries a `parentUuid`,
+and forks keep the same uuids and share a root. The tree already exists on disk. Nothing was
+drawing it.
+
+That is what cb is for — plus two things that have nothing to do with branching and that
+grew out of using it: a prompt queue that sends one prompt per turn, and notes that belong to
+the folder instead of the conversation.
 
 ## Before you use it
 
