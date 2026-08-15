@@ -759,8 +759,11 @@ npm test
 - **No way to look inside the archives**: no preview of what will change, no undo. The
   restore is not atomic: if a write fails halfway, the tree stays mixed.
 - Stealing `Esc Esc` costs 300 ms of delay on a single Esc (the interrupt), and replaces the
-  native restore menu. With a single-key shortcut (`--tasto f2`) the delay disappears and
-  the native menu stays available.
+  native restore menu — which now offers to *"restore and fork the conversation to the point
+  before…"*, so what you give up is no longer a plain undo. **Prefer a single-key shortcut
+  (`--tasto f2`)**: the delay disappears and both menus stay reachable, cb's on F2 and the
+  native one on Esc Esc. They are not rivals — the native one is the fast path from where you
+  are standing, cb's is for finding a point you can no longer see.
 - The jump is only possible after the first turn: before that there is no transcript to read.
 - `--resume-session-at` is undocumented: it may change with a CLI update.
 - The kinship between forked sessions lives in the `forkParentSessionId` fields written by

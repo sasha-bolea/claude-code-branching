@@ -759,8 +759,11 @@ npm test
 - **Nessun modo di guardare dentro agli archivi**: niente anteprima di cosa cambierà, niente
   annulla. Il ripristino non è atomico: se una scrittura fallisce a metà, l'albero resta misto.
 - Rubare `Esc Esc` costa 300 ms di ritardo su un Esc singolo (l'interruzione), e sostituisce
-  il menu di ripristino nativo. Con una scorciatoia a tasto singolo (`--tasto f2`) il
-  ritardo sparisce e il menu nativo resta disponibile.
+  il menu di ripristino nativo — che oggi propone di *«ripristinare e biforcare al punto prima
+  di…»*, quindi quello a cui rinunci non è più un semplice undo. **Meglio una scorciatoia a
+  tasto singolo (`--tasto f2`)**: il ritardo sparisce e restano raggiungibili tutt'e due i
+  menu, quello di cb su F2 e il nativo su Esc Esc. Non sono rivali — il nativo è la strada
+  breve da dove sei, quello di cb serve a trovare un punto che non vedi più.
 - Il salto è possibile solo dopo il primo turno: prima non esiste un transcript da leggere.
 - `--resume-session-at` non è documentato: può cambiare a un aggiornamento del CLI.
 - La parentela tra sessioni forkate vive nei campi `forkParentSessionId` scritti dal CLI;
