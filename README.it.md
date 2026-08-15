@@ -2,6 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/claude-code-branching)](https://www.npmjs.com/package/claude-code-branching)
 [![downloads](https://img.shields.io/npm/dm/claude-code-branching)](https://www.npmjs.com/package/claude-code-branching)
+[![test](https://github.com/sasha-bolea/claude-code-branching/actions/workflows/test.yml/badge.svg)](https://github.com/sasha-bolea/claude-code-branching/actions/workflows/test.yml)
 [![license](https://img.shields.io/npm/l/claude-code-branching)](LICENSE)
 
 *[English](README.md)*
@@ -46,8 +47,10 @@ bene speso.
 | **Windows 10/11** | la piattaforma provata; PowerShell 7 per l'hook dei commit, opzionale |
 | **macOS, Linux** | best effort — vedi sotto |
 
-Su **macOS e Linux** il parsing dei transcript, l'albero e i selettori funzionano, ma
-l'intercettazione dei tasti non è stata provata e l'hook dei commit è solo PowerShell.
+Le prove girano verdi su **Windows, macOS e Linux**, con Node 18, 20 e 22. Vale la pena
+essere precisi su cosa questo copre: su macOS e Linux vuol dire il parsing dei transcript,
+l'albero e i selettori. L'intercettazione dei tasti è provata contro un pty finto, non
+contro un terminale vero, e l'hook dei commit è solo PowerShell.
 
 ⚠️ **Su Linux `npm install` compila.** `node-pty` pubblica i binari precompilati per
 `win32-*` e `darwin-*` ma non per `linux-*`: lì l'installazione ripiega su node-gyp e

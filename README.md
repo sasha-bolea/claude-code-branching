@@ -2,6 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/claude-code-branching)](https://www.npmjs.com/package/claude-code-branching)
 [![downloads](https://img.shields.io/npm/dm/claude-code-branching)](https://www.npmjs.com/package/claude-code-branching)
+[![test](https://github.com/sasha-bolea/claude-code-branching/actions/workflows/test.yml/badge.svg)](https://github.com/sasha-bolea/claude-code-branching/actions/workflows/test.yml)
 [![license](https://img.shields.io/npm/l/claude-code-branching)](LICENSE)
 
 *[Italiano](README.it.md)*
@@ -47,8 +48,10 @@ for the other platforms. Backing up `~/.claude/projects/` before trying it is ti
 | **Windows 10/11** | the tested platform, PowerShell 7 for the optional commit hook |
 | **macOS, Linux** | best effort — see below |
 
-On **macOS and Linux** transcript parsing, the tree and the pickers work, but the key
-interception has not been tested and the automatic-commit hook is PowerShell only.
+The test suite runs green on **Windows, macOS and Linux**, across Node 18, 20 and 22. Be
+precise about what that covers, though: on macOS and Linux it means transcript parsing, the
+tree and the pickers. The key interception is exercised against a fake pty, not a real
+terminal, and the automatic-commit hook is PowerShell only.
 
 ⚠️ **On Linux `npm install` compiles.** `node-pty` publishes prebuilt binaries for
 `win32-*` and `darwin-*` but not for `linux-*`, so on Linux the install falls back to
