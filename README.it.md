@@ -189,7 +189,7 @@ cb --version            numero di versione
 | `CB_CARTELLA_SCELTA` | file in cui cb scrive la cartella scelta, per la shell chiamante |
 | `CB_IMPOSTAZIONI` | percorso del file delle impostazioni, se lo vuoi altrove |
 | `CB_GIORNI_PULIZIA` | età in giorni di ciò che la pulizia automatica toglie (default `60`, con `0` si spegne) |
-| `CB_SOGLIA_LIMITE` | percentuale della finestra di 5 ore oltre cui la coda si mette in pausa (default `95`) |
+| `CB_PROMPT_RESET` | con `1` accende il prompt automatico al reset della finestra (di suo spento) |
 | `CB_LIMITI` | percorso del file in cui la statusline salva i limiti d'uso |
 
 Ordine di precedenza, per tutte: **variabile d'ambiente → file delle impostazioni → predefinito.**
@@ -388,23 +388,60 @@ da sola, e quello che avevi scritto ti segue.
 L'hook `hooks/cb-coda.ps1` (più sotto) serve solo a far funzionare la coda **fuori** da cb, in
 una sessione Claude lanciata a mano.
 
-#### Quando i token stanno per finire
+#### Quando i token finiscono
 
 Una coda lunga e una finestra di cinque ore non sempre ci stanno insieme. Lasciata andare, la
-coda continua a sparare finché la finestra si chiude, e il prompt che era partito muore a metà
-risposta — speso, senza aver concluso niente.
+coda continua a sparare anche dopo che la finestra si è chiusa, e ogni prompt che manda è
+semplicemente speso.
 
-Se cb sa quanta finestra resta, ferma la coda **prima** che succeda, aspetta il reset e
-riprende da dov'era. Un prompt già consegnato ma rimasto senza risposta torna in **cima** alla
-coda: era il prossimo, e l'ordine è l'unica cosa che una coda promette. Se a quel punto la coda
-è vuota, cb manda `continue` — il lavoro è ancora nel contesto, ed è la parola che lo fa
-proseguire senza aggiungere richieste che non avevi fatto.
+Quando la finestra è **finita**, cb sospende la coda. Non prima: la coda si ferma quando i
+token sono finiti, non quando stanno per finire — decidere al posto tuo che l'ultimo turno non
+vale la pena sarebbe sbagliato, e magari quel turno era corto.
 
-Non può fermare **te** che scrivi, solo la coda. Ma la coda è la parte che va avanti da sola,
-cioè l'unica che può bruciare una finestra mentre non sei alla tastiera.
+**La sospensione non finisce da sola quando la finestra riparte.** La finestra nuova è tua, e
+la coda non se la prende. A riattivarla sono due cose, e quale delle due dipende
+dall'impostazione qui sotto:
 
-**Serve una riga nella tua statusline**, perché è l'unico posto in cui Claude Code pubblica
-questo dato: il JSON che passa al comando della statusline porta `rate_limits.five_hour`, con
+- **col prompt del reset acceso** — la coda riparte *insieme a lui*. Quel prompt è già il
+  segnale che una finestra nuova è cominciata, quindi aspettare anche te vorrebbe dire tenere
+  ferma la coda per niente.
+- **con quello spento** — la coda riparte al **tuo primo invio** dopo che la finestra è
+  tornata. Un invio prima del reset non riattiva niente: i token sono ancora finiti, e la coda
+  tornerebbe a sospendersi al controllo dopo.
+
+#### Il prompt automatico al reset (spento di suo)
+
+All'ora in cui la finestra riparte, cb può scrivere da sé un prompt nella barra di Claude:
+
+```
+[automatic] The usage window just reset. If your previous reply was cut off, continue it
+from where it stopped. If it was complete, reply with exactly: OK
+```
+
+Ogni sessione aperta con cb in quel momento manda il suo: sono conversazioni diverse, e ognuna
+si porta dietro il proprio lavoro interrotto.
+
+È **spento se non lo accendi**, e di proposito: manda un prompt da solo, e quel prompt costa
+token. Una cosa che spende per conto tuo la si chiede, non la si eredita da un aggiornamento.
+Si accende con `promptAlReset: true` in `~/.claude/cb/impostazioni.json`, o con
+`CB_PROMPT_RESET=1` per una volta sola.
+
+Tre cose sul testo, visto che parte **ogni volta** — anche quando non c'era niente da riprendere,
+che è il caso da rendere economico:
+
+- **due casi, non tre.** «Se è arrivato mentre rispondevi, ignoralo» non serve: un prompt
+  scritto mentre Claude lavora viene accodato dal CLI, quindi quando lo legge la risposta è
+  finita — ricade nel secondo caso da solo.
+- **«rispondi OK» e non «non fare niente».** Un modello non può non rispondere: chiedergli di
+  stare zitto produce comunque un turno, ma di lunghezza imprevedibile («Capito, resto in
+  attesa…»). Una risposta fissata è un token.
+- **in inglese**, anche a interfaccia italiana: è la lingua in cui il modello è meno ambiguo, e
+  qui l'ambiguità si paga in token.
+
+#### Cosa serve a tutt'e due
+
+**Una riga nella tua statusline**, perché è l'unico posto in cui Claude Code pubblica questo
+dato: il JSON che passa al comando della statusline porta `rate_limits.five_hour`, con
 `used_percentage` e `resets_at`. Nel transcript non c'è, e cb non legge mai lo schermo. Quindi
 chi scrive la statusline salva quei due numeri dove cb va a cercarli:
 
@@ -420,10 +457,12 @@ $dest = Join-Path $cbDir 'limiti.json'; $tmp = "$dest.tmp"
 Move-Item $tmp $dest -Force        # atomica: cb può leggere a metà scrittura
 ```
 
-Senza quel file la funzione è semplicemente spenta, e la coda si comporta esattamente come
-prima. `CB_SOGLIA_LIMITE` sposta la soglia, che di suo sta al **95%** — non a 100, perché fra
-l'ultimo aggiornamento della barra e il prompt che parte c'è sempre un margine, e un turno che
-comincia al 99% muore a metà.
+Senza quel file non succede né una cosa né l'altra, e la coda si comporta esattamente come
+prima — un errore di lettura che ti fermasse la coda sarebbe peggio del problema che risolve.
+
+Un limite, detto chiaro: se il CLI non arriva mai a segnare 100 esatto, la sospensione non
+scatta e la coda spende l'ultimo prompt su un turno che può morire a metà. Quella percentuale è
+l'unico segnale che c'è — cb non legge lo schermo, e nel transcript i limiti non compaiono.
 
 ### Le note
 

@@ -16,11 +16,11 @@ process.env.CB_LIMITI = path.join(process.env.CB_CODA, 'limiti.json');
 const { Wrapper } = await import('./wrapper.js');
 const { scriviCoda, leggiCoda } = await import('./coda.js');
 
-// Scrive i limiti come li scriverebbe la statusline. `usato` in percentuale,
-// `fraMinuti` quanto manca al reset — null cancella il file, cioe' la statusline
-// non e' agganciata e la funzione e' spenta.
-function limiti(usato, fraMinuti = 90) {
-  if (usato === null) {
+// Scrive i limiti come li scriverebbe la statusline: `fraMinuti` quanto manca al
+// reset, `usato` la percentuale consumata (100 = finestra finita). `null` cancella
+// il file, cioe' la statusline non e' agganciata.
+function limiti(fraMinuti, usato = 20) {
+  if (fraMinuti === null) {
     fs.rmSync(process.env.CB_LIMITI, { force: true });
     return;
   }
@@ -32,6 +32,9 @@ function limiti(usato, fraMinuti = 90) {
     'utf8',
   );
 }
+
+// L'invio come arriva davvero dai byte grezzi.
+const INVIO = Buffer.from('\r');
 
 // Il wrapper con un pty finto che registra cosa gli viene scritto: e' l'unica
 // cosa che conta qui, e non serve un terminale.
@@ -235,109 +238,212 @@ async function testLaNotaFinisceNellaBarraSenzaInvio() {
   assert.deepEqual(terza.tutto, [], 'tornando indietro la barra non si tocca');
 }
 
-// Coi token quasi finiti la coda si ferma: spendere quel che resta su un turno
-// che morira' a meta' non salva niente, e il prompt e' comunque speso.
-function testCoiTokenQuasiFinitiLaCodaSiFerma() {
-  const { wrapper, scritto } = wrapperFinto('l1');
-  scriviCoda('l1', ['non partire adesso']);
+// Il prompt del reset: parte all'ora in cui la finestra dei token riparte, e va
+// **acceso**. Spento non deve accadere niente, nemmeno un timer che gira.
+function testSpentoNonMandaNiente() {
+  const { wrapper, scritto } = wrapperFinto('r1');
+  limiti(90);
+  delete process.env.CB_PROMPT_RESET;
 
-  limiti(97);
-  wrapper.consegnaCoda();
-  assert.deepEqual(scritto, [], 'a serbatoio quasi vuoto non si consegna');
-  assert.deepEqual(testi('l1'), ['non partire adesso'], 'e il prompt resta in coda');
+  wrapper.programmaPromptDelReset();
+  assert.equal(wrapper.timerReset, null, 'spento non arma nessuna sveglia');
 
-  // Tornati sotto soglia — la finestra si e' resettata — riparte da sola.
-  limiti(10);
-  wrapper.consegnaCoda();
-  assert.deepEqual(scritto, ['non partire adesso\r'], 'con i token di nuovo pieni parte');
-
-  clearTimeout(wrapper.timerRisveglio);
+  // E anche chiamandolo a mano non scrive: l impostazione si ricontrolla allo
+  // scatto, perche' fra l armare e lo scattare passano ore.
+  wrapper.mandaPromptDelReset();
+  assert.deepEqual(scritto, [], 'e non scrive niente');
 }
 
-// Senza il file dei limiti la funzione e' spenta: chi non aggancia la statusline
-// deve vedere cb comportarsi esattamente come prima.
-function testSenzaStatuslineNienteCambia() {
-  const { wrapper, scritto } = wrapperFinto('l2');
-  scriviCoda('l2', ['parti come sempre']);
+// Acceso, allo scatto scrive il prompt nella barra seguito da invio.
+function testAccesoMandaIlPrompt() {
+  const { wrapper, scritto } = wrapperFinto('r2');
+  limiti(90);
+  process.env.CB_PROMPT_RESET = '1';
 
+  wrapper.mandaPromptDelReset();
+  assert.equal(scritto.length, 1, 'un prompt solo');
+  assert.match(scritto[0], /^\[automatic\] The usage window just reset\./, 'si dichiara automatico');
+  assert.match(scritto[0], /continue it from where it stopped/, 'dice cosa fare se era stato tagliato');
+  assert.match(scritto[0], /reply with exactly: OK\r$/, 'e come costare poco se non serviva');
+
+  clearTimeout(wrapper.timerReset);
+  delete process.env.CB_PROMPT_RESET;
+}
+
+// `'0'` e `'false'` dall'ambiente sono stringhe vere: senza riconoscerle a mano
+// passerebbero per «acceso», che e' il contrario di quello che si e' scritto.
+function testZeroDallAmbienteSpegneDavvero() {
+  process.env.CB_PROMPT_RESET = '0';
+  const { wrapper, scritto } = wrapperFinto('r3');
+  limiti(90);
+  wrapper.mandaPromptDelReset();
+  assert.deepEqual(scritto, [], "'0' spegne");
+
+  process.env.CB_PROMPT_RESET = 'false';
+  wrapper.mandaPromptDelReset();
+  assert.deepEqual(scritto, [], "'false' pure");
+
+  delete process.env.CB_PROMPT_RESET;
+}
+
+// Mentre l'utente scrive si rimanda: iniettare in quel momento mescolerebbe il
+// prompt automatico al testo che ha in mano, e l'invio manderebbe il miscuglio.
+// Stessa cosa con una schermata di cb aperta.
+function testNonIniettaAddossoAChiScrive() {
+  process.env.CB_PROMPT_RESET = '1';
+  const { wrapper, scritto } = wrapperFinto('r4');
+  limiti(90);
+
+  wrapper.ultimoTasto = Date.now();
+  wrapper.mandaPromptDelReset();
+  assert.deepEqual(scritto, [], 'con un tasto appena battuto aspetta');
+
+  wrapper.ultimoTasto = 0;
+  wrapper.inOverlay = true;
+  wrapper.mandaPromptDelReset();
+  assert.deepEqual(scritto, [], 'e con una schermata di cb aperta pure');
+
+  wrapper.inOverlay = false;
+  wrapper.mandaPromptDelReset();
+  assert.equal(scritto.length, 1, 'passata la finestra, parte');
+
+  clearTimeout(wrapper.timerReset);
+  delete process.env.CB_PROMPT_RESET;
+}
+
+// Dopo lo scatto la sveglia si riarma da sola per la finestra dopo: senza, il
+// prompt partirebbe una volta sola e poi mai piu'.
+function testDopoLoScattoSiRiarma() {
+  process.env.CB_PROMPT_RESET = '1';
+  const { wrapper } = wrapperFinto('r5');
+  limiti(90);
+
+  wrapper.mandaPromptDelReset();
+  assert.notEqual(wrapper.timerReset, null, 'la sveglia e di nuovo armata');
+
+  clearTimeout(wrapper.timerReset);
+  delete process.env.CB_PROMPT_RESET;
+}
+
+// Senza il file della statusline non si sa quando sia il reset: si riprova piu'
+// tardi invece di rinunciare, perche' al primo avvio quel file non c'e' ancora.
+function testSenzaLimitiRiprovaInveceDiRinunciare() {
+  process.env.CB_PROMPT_RESET = '1';
+  const { wrapper, scritto } = wrapperFinto('r6');
   limiti(null);
-  wrapper.consegnaCoda();
-  assert.deepEqual(scritto, ['parti come sempre\r'], 'senza limiti si consegna come prima');
+
+  wrapper.programmaPromptDelReset();
+  assert.notEqual(wrapper.timerReset, null, 'una sveglia c e, per riguardare');
+  assert.deepEqual(scritto, [], 'ma non ha mandato niente');
+
+  clearTimeout(wrapper.timerReset);
+  delete process.env.CB_PROMPT_RESET;
 }
 
-// Un prompt consegnato che non ha fatto in tempo ad avere risposta torna in
-// **cima** alla coda: era il prossimo, e l'ordine e' l'unica cosa che la coda
-// promette. E' la parte che rende l'attesa indolore invece che una perdita.
-function testIlPromptRimastoSenzaRispostaTornaInCima() {
-  const { wrapper, scritto } = wrapperFinto('l3');
-  scriviCoda('l3', ['primo', 'secondo']);
+// Coi token **esauriti** la coda si sospende: un prompt consegnato adesso resta
+// senza risposta, cioe' e' speso. A 99 invece parte: la coda si ferma quando i
+// token sono finiti, non quando stanno per finire.
+function testATokenEsauritiLaCodaSiSospende() {
+  const { wrapper, scritto } = wrapperFinto('p1');
+  scriviCoda('p1', ['non partire adesso']);
 
-  limiti(10);
+  limiti(90, 99);
   wrapper.consegnaCoda();
-  assert.deepEqual(scritto, ['primo\r'], 'il primo parte');
-  assert.deepEqual(testi('l3'), ['secondo'], 'e lascia la coda');
+  assert.deepEqual(scritto, ['non partire adesso\r'], 'a 99 la coda parte ancora');
 
-  // I token finiscono mentre quel turno e' ancora in corso.
-  limiti(99);
+  scriviCoda('p1', ['questo no']);
+  limiti(90, 100);
   wrapper.consegnaCoda();
-  assert.deepEqual(scritto, ['primo\r'], 'non parte nient altro');
-  assert.deepEqual(testi('l3'), ['primo', 'secondo'], 'e il primo e tornato in testa');
-
-  clearTimeout(wrapper.timerRisveglio);
+  assert.deepEqual(scritto.length, 1, 'a 100 si sospende');
+  assert.equal(wrapper.codaSospesa, true, 'e resta segnata come sospesa');
+  assert.deepEqual(testi('p1'), ['questo no'], 'il prompt resta in coda, non si perde');
 }
 
-// Se invece il turno si era chiuso normalmente, il prompt non torna: la conferma
-// e' il giro successivo passato senza sospensione.
-function testUnTurnoFinitoBeneNonRimandaIlPrompt() {
-  const { wrapper } = wrapperFinto('l4');
-  scriviCoda('l4', ['unico']);
+// La sospensione **non** finisce da sola quando la finestra riparte: la finestra
+// nuova e' dell'utente, e la coda non se la prende senza che lui abbia ricominciato.
+function testLaFinestraNuovaDaSolaNonRiattivaLaCoda() {
+  const { wrapper, scritto } = wrapperFinto('p2');
+  scriviCoda('p2', ['aspetta il mio via']);
 
-  limiti(10);
+  limiti(90, 100);
   wrapper.consegnaCoda();
-  assert.deepEqual(testi('l4'), [], 'consegnato, la coda e vuota');
+  assert.deepEqual(scritto, [], 'sospesa');
 
-  wrapper.consegnaCoda(); // giro a vuoto: il turno e' finito, niente da mandare
-  limiti(99);
-  wrapper.consegnaCoda(); // adesso i token finiscono, ma quel prompt e' andato
-  assert.deepEqual(testi('l4'), [], 'un prompt gia risposto non viene rimandato');
-
-  clearTimeout(wrapper.timerRisveglio);
+  // Finestra ripartita: la percentuale e' tornata bassa, ma non basta.
+  limiti(300, 5);
+  wrapper.consegnaCoda();
+  assert.deepEqual(scritto, [], 'la coda resta ferma anche a token tornati');
+  assert.deepEqual(testi('p2'), ['aspetta il mio via'], 'e il prompt e ancora li');
 }
 
-// Al reset, con la coda vuota, si manda `continue`: il lavoro interrotto sta nel
-// contesto, e questa e' la parola che lo fa proseguire senza aggiungere richieste
-// che non erano state fatte.
-function testAlResetConCodaVuotaMandaContinue() {
-  const { wrapper, scritto } = wrapperFinto('l5');
+// Col prompt automatico acceso, la coda riparte **insieme** a quello: e' lui il
+// segnale che la finestra nuova e' cominciata, e aspettare anche un invio
+// dell'utente vorrebbe dire tenerla ferma per niente.
+function testConIlPromptAutomaticoLaCodaRipartelInsieme() {
+  process.env.CB_PROMPT_RESET = '1';
+  const { wrapper, scritto } = wrapperFinto('p3');
+  scriviCoda('p3', ['riprendi da qui']);
 
-  limiti(10);
-  wrapper.risvegliaDopoIlReset();
-  assert.deepEqual(scritto, ['continue\r'], 'a coda vuota prosegue da solo');
+  limiti(90, 100);
+  wrapper.consegnaCoda();
+  assert.equal(wrapper.codaSospesa, true, 'sospesa');
 
-  clearTimeout(wrapper.timerRisveglio);
+  limiti(300, 5); // finestra ripartita
+  wrapper.mandaPromptDelReset();
+  assert.equal(wrapper.codaSospesa, false, 'il prompt del reset la riattiva');
+  assert.match(scritto[0], /^\[automatic\]/, 'e il primo a partire e il prompt automatico');
+
+  wrapper.consegnaCoda();
+  assert.deepEqual(scritto[1], 'riprendi da qui\r', 'poi riparte la coda');
+
+  clearTimeout(wrapper.timerReset);
+  delete process.env.CB_PROMPT_RESET;
 }
 
-// Con qualcosa in coda, invece, si riprende da quella: e' quasi sempre cio' che
-// si vuole, e `continue` resta il ripiego.
-function testAlResetConCodaPienaRiprendeLaCoda() {
-  const { wrapper, scritto } = wrapperFinto('l6');
-  scriviCoda('l6', ['riprendi da qui']);
+// Col prompt automatico spento, la riattiva il primo invio dell'utente — ma solo
+// a finestra ripartita: prima del reset i token sono ancora finiti, e la coda
+// tornerebbe a sospendersi al controllo dopo.
+function testSenzaPromptAutomaticoLaRiattivaIlPrimoInvio() {
+  delete process.env.CB_PROMPT_RESET;
+  const { wrapper, scritto } = wrapperFinto('p4');
+  scriviCoda('p4', ['dopo il tuo via']);
 
-  limiti(10);
-  wrapper.risvegliaDopoIlReset();
-  assert.deepEqual(scritto, ['riprendi da qui\r'], 'riparte dalla coda, non da continue');
+  limiti(90, 100);
+  wrapper.consegnaCoda();
+  assert.equal(wrapper.codaSospesa, true, 'sospesa');
 
-  clearTimeout(wrapper.timerRisveglio);
+  // Invio con i token ancora finiti: non riattiva niente.
+  wrapper.gestisciInput(INVIO);
+  assert.equal(wrapper.codaSospesa, true, 'un invio prima del reset non riattiva');
+
+  // Finestra ripartita, e adesso l'invio vale.
+  limiti(300, 5);
+  wrapper.gestisciInput(INVIO);
+  assert.equal(wrapper.codaSospesa, false, 'il primo invio della finestra nuova riattiva');
+
+  // La consegna aspetta comunque che tu smetta di scrivere: l'invio appena battuto
+  // conta come «sta scrivendo», ed e' giusto.
+  wrapper.ultimoTasto = 0;
+  wrapper.consegnaCoda();
+  // I due invii di prima sono nell'elenco perche' il wrapper li inoltra a Claude,
+  // ed e' giusto: erano tasti dell'utente. Qui interessa solo che dopo di loro
+  // arrivi il prompt della coda.
+  assert.equal(scritto.at(-1), 'dopo il tuo via\r', 'e poi la coda riparte');
+  assert.deepEqual(testi('p4'), [], 'la coda si e svuotata');
 }
 
 const prove = [
   testMandaIlPrimoQuandoClaudeEFermo,
-  testCoiTokenQuasiFinitiLaCodaSiFerma,
-  testSenzaStatuslineNienteCambia,
-  testIlPromptRimastoSenzaRispostaTornaInCima,
-  testUnTurnoFinitoBeneNonRimandaIlPrompt,
-  testAlResetConCodaVuotaMandaContinue,
-  testAlResetConCodaPienaRiprendeLaCoda,
+  testATokenEsauritiLaCodaSiSospende,
+  testLaFinestraNuovaDaSolaNonRiattivaLaCoda,
+  testConIlPromptAutomaticoLaCodaRipartelInsieme,
+  testSenzaPromptAutomaticoLaRiattivaIlPrimoInvio,
+  testSpentoNonMandaNiente,
+  testAccesoMandaIlPrompt,
+  testZeroDallAmbienteSpegneDavvero,
+  testNonIniettaAddossoAChiScrive,
+  testDopoLoScattoSiRiarma,
+  testSenzaLimitiRiprovaInveceDiRinunciare,
   testNonInterrompeChiStaScrivendo,
   testConLOverlayApertoNonParte,
   testLaBarraSiSvuotaPrima,

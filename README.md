@@ -192,7 +192,7 @@ cb --version            version number
 | `CB_CARTELLA_SCELTA` | file where cb writes the folder you picked, for the calling shell |
 | `CB_IMPOSTAZIONI` | path of the settings file, if you want it somewhere else |
 | `CB_GIORNI_PULIZIA` | age in days of what the automatic cleanup removes (default `60`, `0` turns it off) |
-| `CB_SOGLIA_LIMITE` | percentage of the 5-hour window past which the queue pauses (default `95`) |
+| `CB_PROMPT_RESET` | `1` turns on the automatic prompt at window reset (off by default) |
 | `CB_LIMITI` | path of the file where the statusline saves the usage limits |
 
 Order of precedence, for all of them: **environment variable → settings file → default.**
@@ -390,23 +390,58 @@ Claude session you started by hand.
 #### Running out of tokens
 
 A long queue and a five-hour window do not always fit together. Left alone, the queue keeps
-firing until the window closes, and the prompt that was in flight dies half-answered — spent,
-without having done anything.
+firing after the window has closed, and every prompt it sends is simply spent.
 
-If cb knows how much of the window is left, it stops the queue **before** that happens, waits
-for the reset, and then picks up where it was. A prompt that was already delivered but never
-got its answer goes back to the **top** of the queue: it was next, and the order is the only
-thing a queue promises. If the queue is empty at that point, cb sends `continue` instead — the
-work is still in the context, and that is the word that resumes it without adding a request
-you never made.
+When the window is **used up**, cb suspends the queue. Not before: the queue stops when the
+tokens are gone, not when they are nearly gone — deciding for you that the last turn is not
+worth it would be wrong, and that turn may well have been a short one.
 
-It cannot stop *you* from typing, only the queue. The queue is the part that runs by itself,
-which is also the only part that can burn a window while you are away from the keyboard.
+**The suspension does not lift by itself when the window comes back.** The new window is
+yours, and the queue does not help itself to it. Two things can restart it, and which one
+depends on the setting below:
 
-**It needs one line in your statusline**, because that is the only place Claude Code publishes
-this: the JSON it pipes to the statusline command carries `rate_limits.five_hour`, with
-`used_percentage` and `resets_at`. It is not in the transcript, and cb never reads the screen.
-So whoever writes your statusline saves those two numbers where cb looks:
+- **with the reset prompt on** — the queue restarts *together with it*. That prompt is already
+  the signal that a new window has begun, so waiting for you as well would hold the queue for
+  nothing.
+- **with it off** — the queue restarts on **your first Enter** after the window has come back.
+  An Enter before the reset restarts nothing: the tokens are still gone, and the queue would
+  suspend again on the next check.
+
+#### The automatic prompt at reset (off by default)
+
+At the hour the window comes back, cb can type one prompt into Claude's input bar by itself:
+
+```
+[automatic] The usage window just reset. If your previous reply was cut off, continue it
+from where it stopped. If it was complete, reply with exactly: OK
+```
+
+Every cb session open at that moment sends its own — they are different conversations, and
+each carries its own interrupted work.
+
+It is **off unless you turn it on**, and deliberately so: it sends a prompt by itself, and
+that prompt costs tokens. Something that spends on your behalf is asked for, not inherited
+from a package upgrade. Turn it on with `promptAlReset: true` in
+`~/.claude/cb/impostazioni.json`, or `CB_PROMPT_RESET=1` for one run.
+
+Three things about the wording, since it is sent every time — including when nothing was
+interrupted, which is the case worth making cheap:
+
+- **two cases, not three.** "Ignore this if it arrived while you were replying" is redundant: a
+  prompt typed while Claude is working gets queued by the CLI, so by the time it is read the
+  reply is finished — it falls into the second case on its own.
+- **"reply with exactly: OK", not "do nothing".** A model cannot not answer. Asking it to stay
+  quiet still produces a turn, just one of unpredictable length ("Understood, I'll wait…"). A
+  fixed answer is one token.
+- **English**, even with an Italian interface: it is the language the model is least ambiguous
+  in, and here ambiguity is paid for in tokens.
+
+#### What both of these need
+
+**One line in your statusline**, because that is the only place Claude Code publishes this: the
+JSON it pipes to the statusline command carries `rate_limits.five_hour`, with `used_percentage`
+and `resets_at`. It is not in the transcript, and cb never reads the screen. So whoever writes
+your statusline saves those two numbers where cb looks:
 
 ```powershell
 # In your statusline script, after you have parsed the JSON into $j:
@@ -420,10 +455,12 @@ $dest = Join-Path $cbDir 'limiti.json'; $tmp = "$dest.tmp"
 Move-Item $tmp $dest -Force        # atomic: cb may read mid-write
 ```
 
-Without that file the feature is simply off, and the queue behaves exactly as it did before.
-`CB_SOGLIA_LIMITE` moves the threshold, which defaults to **95%** — not 100, because between
-the last statusline refresh and the prompt going out there is always some slack, and a turn
-that starts at 99% dies halfway.
+Without that file neither of the two happens, and the queue behaves exactly as it did before —
+a read error that stopped your queue would be worse than the problem it solves.
+
+One caveat, stated plainly: if the CLI never reports exactly 100, the suspension never fires
+and the queue spends its last prompt on a turn that may die halfway. That percentage is the
+only signal available — cb does not read the screen, and the limits are not in the transcript.
 
 ### Notes
 

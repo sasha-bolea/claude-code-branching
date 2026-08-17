@@ -1,30 +1,44 @@
-// I limiti d'uso dell'abbonamento: quanto ne resta, e quando la finestra riparte.
+// L'ora in cui la finestra dei token riparte.
 //
-// Claude Code non li scrive nel transcript — verificato su una sessione da 10 MB,
-// dove non compaiono affatto — e cb non legge mai lo schermo. L'unica fonte
+// Claude Code non la scrive nel transcript — verificato su una sessione da 10 MB,
+// dove non compare affatto — e cb non legge mai lo schermo. L'unica fonte
 // ufficiale e' il JSON che il CLI passa sullo stdin del comando della statusline:
-// `rate_limits.five_hour` porta `used_percentage` (0-100) e `resets_at`, che e'
-// l'istante del reset in secondi epoch. La documentazione del CLI lo dice
-// esplicitamente: «Only present for subscribers after first API response».
+// `rate_limits.five_hour.resets_at`, l'istante del reset in secondi epoch. La
+// documentazione del CLI lo dice: «Only present for subscribers after first API
+// response».
 //
-// Quel comando pero' lo esegue Claude, non cb. Chi scrive la statusline salva i
-// numeri in un file, e cb li legge di li': e' un accordo fra i due, non un modo di
-// spiare. Senza il file la funzione resta spenta, e cb si comporta come prima.
+// Quel comando pero' lo esegue Claude, non cb. Chi scrive la statusline salva il
+// numero in un file, e cb lo legge di li': e' un accordo fra i due, non un modo di
+// spiare. Senza il file non si sa niente e non parte nessun prompt.
 //
 // Che sia un file e non una variabile: la statusline gira in un altro processo, e
-// il wrapper deve poterlo leggere anche minuti dopo — soprattutto minuti dopo,
-// visto che a limite esaurito Claude smette di aggiornare la barra e l'ultimo
-// valore scritto e' l'unico che resta.
+// il wrapper deve poterlo leggere anche ore dopo.
+//
+// Si guarda solo la finestra delle cinque ore: e' quella che si esaurisce in una
+// giornata di lavoro, mentre quella dei sette giorni, quando finisce, non riparte
+// in un'attesa che abbia senso aspettare col processo aperto.
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { impostazione } from './impostazioni.js';
 
-// Oltre questa percentuale la finestra si considera finita. Non 100: fra l'ultimo
-// aggiornamento della barra e il prompt che parte c'e' sempre un margine, e un
-// turno che comincia al 99% muore a meta'. Si cambia con `sogliaLimite`.
-const SOGLIA_PREDEFINITA = 95;
+// Vero se il prompt automatico al reset e' acceso.
+//
+// **Spento se non lo si accende**, ed e' voluto: manda un prompt da solo e quel
+// prompt costa token. Una cosa che spende per conto tuo la si chiede, non la si
+// subisce perche' hai aggiornato un pacchetto — e chi non sa di averla accesa
+// vedrebbe comparire un turno dal nulla e concluderebbe che cb e' impazzito.
+//
+// Dall'ambiente arrivano stringhe, e `'0'` e `'false'` sono stringhe vere quindi
+// entrambe passerebbero per accese: vanno riconosciute a mano. Dal file invece
+// arriva un booleano.
+// ritorna: true se il prompt deve partire
+export function promptAlResetAttivo() {
+  const scelta = impostazione('promptAlReset', false);
+  if (typeof scelta === 'string') return !['', '0', 'false', 'no'].includes(scelta.toLowerCase());
+  return scelta === true;
+}
 
 // Percorso del file dei limiti. CB_LIMITI lo sposta, che serve alle prove.
 // ritorna: percorso del file
@@ -34,37 +48,41 @@ export function percorsoLimiti() {
 
 // Legge i limiti salvati dalla statusline.
 // Un file assente, vuoto o illeggibile non e' un errore: significa solo che la
-// statusline non e' stata agganciata, e la funzione resta spenta.
+// statusline non e' stata agganciata, e non c'e' nessuna sveglia da armare.
 // ritorna: { cinqueOre: {usato, resetIl}, setteGiorni: {...}, scrittoIl } | null
 export function leggiLimiti() {
   try {
-    const testo = fs.readFileSync(percorsoLimiti(), 'utf8');
-    const dati = JSON.parse(testo);
+    const dati = JSON.parse(fs.readFileSync(percorsoLimiti(), 'utf8'));
     return dati && typeof dati === 'object' ? dati : null;
   } catch {
     return null;
   }
 }
 
-// Vero se la finestra delle 5 ore e' esaurita (o quasi).
+// Vero se la finestra delle cinque ore e' finita.
 //
-// Si guarda solo quella: e' la finestra che si esaurisce davvero in una sessione
-// di lavoro, mentre quella dei 7 giorni, quando finisce, non riparte in un'attesa
-// che abbia senso aspettare col processo aperto.
+// Cento e non «quasi cento»: la coda si ferma quando i token **sono** finiti, non
+// quando stanno per finire. Fermarsi prima vorrebbe dire decidere al posto di chi
+// lavora che l'ultimo turno non vale la pena — e magari quel turno era corto.
+//
+// Il prezzo, dichiarato: se il CLI non arriva mai a segnare 100 esatto la
+// sospensione non scatta, e la coda spende l'ultimo prompt su un turno che potrebbe
+// morire a meta'. La percentuale e' l'unico segnale che c'e': cb non legge lo
+// schermo, e nel transcript i limiti non compaiono.
 // limiti: quelli di leggiLimiti(), o null
-// ritorna: true se conviene fermarsi
+// ritorna: true se non c'e' piu' finestra
 export function limiteEsaurito(limiti) {
   const usato = limiti?.cinqueOre?.usato;
-  if (typeof usato !== 'number') return false;
-  const soglia = Number(impostazione('sogliaLimite', SOGLIA_PREDEFINITA));
-  return usato >= soglia;
+  // Una percentuale che non c'e' non e' uno zero: la statusline la omette finche'
+  // non arriva la prima risposta dell'API, e li' non si sa niente.
+  return typeof usato === 'number' && usato >= 100;
 }
 
-// L'istante in cui la finestra delle 5 ore riparte, in millisecondi.
+// L'istante in cui la finestra riparte, in millisecondi.
 //
 // Il CLI lo da' in secondi; qualche campo affine gira in millisecondi, quindi si
 // riconosce dalla grandezza invece di fidarsi. Un reset gia' passato vale null:
-// vuol dire che il file e' vecchio e non c'e' niente da aspettare.
+// vuol dire che il file e' vecchio, e non c'e' niente da aspettare.
 // limiti: quelli di leggiLimiti(), o null
 // adesso: millisecondi correnti, per le prove
 // ritorna: millisecondi epoch, o null
@@ -75,10 +93,8 @@ export function istanteReset(limiti, adesso = Date.now()) {
   return ms > adesso ? ms : null;
 }
 
-// L'ora del reset come si legge a schermo, nel fuso di chi guarda.
-//
-// Solo l'ora e i minuti: la finestra e' di cinque ore, quindi il giorno non serve
-// mai, e una data intera in una riga di stato ruba spazio a quello che cambia.
+// L'ora del reset come si legge, nel fuso di chi guarda. Serve al diagnosi.log:
+// «fra 4200s» non dice niente, «alle 17:50» si controlla con un'occhiata.
 // ritorna: 'HH:MM', o null se non c'e' un reset da aspettare
 export function oraReset(limiti, adesso = Date.now()) {
   const quando = istanteReset(limiti, adesso);
@@ -89,10 +105,10 @@ export function oraReset(limiti, adesso = Date.now()) {
 
 // Quanto manca al reset, in millisecondi, con un tetto.
 //
-// Il tetto serve perche' `setTimeout` sopra i 2^31-1 ms scatta subito (il numero
-// va in overflow e diventa negativo): un valore assurdo nel file — un epoch
+// Il tetto serve perche' `setTimeout` sopra i 2^31-1 ms scatta subito: il numero
+// va in overflow e diventa negativo. Un valore assurdo nel file — un epoch
 // sbagliato di anni — trasformerebbe l'attesa in una sveglia immediata, cioe'
-// esattamente il contrario. Oltre il tetto si riprova piu' tardi.
+// esattamente il contrario. Oltre il tetto si riguarda piu' tardi.
 // ritorna: millisecondi da aspettare, o null se non c'e' niente da aspettare
 export function attesaFinoAlReset(limiti, adesso = Date.now()) {
   const quando = istanteReset(limiti, adesso);

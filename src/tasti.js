@@ -936,6 +936,27 @@ export function azioniNavigazione(dati) {
 // token: risultato di tokenizza
 // scorciatoia: risultato di analizzaScorciatoia
 // ritorna: true se sono tutti rilasci di quel tasto
+// Vero se fra i token c'e' un invio: e' il gesto con cui un prompt parte davvero.
+//
+// Serve al wrapper per sapere che l'utente ha mandato qualcosa **senza leggere lo
+// schermo**, che cb non fa mai. Sta qui e non nel wrapper perche' l'invio non si
+// riconosce da un byte: in win32-input-mode arriva come evento con `vk` 13, e
+// confrontare i byte direttamente e' proprio l'errore che questo modulo esiste per
+// evitare.
+//
+// I rilasci non contano: un invio ne produce due eventi, e contarli entrambi
+// vorrebbe dire vedere due prompt dove ce n'e' uno. Un `\n` incollato non e' un
+// invio: dentro un blocco incollato gli a capo sono testo.
+// token: quelli di tokenizza()
+// ritorna: true se c'e' almeno un invio premuto
+export function contieneInvio(token) {
+  return token.some((voce) => {
+    if (voce.tasto) return voce.tasto.vk === VK_INVIO && !voce.tasto.rilascio;
+    if (voce.incolla !== undefined) return false;
+    return voce.bytes?.includes?.(0x0d) ?? false;
+  });
+}
+
 export function soloRilasci(token, scorciatoia) {
   if (token.length === 0) return false;
   return token.every((voce) => voce.tasto?.rilascio && voce.tasto.vk === scorciatoia.vk);

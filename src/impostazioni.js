@@ -99,7 +99,7 @@ export function impostazione(nome, predefinito) {
     radice: 'CB_RADICE',
     scorciatoia: 'CB_TASTO',
     giorniPulizia: 'CB_GIORNI_PULIZIA',
-    sogliaLimite: 'CB_SOGLIA_LIMITE',
+    promptAlReset: 'CB_PROMPT_RESET',
   }[nome];
   const daAmbiente = ambiente ? process.env[ambiente] : null;
   if (daAmbiente) return daAmbiente;

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   tokenizza,
+  contieneInvio,
   contaInTesta,
   analizzaScorciatoia,
   azioniTastiera,
@@ -484,7 +485,29 @@ function testSpegneOgniModoDiInput() {
   );
 }
 
+// L'invio non si riconosce da un byte: in win32-input-mode arriva come evento con
+// vk 13, ed e' il motivo per cui questa funzione sta qui e non nel wrapper.
+function testContieneInvio() {
+  assert.equal(contieneInvio(tokenizza(Buffer.from('\r'))), true, 'il \\r grezzo e un invio');
+  assert.equal(contieneInvio(tokenizza(Buffer.from('ciao\r'))), true, 'anche in coda al testo');
+  assert.equal(contieneInvio(tokenizza(Buffer.from('ciao'))), false, 'del testo da solo no');
+  assert.equal(contieneInvio([]), false, 'niente tasti, niente invio');
+
+  // win32-input-mode: la pressione ha Kd=1, il rilascio Kd=0. Contarli entrambi
+  // vorrebbe dire vedere due invii dove ce n'e' uno.
+  const premuto = Buffer.from('\x1b[13;28;13;1;0;1_');
+  const rilasciato = Buffer.from('\x1b[13;28;13;0;0;1_');
+  assert.equal(contieneInvio(tokenizza(premuto)), true, 'la pressione win32 e un invio');
+  assert.equal(contieneInvio(tokenizza(rilasciato)), false, 'il rilascio non lo e');
+
+  // Un a capo dentro un blocco incollato e' testo, non un invio: chi incolla un
+  // prompt su due righe non ha mandato niente.
+  const incollato = Buffer.from('\x1b[200~prima\nseconda\x1b[201~');
+  assert.equal(contieneInvio(tokenizza(incollato)), false, 'gli a capo incollati sono testo');
+}
+
 const prove = [
+  testContieneInvio,
   testEscGrezzoSingolo,
   testDoppioEscGrezzoStessoBuffer,
   testFrecciaNonEscGrezzo,

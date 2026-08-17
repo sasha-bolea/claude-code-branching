@@ -190,15 +190,6 @@ with CB_LINGUA (en, it).
     sottotitolo: 'they go out one at a time, when Claude finishes a turn',
     vuota: 'the queue is empty: write below and press enter',
     quanti: (n) => (n === 1 ? '1 prompt waiting' : `${n} prompts waiting`),
-    // La pausa per i token va detta qui e non solo nel diagnosi.log: una coda
-    // ferma e una coda che non parte si assomigliano troppo, e senza l'ora del
-    // reset si finisce per credere che sia rotta.
-    // Due varianti, dalla piu' lunga alla piu' corta, come le legende: su un
-    // terminale stretto a essere tagliata era la **coda** della riga, cioe'
-    // proprio l'ora — e «in pausa» senza un «fino a quando» dice meno di niente.
-    // Il glifo e' `‖` e non un'emoji: un terminale che le rende a doppia
-    // larghezza sfaserebbe la riga di una colonna.
-    inPausa: (ora) => [`paused · out of tokens, resuming at ${ora}`, `‖ ${ora}`],
     // Il posto in fondo resta annunciato anche quando il cursore sta su un
     // altro prompt: senza, l'elenco sembrerebbe finire con l'ultimo. Dice cosa
     // ci si fa — accodare — e non come si chiama la riga.
@@ -898,15 +889,6 @@ La scorciatoia si fissa una volta per tutte con CB_TASTO, la lingua con CB_LINGU
     sottotitolo: 'partono uno alla volta, quando Claude finisce un turno',
     vuota: 'la coda è vuota: scrivi qui sotto e premi invio',
     quanti: (n) => (n === 1 ? '1 prompt in attesa' : `${n} prompt in attesa`),
-    // La pausa per i token va detta qui e non solo nel diagnosi.log: una coda
-    // ferma e una coda che non parte si assomigliano troppo, e senza l'ora del
-    // reset si finisce per credere che sia rotta.
-    // Due varianti, dalla piu' lunga alla piu' corta, come le legende: su un
-    // terminale stretto a essere tagliata era la **coda** della riga, cioe'
-    // proprio l'ora — e «in pausa» senza un «fino a quando» dice meno di niente.
-    // Il glifo e' `‖` e non un'emoji: un terminale che le rende a doppia
-    // larghezza sfaserebbe la riga di una colonna.
-    inPausa: (ora) => [`in pausa · token finiti, riprendo alle ${ora}`, `‖ ${ora}`],
     // Il posto in fondo resta annunciato anche quando il cursore sta su un
     // altro prompt: senza, l'elenco sembrerebbe finire con l'ultimo. Dice cosa
     // ci si fa — accodare — e non come si chiama la riga.

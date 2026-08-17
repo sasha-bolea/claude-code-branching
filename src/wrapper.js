@@ -30,14 +30,21 @@ import { senzaTitolo, sequenzaTitolo } from './titolo.js';
 import { impostazione, salvaImpostazione, percorsoImpostazioni } from './impostazioni.js';
 import { T } from './lingua.js';
 import { creaSessioneTroncata } from './ramo.js';
-import { trasferisci, leggiCoda, togli, indiceProssimo, scriviCoda } from './coda.js';
-import { leggiLimiti, limiteEsaurito, attesaFinoAlReset } from './limiti.js';
+import { trasferisci, leggiCoda, togli, indiceProssimo } from './coda.js';
+import {
+  leggiLimiti,
+  limiteEsaurito,
+  attesaFinoAlReset,
+  oraReset,
+  promptAlResetAttivo,
+} from './limiti.js';
 import { leggiProfili, elencoProfili, ambienteConProfilo } from './profili.js';
 import {
   tokenizza,
   contaInTesta,
   analizzaScorciatoia,
   soloRilasci,
+  contieneInvio,
   azioniTastiera,
   azioniNavigazione,
   ATTESA_DOPPIO_ESC,
@@ -118,17 +125,28 @@ const QUIETE_AVVIO = 600;
 const QUIETE_CODA = 1500;
 const ATTESA_MASSIMA_AVVIO = 8000;
 
-// Il prompt che si manda al reset dei token quando la coda e' vuota: fa
-// proseguire il lavoro interrotto senza aggiungere richieste che non erano state
-// fatte. In inglese anche a interfaccia italiana, che e' la lingua in cui il
-// modello e' meno ambiguo.
-const PROSEGUI = 'continue';
+// Il prompt che parte all'ora in cui la finestra dei token riparte.
+//
+// Va scritto stretto perche' arriva **sempre**, anche quando non c'era niente da
+// riprendere: e' quello il caso da rendere economico. Tre scelte deliberate:
+//
+// - **due casi, non tre.** «Se e' arrivato mentre rispondevi, ignoralo» non serve:
+//   un prompt scritto mentre Claude lavora viene accodato dal CLI, quindi quando
+//   lo legge la risposta e' finita — cioe' ricade nel secondo caso da solo.
+// - **«rispondi OK» e non «non fare niente».** Un modello non puo' non rispondere:
+//   chiedergli di stare zitto produce comunque un turno, ma di lunghezza
+//   imprevedibile («Capito, resto in attesa...»). Una risposta fissata e' un token.
+// - **in inglese**, anche a interfaccia italiana: e' la lingua in cui il modello
+//   e' meno ambiguo, e qui l'ambiguita' si paga in token.
+const PROMPT_RESET =
+  '[automatic] The usage window just reset. '
+  + 'If your previous reply was cut off, continue it from where it stopped. '
+  + 'If it was complete, reply with exactly: OK';
 
-// Quanto si aspetta prima di riprovare, se al risveglio la statusline non ha
-// ancora aggiornato i limiti. Il reset lo dichiara il CLI, ma la barra si
-// ridisegna quando le pare: meglio ritentare che consegnare dentro una finestra
-// ancora chiusa.
-const RIPROVA_RISVEGLIO = 60 * 1000;
+// Quanto si aspetta prima di riguardare i limiti, quando ancora non si sanno.
+// Al primo avvio il file della statusline spesso non c'e': si riprova invece di
+// rinunciare per sempre.
+const RIPROVA_RESET = 5 * 60 * 1000;
 
 // Millisecondi di calma prima di ridisegnare l'overlay dopo un ridimensionamento.
 // Trascinando il bordo della finestra gli eventi arrivano a decine al secondo:
@@ -265,8 +283,8 @@ export class Wrapper {
     this.attesaBarra = null; // prompt da rimettere nella barra appena Claude e' pronto
     this.timerCoda = null; // conto della quiete dopo cui parte il prossimo prompt in coda
     this.ultimoTasto = 0; // quando l'utente ha battuto l'ultimo tasto (vedi consegnaCoda)
-    this.promptInVolo = null; // consegnato ma ancora senza risposta: torna in coda se i token finiscono
-    this.timerRisveglio = null; // sveglia per il reset della finestra dei token
+    this.timerReset = null; // sveglia per l'ora in cui la finestra dei token riparte
+    this.codaSospesa = false; // token esauriti: resta sospesa finche' non la si riattiva
 
     // Fotografia dell'ambiente di partenza. Ogni processo Claude nasce da questa,
     // non dall'ambiente corrente: e' cio' che fa sparire da sole le variabili di
@@ -384,6 +402,11 @@ export class Wrapper {
     // non scrive nulla dopo l'avvio — la quiete non arriverebbe mai da sola, e i
     // prompt gia' in coda resterebbero li' ad aspettare un turno che non c'e'.
     this.rimandaConsegna();
+    // La sveglia del reset si arma qui, cioe' a ogni processo nuovo: un cambio
+    // ramo lo ricrea, e un timer agganciato al processo vecchio scriverebbe in un
+    // pty morto. Ogni sessione aperta con cb ha la sua e scatta per conto proprio:
+    // e' quello che si vuole, sono conversazioni diverse.
+    this.programmaPromptDelReset();
 
     this.programmaBarra(prompt);
 
@@ -475,14 +498,7 @@ export class Wrapper {
     // Mentre l'utente digita non si inietta niente: il testo si mescolerebbe a
     // quello che sta scrivendo, e l'invio manderebbe il miscuglio.
     if (Date.now() - (this.ultimoTasto ?? 0) < QUIETE_CODA) return;
-
-    // Coi token quasi finiti la coda si ferma, invece di spendere quel che resta
-    // su un turno che morira' a meta'. Il prompt in volo — consegnato ma rimasto
-    // senza risposta — torna in cima, cosi' al risveglio riparte da li'.
-    if (this.sospendiSeSenzaToken()) return;
-    // Arrivati qui il limite c'e': il turno precedente e' finito per conto suo,
-    // quindi il prompt che avevamo consegnato non e' piu' «in volo».
-    this.promptInVolo = null;
+    if (this.codaFerma()) return;
 
     // Non e' per forza il primo: un prompt marcato «salta» si scavalca, e uno
     // «stop» ferma anche tutti quelli dopo di lui.
@@ -507,82 +523,100 @@ export class Wrapper {
     // da minuti, che nessuna quiete puo' rivelare.
     this.processo.write(SVUOTA_BARRA);
     this.processo.write(`${testo}\r`);
-    // Da qui e' «in volo»: consegnato, ma senza sapere ancora se avra' risposta.
-    // Se i token finiscono prima che il turno chiuda, torna in coda.
-    this.promptInVolo = prossimo;
   }
 
-  // Ferma la coda quando la finestra delle 5 ore e' agli sgoccioli, e programma
-  // il risveglio per quando riparte.
+  // Vero se la coda non deve consegnare niente.
   //
-  // Perche' prima di consegnare e non dopo: un turno che comincia col serbatoio
-  // vuoto muore a meta', e quel prompt e' speso — mentre fermarsi un attimo prima
-  // costa solo l'attesa, che ci sarebbe comunque. E' l'unica cosa che cb puo'
-  // davvero fermare: a te che scrivi nella barra non mette becco.
+  // Due motivi, e il secondo dura piu' del primo. Con i token **esauriti** si
+  // sospende: un prompt consegnato adesso resterebbe senza risposta, cioe' speso.
+  // Ma la sospensione non finisce da sola quando la finestra riparte — resta
+  // finche' qualcuno la riattiva, ed e' voluto: la finestra nuova e' tua, e la
+  // coda non se la prende senza che tu abbia detto di ricominciare.
   //
-  // Il prompt in volo torna in **cima** alla coda, non in fondo: era il prossimo,
-  // e l'ordine e' l'unica cosa che la coda promette. Se fosse invece andato a
-  // buon fine proprio mentre i token finivano, si rimanda una volta di troppo —
-  // un prompt ripetuto si vede e si cancella, uno perso no.
-  // ritorna: true se ha sospeso, e il chiamante deve fermarsi
-  sospendiSeSenzaToken() {
-    const limiti = leggiLimiti();
-    if (!limiteEsaurito(limiti)) return false;
-
-    const attesa = attesaFinoAlReset(limiti);
-    if (attesa === null) return false; // reset gia' passato: il file e' vecchio
-
-    if (this.promptInVolo) {
-      scriviCoda(this.sessionId, [this.promptInVolo, ...leggiCoda(this.sessionId)]);
-      this.registra(`limiti: rimetto in coda il prompt rimasto senza risposta (${this.promptInVolo.length} caratteri)`);
-      this.promptInVolo = null;
-    }
-
-    this.programmaRisveglio(attesa);
-    return true;
-  }
-
-  // Arma la sveglia per il reset dei token. Una sola: riarmarla a ogni quiete
-  // sposterebbe il risveglio in avanti per sempre.
-  // attesa: millisecondi da aspettare
-  programmaRisveglio(attesa) {
-    if (this.timerRisveglio) return;
-    this.registra(`limiti: coda sospesa, riprendo fra ${Math.round(attesa / 1000)}s`);
-    this.timerRisveglio = setTimeout(() => {
-      this.timerRisveglio = null;
-      this.risvegliaDopoIlReset();
-    }, attesa);
-    // Non tiene sveglio il processo: se Claude e' chiuso non c'e' piu' niente a
-    // cui consegnare, e restare vivi per una sveglia sarebbe solo un processo
-    // che non muore.
-    this.timerRisveglio.unref?.();
-  }
-
-  // Riparte quando la finestra si e' resettata: se c'e' una coda riprende da
-  // quella, se e' vuota manda `continue`.
-  //
-  // «continue» e non un prompt vero: il lavoro interrotto e' li' nel contesto, e
-  // questa e' la parola con cui lo si fa proseguire senza aggiungere richieste
-  // che non avevi fatto. In inglese perche' e' la lingua in cui il modello e'
-  // meno ambiguo, indipendentemente da quella dell'interfaccia.
-  risvegliaDopoIlReset() {
-    if (!this.processo || this.inOverlay) return;
+  // Chi la riattiva sono due, in alternativa: il prompt automatico del reset, se
+  // e' acceso, o il tuo primo invio dopo che la finestra e' ripartita.
+  // ritorna: true se il chiamante deve fermarsi
+  codaFerma() {
     if (limiteEsaurito(leggiLimiti())) {
-      // La statusline non si e' ancora aggiornata: si riprova piu' tardi invece
-      // di consegnare dentro un limite che magari e' ancora chiuso.
-      this.programmaRisveglio(RIPROVA_RISVEGLIO);
+      if (!this.codaSospesa) {
+        this.codaSospesa = true;
+        this.registra('coda: token esauriti, sospesa');
+      }
+      return true;
+    }
+    return this.codaSospesa;
+  }
+
+  // Riattiva la coda dopo una sospensione per token esauriti.
+  //
+  // Non fa niente se non era sospesa, cosi' chi chiama non deve controllarlo: i
+  // due punti da cui si riattiva — il prompt del reset e l'invio dell'utente —
+  // scattano molto piu' spesso di una sospensione.
+  // motivo: cosa l'ha riattivata, per il diagnosi.log
+  riattivaCoda(motivo) {
+    if (!this.codaSospesa) return;
+    this.codaSospesa = false;
+    this.registra(`coda: riattivata (${motivo})`);
+    this.rimandaConsegna();
+  }
+
+  // Arma la sveglia per l'ora in cui la finestra dei token riparte.
+  //
+  // Si riarma da sola dopo ogni scatto, quindi il timer e' sempre uno solo e
+  // segue le finestre una dopo l'altra senza che nessuno se ne debba ricordare.
+  // Se i limiti non si sanno ancora — la statusline non ha ancora girato, o non
+  // e' agganciata — si riprova piu' tardi invece di rinunciare per sempre: al
+  // primo avvio quel file spesso non c'e' ancora.
+  programmaPromptDelReset() {
+    clearTimeout(this.timerReset);
+    // Spento: non si arma niente e non si riprova. Chi non l'ha acceso non deve
+    // nemmeno avere un timer che gira.
+    if (!promptAlResetAttivo()) return;
+    const limiti = leggiLimiti();
+    const attesa = attesaFinoAlReset(limiti);
+
+    if (attesa === null) {
+      this.timerReset = setTimeout(() => this.programmaPromptDelReset(), RIPROVA_RESET);
+      this.timerReset.unref?.();
       return;
     }
 
-    if (indiceProssimo(leggiCoda(this.sessionId)) >= 0) {
-      this.registra('limiti: finestra resettata, riprendo la coda');
-      this.consegnaCoda();
+    this.registra(`reset: prompt fra ${Math.round(attesa / 1000)}s (alle ${oraReset(limiti)})`);
+    this.timerReset = setTimeout(() => this.mandaPromptDelReset(), attesa);
+    // Non tiene sveglio il processo: con Claude chiuso non c'e' piu' nessuno a cui
+    // scrivere, e restare vivi per un timer sarebbe solo un processo che non muore.
+    this.timerReset.unref?.();
+  }
+
+  // Scrive il prompt del reset nella barra di Claude, e riarma la sveglia per la
+  // finestra dopo.
+  //
+  // Non guarda se i token erano finiti davvero: la finestra riparte a quell'ora
+  // comunque, e un turno che non era stato interrotto costa il prompt piu' corto
+  // che il modello possa dare — molto meno di quanto costerebbe indovinare.
+  //
+  // Se l'utente sta scrivendo si rimanda di poco: iniettare in quel momento
+  // mescolerebbe il testo a quello che ha in mano, e l'invio manderebbe il
+  // miscuglio. Con una schermata di cb aperta, stessa cosa.
+  mandaPromptDelReset() {
+    if (!this.processo) return;
+    // Ricontrollato allo scatto e non solo quando si arma: la sveglia dorme per
+    // ore, e in quelle ore l'impostazione puo' essere stata spenta.
+    if (!promptAlResetAttivo()) return;
+    if (this.inOverlay || Date.now() - (this.ultimoTasto ?? 0) < QUIETE_CODA) {
+      this.timerReset = setTimeout(() => this.mandaPromptDelReset(), QUIETE_CODA);
+      this.timerReset.unref?.();
       return;
     }
 
-    this.registra('limiti: finestra resettata, coda vuota, mando continue');
+    this.registra('reset: mando il prompt della finestra nuova');
     this.processo.write(SVUOTA_BARRA);
-    this.processo.write(`${PROSEGUI}\r`);
+    this.processo.write(`${PROMPT_RESET}\r`);
+    // La coda riparte **insieme** al prompt: se il prompt automatico c'e', e' lui
+    // il segnale che la finestra nuova e' cominciata, e aspettare anche un invio
+    // dell'utente vorrebbe dire tenere ferma la coda per niente.
+    this.riattivaCoda('prompt del reset');
+    this.programmaPromptDelReset();
   }
 
   // Fa ripartire il conto della quiete a ogni blocco di output.
@@ -1842,8 +1876,8 @@ export class Wrapper {
     // dorme per ore ed e' quindi quella con piu' probabilita' di svegliarsi in un
     // mondo cambiato.
     clearTimeout(this.timerCoda);
-    clearTimeout(this.timerRisveglio);
-    this.timerRisveglio = null;
+    clearTimeout(this.timerReset);
+    this.timerReset = null;
 
     const attesa = new Promise((risolvi) => {
       this.risolviUscita = risolvi;
@@ -2018,6 +2052,15 @@ export class Wrapper {
     this.rimandaConsegna();
 
     const token = tokenizza(dati);
+
+    // Il tuo invio riattiva una coda sospesa, ma solo a finestra ripartita: e' la
+    // strada che vale quando il prompt automatico del reset e' spento, e allora
+    // «la finestra nuova e' cominciata» lo dice il primo prompt che manti tu.
+    // Prima del reset un invio non riattiva niente: i token sono ancora finiti, e
+    // la coda tornerebbe a sospendersi al controllo dopo.
+    if (this.codaSospesa && contieneInvio(token) && !limiteEsaurito(leggiLimiti())) {
+      this.riattivaCoda('primo invio della finestra nuova');
+    }
 
     if (this.diagnostica) {
       const esadecimale = [...dati].map((b) => b.toString(16).padStart(2, '0')).join(' ');

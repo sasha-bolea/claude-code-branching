@@ -422,17 +422,38 @@ cartella, pubblicazione su GitHub, diagnosi): **`docs/procedure.md`**.
   Va scritto in modo **atomico** (temporaneo + rinomina): la barra si ridisegna di continuo e
   cb leggerebbe un JSON monco. Senza il file la funzione è spenta e la coda fa come prima —
   un errore di lettura che bloccasse la coda sarebbe peggio del problema che risolve.
-- **La soglia dei token sta sotto il 100 apposta** (95%, `CB_SOGLIA_LIMITE`): fra l'ultimo
-  aggiornamento della barra e il prompt che parte c'è un margine, e un turno che comincia al
-  99% muore a metà — speso senza aver concluso niente. Ci si ferma **prima** di consegnare,
-  non dopo: fermarsi un attimo prima costa solo l'attesa, che ci sarebbe comunque.
+- **La coda si sospende a token esauriti, non prima** (`limiteEsaurito`, 100 e non 95): fermarsi
+  in anticipo vorrebbe dire decidere al posto dell'utente che l'ultimo turno non vale la pena, e
+  magari era corto. Prezzo dichiarato: se il CLI non segna mai 100 esatto la sospensione non
+  scatta. La percentuale è l'unico segnale — cb non legge lo schermo, e nel transcript i limiti
+  non ci sono.
+- **La sospensione non finisce da sola al reset.** `codaSospesa` resta vero finché qualcuno
+  chiama `riattivaCoda`: la finestra nuova è dell'utente, e la coda non se la prende. I due
+  punti che riattivano sono in alternativa — il prompt automatico del reset se è acceso, oppure
+  il primo invio dell'utente **a finestra già ripartita** (prima del reset non riattiva niente,
+  o la coda tornerebbe a sospendersi al controllo dopo).
+- **Il prompt automatico al reset è spento se non lo si accende** (`promptAlReset`,
+  `CB_PROMPT_RESET`). Manda un prompt da solo e quel prompt costa token: una cosa che spende per
+  conto dell'utente si chiede, non si eredita da un aggiornamento. Dall'ambiente arrivano
+  stringhe, e `'0'` e `'false'` sono stringhe vere: vanno riconosciute a mano o passerebbero per
+  «acceso». Si ricontrolla **anche allo scatto**, non solo quando si arma: la sveglia dorme per
+  ore e in quelle ore l'impostazione può essere cambiata.
+- **Il testo del prompt del reset ha due casi, non tre.** «Ignoralo se è arrivato mentre
+  rispondevi» è ridondante: un prompt scritto mentre Claude lavora viene accodato dal CLI, quindi
+  quando lo legge la risposta è finita. E si chiede `reply with exactly: OK` invece di «non fare
+  niente»: un modello non può non rispondere, e chiedergli di stare zitto produce comunque un
+  turno di lunghezza imprevedibile.
+- **L'invio si riconosce con `contieneInvio`, non da un byte.** In win32-input-mode arriva come
+  evento con `vk` 13, e i rilasci (`Kd=0`) non contano o un invio ne produrrebbe due. Gli a capo
+  dentro un blocco incollato non sono invii: chi incolla un prompt su due righe non ha mandato
+  niente.
 - **L'attesa del reset ha un tetto di sei ore.** `setTimeout` oltre 2^31-1 ms scatta *subito*,
   perché il numero va in overflow e diventa negativo: un epoch sbagliato di anni nel file
   trasformerebbe l'attesa in una sveglia immediata, cioè l'esatto contrario. La sveglia è
   `unref`: restare vivi per un timer, con Claude chiuso, sarebbe solo un processo che non muore.
-- **Il prompt in volo torna in cima alla coda, non in fondo.** Era il prossimo, e l'ordine è
-  l'unica cosa che la coda promette. Se era andato a buon fine proprio mentre i token finivano
-  si rimanda una volta di troppo: un prompt ripetuto si vede e si cancella, uno perso no.
+- **La sveglia del reset si arma a ogni processo nuovo**, non una volta per sessione: un cambio
+  ramo ricrea il processo, e un timer agganciato a quello vecchio scriverebbe in un pty morto.
+  Ogni sessione aperta con cb ha la sua e scatta per conto proprio — sono conversazioni diverse.
 - **La coda ha due strade di consegna, e dentro cb vince il pty.** L'hook `Stop` può solo
   rispondere `{"decision":"block","reason":<testo>}`: Claude non si ferma e riceve il testo,
   ma **come motivo del blocco**, non come record `user` — nel transcript non c'è un prompt,

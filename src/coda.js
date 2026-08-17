@@ -40,13 +40,11 @@ import { sovrapposizioneIstruzioni } from './istruzioni.js';
 import {
   coloraTasti,
   legendaSuRighe,
-  primaCheEntra,
   aCapo,
   tagliaVisibile,
   riquadro as disegnaRiquadro,
 } from './vista.js';
 import { T } from './lingua.js';
-import { leggiLimiti, limiteEsaurito, oraReset } from './limiti.js';
 import { arancioneForte, bianco, grigio, normale } from './stile.js';
 
 // Cartella delle code, accanto alle altre cose di cb. La variabile CB_CODA ha la
@@ -386,23 +384,12 @@ export function disegnaCoda(stato, { colonne = 100, altezza = 30 } = {}) {
   // spiegazione del perche' una coda piena non stia partendo, e senza si legge
   // come un guasto. Sta qui e non nel sottotitolo perche' e' informazione che
   // cambia, e il sottotitolo dice sempre la stessa cosa.
-  // Lo spazio per l'avviso e' quello che avanza dopo il conto dei prompt, e la
-  // variante si sceglie di conseguenza: su un terminale stretto resta almeno
-  // `‖ 14:30`, che e' l'ora — la sola cosa che l'avviso deve dire.
-  const testoConto = stato.prompt.length === 0 ? T.coda.vuota : T.coda.quanti(stato.prompt.length);
-  const pausa = stato.pausaFino
-    ? `  ${arancioneForte(primaCheEntra(T.coda.inPausa(stato.pausaFino), larghezza - testoConto.length - 2))}`
-    : '';
-  // In pausa, «altre N righe» cede il posto. Le due insieme non ci stanno su un
-  // terminale normale, e a essere tagliata era la coda della riga — cioe' l'ora
-  // del reset, che e' il motivo per cui l'avviso esiste: «in pausa» senza un
-  // «fino a quando» dice meno di niente. Che ci siano righe fuori schermo si
-  // scopre premendo una freccia; perche' la coda non parta, no.
-  const righeFuori = fuori > 0 && !pausa ? `  ${grigio(T.coda.fuoriSchermo(fuori))}` : '';
   const conto =
     stato.prompt.length === 0
-      ? `${grigio(taglia(T.coda.vuota))}${pausa}`
-      : `${normale(taglia(T.coda.quanti(stato.prompt.length)))}${righeFuori}${pausa}`;
+      ? grigio(taglia(T.coda.vuota))
+      : `${normale(taglia(T.coda.quanti(stato.prompt.length)))}${
+          fuori > 0 ? `  ${grigio(T.coda.fuoriSchermo(fuori))}` : ''
+        }`;
 
   const righe = [
     `  ${arancioneForte('cb')}  ${normale(taglia(T.coda.titolo))}`,
@@ -488,11 +475,6 @@ export function apriCoda({ sessione, ingresso = process.stdin, uscita = process.
       if (stato.prompt.length !== primaN) {
         stato.indice = Math.max(0, Math.min(stato.indice, stato.prompt.length));
       }
-      // Anche i limiti si rileggono a ogni disegno, come la coda: la finestra
-      // puo' resettarsi mentre la schermata e' aperta, e l'avviso deve sparire da
-      // solo — un «riprendo alle 14:30» ancora li' alle 14:35 e' peggio di niente.
-      const limiti = leggiLimiti();
-      stato.pausaFino = limiteEsaurito(limiti) ? oraReset(limiti) : null;
       const righe = disegnaCoda(stato, dimensioni());
       uscita.write(`\x1b[H\x1b[2J${righe.join('\r\n')}`);
     };
