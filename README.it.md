@@ -10,7 +10,7 @@
 Branching per conversazioni Claude Code: albero dei rami, catalogo globale, ripresa da
 qualsiasi messaggio — compresi i rami che hai abbandonato con un ripristino.
 
-![Le quattro schermate di cb: l'albero dei rami, il menu del ripristino, la coda dei prompt e le note della cartella](https://raw.githubusercontent.com/sasha-bolea/claude-code-branching/master/assets/demo.svg)
+![Le quattro schermate di cb: l'albero dei rami, il menu del ripristino, la coda dei prompt e le note della cartella](https://cdn.jsdelivr.net/gh/sasha-bolea/claude-code-branching@master/assets/demo.svg)
 
 ## Il problema
 
@@ -244,7 +244,7 @@ terminale — con quelli lo schermo si blocca.
 
 ### L'albero dentro la sessione
 
-![L'albero di una conversazione vera, con il menu del ripristino aperto](https://raw.githubusercontent.com/sasha-bolea/claude-code-branching/master/assets/tree.png)
+![L'albero di una conversazione vera, con il menu del ripristino aperto](https://cdn.jsdelivr.net/gh/sasha-bolea/claude-code-branching@master/assets/tree.png)
 
 La conversazione scorre da sinistra a destra, un nodo per prompt; ogni biforcazione fa
 scendere un ramo. Sotto l'albero c'è il prompt su cui sta il cursore, e sotto ancora la
