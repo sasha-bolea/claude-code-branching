@@ -172,6 +172,43 @@ const FRAMES = [
   ],
 ];
 
+// I caratteri che non stanno in una cella monospazio, e con cosa si sostituiscono.
+//
+// Misurati nel browser con `getComputedTextLength`, in rapporto alla cella (7,698 px a
+// font-size 14): il tondo pieno dei nodi sta a **1,567**, cioè il 57% più larga di una cella, e
+// il tondo vuoto a 1,095. Sono loro a sfasare l'albero: i raccordi (`━ ┳ ┗ ┣ │`) e le cornici
+// (`╭ ╮ ╰ ╯`) misurano tutti 1,000 esatto, quindi il disegno era giusto e i **nodi** lo
+// spostavano. In un terminale non si nota perché è la griglia a imporre la cella; qui il testo
+// scorre libero, e un carattere più largo sposta tutto quello che lo segue sulla riga.
+//
+// Le sostituzioni sono i tondi della stessa famiglia ma a larghezza di cella — a occhio nudo la
+// differenza non c'è, e l'alternativa era un albero coi raccordi scollati dai nodi.
+const IN_CELLA = { '⬤': '●', '◯': '○', '⤼': '»' };
+
+// Caratteri non ASCII **misurati** a 1,000 celle nel browser, quindi sicuri.
+// Chi ne aggiunge uno lo misuri prima, invece di fidarsi: sono tre righe di
+// getComputedTextLength e l'alternativa è un disegno sfasato che nessuna prova vede.
+const SICURI = new Set([...'●○━─┳┗┣│╭╮╰╯©‖█▸↑↓←→»…—']);
+
+// Porta una riga a caratteri che stanno tutti in una cella.
+//
+// E si ferma se ne trova uno che non conosce. Serve perché i fotogrammi si
+// incollano dal README, e il giorno che una schermata nuova porta un glifo largo il
+// disegno si sfaserebbe **in silenzio**: nessuna prova guarda un'immagine. Meglio
+// non generare niente che generare un albero coi raccordi scollati.
+function perCella(testo) {
+  const pulito = testo.replace(/[⬤◯⤼]/g, (ch) => IN_CELLA[ch]);
+  const ignoti = [...pulito].filter((ch) => ch.codePointAt(0) > 126 && !SICURI.has(ch));
+  if (ignoti.length > 0) {
+    throw new Error(
+      `carattere di larghezza non verificata: ${[...new Set(ignoti)].join(' ')}\n`
+      + `Misuralo nel browser (getComputedTextLength su 10 ripetizioni / cella): se sta a\n`
+      + `1,000 aggiungilo a SICURI, se no mettilo in IN_CELLA con un sostituto che ci sta.`,
+    );
+  }
+  return pulito;
+}
+
 // I cinque caratteri che in XML non possono stare nudi dentro un nodo di testo.
 function scappa(testo) {
   return testo
@@ -180,14 +217,23 @@ function scappa(testo) {
     .replace(/>/g, '&gt;');
 }
 
-// Una riga di schermata come nodo <text>. `textLength` la costringe alla larghezza esatta di
-// tante celle quanti sono i caratteri: senza, un font che rende i glifi dell'albero più larghi
-// del resto sfaserebbe le colonne, che è l'unica cosa che questo disegno non può permettersi.
+// Una riga di schermata come nodo <text>.
+//
+// **Niente `textLength`.** L'idea era costringere ogni riga alla larghezza esatta di tante
+// celle quanti sono i caratteri, per tenere le colonne in squadra. Fa il contrario:
+// `lengthAdjust="spacingAndGlyphs"` **stira i glifi** per arrivare alla misura, e i caratteri
+// che il font monospazio non ha — il tondo dei nodi, i raccordi dell'albero — arrivano da un
+// fallback di larghezza diversa, quindi venivano deformati per compensare. Visto a schermo: i
+// nodi dell'albero diventavano ellissi e il testo dentro il riquadro si spaziava da solo.
+// Senza, ogni riga esce alla sua larghezza naturale — che col monospazio è già in squadra, ed
+// è il motivo per cui si usa un monospazio.
+//
+// `xml:space="preserve"` non è un dettaglio: SVG collassa gli spazi multipli come fa HTML,
+// quindi `  cb  branches` diventava `cb branches` e ogni rientro del disegno spariva — cioè
+// tutto l'allineamento, che è l'unica cosa che questo disegno non può permettersi.
 function riga(testo, indice, colore) {
   const y = MARGINE + (indice + 1) * CELLA_Y;
-  const larghezza = (testo.length * CELLA_X).toFixed(2);
-  return `<text x="${MARGINE}" y="${y}" textLength="${larghezza}" `
-    + `lengthAdjust="spacingAndGlyphs" fill="${colore}">${scappa(testo)}</text>`;
+  return `<text xml:space="preserve" x="${MARGINE}" y="${y}" fill="${colore}">${scappa(perCella(testo))}</text>`;
 }
 
 // Il colore di una riga: la prima è l'intestazione, l'ultima la legenda dei tasti.
@@ -211,17 +257,37 @@ const gruppi = FRAMES.map((frame, i) => {
   const corpo = frame
     .map((testo, j) => riga(testo, j, coloreDi(j, frame.length)))
     .join('\n    ');
-  return `  <g class="f" style="animation-delay:${i * SECONDI_PER_FRAME}s">\n    ${corpo}\n  </g>`;
+  // Il primo porta anche `primo`: e' quello che si vede quando l'animazione non
+  // parte (vedi lo stile).
+  const classi = i === 0 ? 'f primo' : 'f';
+  return `  <g class="${classi}" style="animation-delay:${i * SECONDI_PER_FRAME}s">\n    ${corpo}\n  </g>`;
 }).join('\n');
+
+// Il taglio fra un fotogramma e il successivo e' netto, non in dissolvenza.
+//
+// Con la dissolvenza c'erano **buchi**: il fotogramma che esce arrivava a zero
+// prima che il successivo cominciasse a salire, e per ~0,3 secondi a ogni
+// passaggio non si vedeva niente — misurato, 19 istanti vuoti su 211, cioe' il 9%
+// del giro passato a guardare un rettangolo nero. Una dissolvenza vera vorrebbe
+// dire far sovrapporre due fotogrammi, e con del testo sopra del testo si legge
+// peggio di uno stacco.
+//
+// Quindi ogni fotogramma resta pieno per **esattamente** la sua quota e sparisce
+// al centesimo dopo: le quote si affiancano senza lasciare scoperto niente.
+const ultimoPieno = (quota - quota / 100).toFixed(3);
 
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${larghezza}" height="${altezza}" viewBox="0 0 ${larghezza} ${altezza}" font-family="SFMono-Regular, Consolas, Menlo, 'DejaVu Sans Mono', monospace" font-size="14">
   <style>
     .f { opacity: 0; animation: ciclo ${durata}s infinite; }
+    /* Se l'animazione non parte — una scheda in background, un lettore che le
+       ignora — questa e' l'unica cosa che si vede, e deve essere una schermata
+       vera invece del rettangolo vuoto. Durante l'animazione i keyframe vincono
+       su questa regola, quindi non cambia niente. */
+    .primo { opacity: 1 }
     @keyframes ciclo {
-      0%   { opacity: 0 }
-      1%   { opacity: 1 }
-      ${(quota - 1).toFixed(2)}%  { opacity: 1 }
-      ${quota.toFixed(2)}%  { opacity: 0 }
+      0%   { opacity: 1 }
+      ${ultimoPieno}%  { opacity: 1 }
+      ${quota.toFixed(3)}%  { opacity: 0 }
       100% { opacity: 0 }
     }
   </style>
